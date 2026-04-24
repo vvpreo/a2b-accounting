@@ -16,6 +16,16 @@ if [ -f "$HOME/.cargo/env" ]; then
   . "$HOME/.cargo/env"
 fi
 
-cd "$(dirname "$0")/.."
+PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$PROJECT_ROOT"
+
+# Tauri dev runs `cargo run` from src-tauri/, so a relative FINANCES_DATA_DIR
+# would resolve inside src-tauri/ and trigger the dev watcher in an infinite
+# rebuild loop. Normalize to an absolute path rooted at the project.
+case "$FINANCES_DATA_DIR" in
+  /*) ;;
+  *) FINANCES_DATA_DIR="$PROJECT_ROOT/$FINANCES_DATA_DIR" ;;
+esac
+export FINANCES_DATA_DIR
 
 exec npm run tauri dev

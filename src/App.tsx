@@ -1,20 +1,34 @@
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useState } from "react";
+
+import { AccountsPage } from "./pages/Accounts";
+import { AccountTransactionsPage } from "./pages/AccountTransactions";
 import "./App.css";
 
-function App() {
-  const [dataDir, setDataDir] = useState<string>("");
+type View =
+  | { kind: "accounts" }
+  | { kind: "transactions"; accountId: number };
 
-  useEffect(() => {
-    invoke<string>("data_dir").then(setDataDir);
-  }, []);
+function App() {
+  const [view, setView] = useState<View>({ kind: "accounts" });
 
   return (
     <main className="container">
-      <h1>Hello, world!</h1>
-      <p>
-        Data directory: <code>{dataDir || "..."}</code>
-      </p>
+      <header className="app-header">
+        <h1>Finances v2</h1>
+      </header>
+      {view.kind === "accounts" && (
+        <AccountsPage
+          onSelectAccount={(id) =>
+            setView({ kind: "transactions", accountId: id })
+          }
+        />
+      )}
+      {view.kind === "transactions" && (
+        <AccountTransactionsPage
+          accountId={view.accountId}
+          onBack={() => setView({ kind: "accounts" })}
+        />
+      )}
     </main>
   );
 }

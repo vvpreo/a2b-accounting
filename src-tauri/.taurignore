@@ -1,0 +1,7 @@
+# Paths inside src-tauri that must NOT trigger a dev-watcher rebuild.
+# Kept as a safety net — FINANCES_DATA_DIR should live outside src-tauri anyway.
+data/
+*.db
+*.db-shm
+*.db-wal
+.DS_Store

@@ -1,5 +1,10 @@
+mod accounts;
+mod db;
+mod money;
+mod transactions;
+
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 const ENV_DATA_DIR: &str = "FINANCES_DATA_DIR";
 
@@ -27,12 +32,26 @@ fn data_dir() -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    DATA_DIR
-        .set(init_data_dir())
-        .expect("data dir already initialized");
+    let dir = init_data_dir();
+    let conn = db::open(&dir).unwrap_or_else(|e| {
+        panic!("failed to open database in {}: {e}", dir.display());
+    });
+    DATA_DIR.set(dir).expect("data dir already initialized");
 
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![data_dir])
+        .manage::<db::DbState>(Mutex::new(conn))
+        .invoke_handler(tauri::generate_handler![
+            data_dir,
+            accounts::create_account,
+            accounts::list_accounts,
+            accounts::update_account,
+            accounts::delete_account,
+            transactions::import_transactions,
+            transactions::list_transactions,
+            transactions::list_import_batches,
+            transactions::delete_import_batch,
+            transactions::validate_balance_chain,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
