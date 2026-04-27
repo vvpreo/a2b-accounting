@@ -104,7 +104,15 @@ export function ImportDialog({
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal modal--wide" onClick={(e) => e.stopPropagation()}>
         <header className="modal-header">
-          <h3>{t("import.title")}</h3>
+          <h3>
+            {t("import.title")}
+            {step === 2 && !result && parsed.rows.length > 0 && (
+              <>
+                {" "}
+                {tPlural("import.titlePreviewSuffix", parsed.rows.length)}
+              </>
+            )}
+          </h3>
           <button
             className="icon-btn"
             onClick={onClose}
@@ -171,7 +179,6 @@ export function ImportDialog({
 
               <textarea
                 className="import-paste"
-                rows={10}
                 value={rawText}
                 placeholder={t("import.pastePlaceholder")}
                 onChange={onPasteChange}
@@ -194,10 +201,6 @@ export function ImportDialog({
 
           {step === 2 && !result && (
             <>
-              <p>
-                <strong>{t("import.previewLabel")}</strong>{" "}
-                {tPlural("import.previewRows", parsed.rows.length)}
-              </p>
               <div className="preview-table-wrap">
                 <table>
                   <thead>

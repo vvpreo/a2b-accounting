@@ -94,10 +94,9 @@
     "orPasteHere": "OR paste the file contents here:",
     "hintColumns": "Expected columns: occurred_at, peer, credit, debit, balance, description. Date in ISO-8601 with offset (e.g. 2026-04-01T10:15:00+03:00) or without offset — the default will apply.",
     "parseErrorsTitle": "CSV parsing problems:",
-    "previewLabel": "Preview:",
-    "previewRows": {
-      "one": "{count} row",
-      "other": "{count} rows"
+    "titlePreviewSuffix": {
+      "one": "(preview of {count} row)",
+      "other": "(preview of {count} rows)"
     },
     "previewMore": "...showing first 20 of {total}",
     "previewDate": "Date",

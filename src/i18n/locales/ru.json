@@ -98,12 +98,11 @@
     "orPasteHere": "ИЛИ вставьте текст файла сюда:",
     "hintColumns": "Ожидаемые колонки: occurred_at, peer, credit, debit, balance, description. Дата в формате ISO-8601 с offset (например, 2026-04-01T10:15:00+03:00) или без offset — тогда применится дефолтный.",
     "parseErrorsTitle": "Проблемы при парсинге CSV:",
-    "previewLabel": "Предпросмотр:",
-    "previewRows": {
-      "one": "{count} строка",
-      "few": "{count} строки",
-      "many": "{count} строк",
-      "other": "{count} строк"
+    "titlePreviewSuffix": {
+      "one": "(предпросмотр {count} строки)",
+      "few": "(предпросмотр {count} строк)",
+      "many": "(предпросмотр {count} строк)",
+      "other": "(предпросмотр {count} строк)"
     },
     "previewMore": "...показаны первые 20 из {total}",
     "previewDate": "Дата",
