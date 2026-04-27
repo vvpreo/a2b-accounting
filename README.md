@@ -51,7 +51,7 @@ export FINANCES_DATA_DIR="$HOME/.finances-v2"
 Принципы:
 - Вся SQL — на Rust-стороне; TypeScript не знает про схему.
 - Деньги — `INTEGER` в минимальных единицах валюты (копейки/центы), scale = 2. Конверсия через `rust_decimal` в Rust и строки на фронте.
-- Даты — два столбца: `occurred_at_utc` (ISO-8601 UTC для сравнения) + `occurred_at_tz` (исходный offset `+03:00` для «настенного» времени).
+- Даты — `occurred_at_utc` (ISO-8601 UTC для сравнения) у каждой транзакции, плюс `timezone_offset` (`+03:00`) на уровне импорт-батча: все строки одной выписки разделяют один offset, дублировать его в каждой строке не имеет смысла.
 - Импорт транзакций группируется в батч (`import_batches`); удаление батча каскадно удаляет все его транзакции.
 - Миграции — массив `(version, name, sql)` в `db.rs`, применяются инкрементально через таблицу `schema_migrations`.
 
@@ -60,10 +60,11 @@ export FINANCES_DATA_DIR="$HOME/.finances-v2"
 ```sql
 accounts         (id, name, bank, currency, account_number, owner_name, created_at)
                   UNIQUE(bank, account_number)
-import_batches   (id, account_id → accounts, imported_at, source_filename, row_count)
+import_batches   (id, account_id → accounts, imported_at, source_filename, row_count,
+                  timezone_offset)
                   ON DELETE CASCADE
 transactions     (id, account_id → accounts, import_batch_id → import_batches,
-                  occurred_at_utc, occurred_at_tz, peer, credit, debit, balance, description)
+                  occurred_at_utc, peer, credit, debit, balance, description)
                   CHECK (credit = 0 OR debit = 0)
                   ON DELETE CASCADE (обе FK)
 schema_migrations (version, name, applied_at)
@@ -92,7 +93,8 @@ finances-v2/
 │   ├── migrations/
 │   │   ├── 001_init.sql              accounts, import_batches, transactions
 │   │   ├── 002_add_account_name.sql  accounts.name
-│   │   └── 003_add_transaction_peer.sql  transactions.peer
+│   │   ├── 003_add_transaction_peer.sql  transactions.peer
+│   │   └── 004_move_timezone_to_import_batch.sql  import_batches.timezone_offset, drop transactions.occurred_at_tz
 │   ├── .taurignore                   защита от dev-watcher лупа на файлах БД
 │   └── src/
 │       ├── main.rs                   точка входа

@@ -15,7 +15,6 @@ export interface Transaction {
   accountId: number;
   importBatchId: number;
   occurredAtUtc: string;
-  occurredAtTz: string;
   peer: string;
   credit: string;
   debit: string;
@@ -29,6 +28,7 @@ export interface ImportBatch {
   importedAt: string;
   sourceFilename: string | null;
   rowCount: number;
+  timezoneOffset: string;
 }
 
 export interface ValidationError {

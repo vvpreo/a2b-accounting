@@ -24,7 +24,6 @@ pub struct Transaction {
     pub account_id: i64,
     pub import_batch_id: i64,
     pub occurred_at_utc: String,
-    pub occurred_at_tz: String,
     pub peer: String,
     pub credit: String,
     pub debit: String,
@@ -40,6 +39,7 @@ pub struct ImportBatch {
     pub imported_at: String,
     pub source_filename: Option<String>,
     pub row_count: i64,
+    pub timezone_offset: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -109,25 +109,24 @@ fn parse_row(r: &TxnImportRow) -> Result<ParsedRow, String> {
 }
 
 fn txn_from_row(row: &Row) -> rusqlite::Result<Transaction> {
-    let credit: i64 = row.get(5)?;
-    let debit: i64 = row.get(6)?;
-    let balance: i64 = row.get(7)?;
+    let credit: i64 = row.get(4)?;
+    let debit: i64 = row.get(5)?;
+    let balance: i64 = row.get(6)?;
     Ok(Transaction {
         id: row.get(0)?,
         account_id: row.get(1)?,
         import_batch_id: row.get(2)?,
         occurred_at_utc: row.get(3)?,
-        occurred_at_tz: row.get(4)?,
         credit: money::format_minor(credit),
         debit: money::format_minor(debit),
         balance: money::format_minor(balance),
-        description: row.get(8)?,
-        peer: row.get(9)?,
+        description: row.get(7)?,
+        peer: row.get(8)?,
     })
 }
 
 const TXN_COLUMNS: &str =
-    "id, account_id, import_batch_id, occurred_at_utc, occurred_at_tz, credit, debit, balance, description, peer";
+    "id, account_id, import_batch_id, occurred_at_utc, credit, debit, balance, description, peer";
 
 fn batch_from_row(row: &Row) -> rusqlite::Result<ImportBatch> {
     Ok(ImportBatch {
@@ -136,6 +135,7 @@ fn batch_from_row(row: &Row) -> rusqlite::Result<ImportBatch> {
         imported_at: row.get(2)?,
         source_filename: row.get(3)?,
         row_count: row.get(4)?,
+        timezone_offset: row.get(5)?,
     })
 }
 
@@ -155,6 +155,22 @@ pub fn import_transactions(
         .enumerate()
         .map(|(i, r)| parse_row(r).map_err(|e| format!("row {}: {e}", i + 1)))
         .collect::<Result<_, _>>()?;
+
+    let timezone_offset = parsed[0].occurred_at_tz.clone();
+    if let Some((idx, mismatched)) = parsed
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find(|(_, p)| p.occurred_at_tz != timezone_offset)
+    {
+        return Err(format!(
+            "row {}: timezone offset '{}' differs from batch offset '{}'; \
+             all rows in one import must share the same offset",
+            idx + 1,
+            mismatched.occurred_at_tz,
+            timezone_offset
+        ));
+    }
 
     let mut guard = state.lock().map_err(|e| e.to_string())?;
     let conn: &mut Connection = &mut guard;
@@ -177,10 +193,10 @@ pub fn import_transactions(
 
     let batch_id: i64 = tx
         .query_row(
-            "INSERT INTO import_batches (account_id, imported_at, source_filename, row_count)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO import_batches (account_id, imported_at, source_filename, row_count, timezone_offset)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              RETURNING id",
-            params![account_id, imported_at, source_filename, row_count],
+            params![account_id, imported_at, source_filename, row_count, timezone_offset],
             |row| row.get(0),
         )
         .map_err(|e| e.to_string())?;
@@ -190,9 +206,9 @@ pub fn import_transactions(
             .prepare(
                 "INSERT INTO transactions (
                     account_id, import_batch_id,
-                    occurred_at_utc, occurred_at_tz,
+                    occurred_at_utc,
                     peer, credit, debit, balance, description
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             )
             .map_err(|e| e.to_string())?;
         for p in &parsed {
@@ -200,7 +216,6 @@ pub fn import_transactions(
                 account_id,
                 batch_id,
                 p.occurred_at_utc,
-                p.occurred_at_tz,
                 p.peer,
                 p.credit,
                 p.debit,
@@ -251,7 +266,7 @@ pub fn list_import_batches(
     let conn = state.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, account_id, imported_at, source_filename, row_count
+            "SELECT id, account_id, imported_at, source_filename, row_count, timezone_offset
              FROM import_batches
              WHERE account_id = ?1
              ORDER BY imported_at DESC, id DESC",

@@ -103,7 +103,6 @@ export function AccountTransactionsPage({ accountId, onBack }: Props) {
             <thead>
               <tr>
                 <th>Дата (UTC)</th>
-                <th>TZ</th>
                 <th>Контрагент</th>
                 <th className="num">Поступление</th>
                 <th className="num">Списание</th>
@@ -114,7 +113,7 @@ export function AccountTransactionsPage({ accountId, onBack }: Props) {
             <tbody>
               {txns.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="empty">
+                  <td colSpan={6} className="empty">
                     Транзакций пока нет. Нажмите «Импорт транзакций».
                   </td>
                 </tr>
@@ -122,7 +121,6 @@ export function AccountTransactionsPage({ accountId, onBack }: Props) {
                 txns.map((t) => (
                   <tr key={t.id} className={invalidTxnIds.has(t.id) ? "invalid" : ""}>
                     <td>{formatInstant(t.occurredAtUtc)}</td>
-                    <td>{t.occurredAtTz}</td>
                     <td>{t.peer}</td>
                     <td className="num">{t.credit !== "0.00" ? t.credit : ""}</td>
                     <td className="num">{t.debit !== "0.00" ? t.debit : ""}</td>
@@ -153,7 +151,7 @@ export function AccountTransactionsPage({ accountId, onBack }: Props) {
                       {b.sourceFilename ?? "—"}
                     </div>
                     <div className="batch-meta">
-                      {b.rowCount} {b.rowCount === 1 ? "строка" : "строк"}
+                      {b.rowCount} {b.rowCount === 1 ? "строка" : "строк"} · TZ {b.timezoneOffset || "—"}
                     </div>
                     {!confirming ? (
                       <button

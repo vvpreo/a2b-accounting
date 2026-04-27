@@ -17,6 +17,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "003_add_transaction_peer",
         include_str!("../migrations/003_add_transaction_peer.sql"),
     ),
+    (
+        4,
+        "004_move_timezone_to_import_batch",
+        include_str!("../migrations/004_move_timezone_to_import_batch.sql"),
+    ),
 ];
 
 pub fn open(data_dir: &Path) -> rusqlite::Result<Connection> {
@@ -114,8 +119,8 @@ mod tests {
 
         let batch_id: i64 = conn
             .query_row(
-                "INSERT INTO import_batches (account_id, imported_at, source_filename, row_count)
-                 VALUES (?1, '2026-04-24T10:00:00Z', 'test.csv', 2) RETURNING id",
+                "INSERT INTO import_batches (account_id, imported_at, source_filename, row_count, timezone_offset)
+                 VALUES (?1, '2026-04-24T10:00:00Z', 'test.csv', 2, '+00:00') RETURNING id",
                 [account_id],
                 |r| r.get(0),
             )
@@ -123,10 +128,10 @@ mod tests {
 
         conn.execute(
             "INSERT INTO transactions
-             (account_id, import_batch_id, occurred_at_utc, occurred_at_tz, credit, debit, balance, description)
+             (account_id, import_batch_id, occurred_at_utc, credit, debit, balance, description)
              VALUES
-             (?1, ?2, '2026-04-01T10:00:00Z', '+00:00', 0,    500, 9500, 'coffee'),
-             (?1, ?2, '2026-04-01T18:00:00Z', '+00:00', 1000, 0,   10500, 'salary')",
+             (?1, ?2, '2026-04-01T10:00:00Z', 0,    500, 9500, 'coffee'),
+             (?1, ?2, '2026-04-01T18:00:00Z', 1000, 0,   10500, 'salary')",
             params![account_id, batch_id],
         )
         .unwrap();
@@ -177,8 +182,8 @@ mod tests {
             .unwrap();
         let batch_id: i64 = conn
             .query_row(
-                "INSERT INTO import_batches (account_id, imported_at, source_filename, row_count)
-                 VALUES (?1, '2026-04-24T10:00:00Z', NULL, 1) RETURNING id",
+                "INSERT INTO import_batches (account_id, imported_at, source_filename, row_count, timezone_offset)
+                 VALUES (?1, '2026-04-24T10:00:00Z', NULL, 1, '+00:00') RETURNING id",
                 [account_id],
                 |r| r.get(0),
             )
@@ -186,8 +191,8 @@ mod tests {
 
         let res = conn.execute(
             "INSERT INTO transactions
-             (account_id, import_batch_id, occurred_at_utc, occurred_at_tz, credit, debit, balance, description)
-             VALUES (?1, ?2, '2026-04-01T10:00:00Z', '+00:00', 100, 100, 0, 'bad')",
+             (account_id, import_batch_id, occurred_at_utc, credit, debit, balance, description)
+             VALUES (?1, ?2, '2026-04-01T10:00:00Z', 100, 100, 0, 'bad')",
             params![account_id, batch_id],
         );
         assert!(res.is_err(), "both credit and debit set should fail CHECK");
