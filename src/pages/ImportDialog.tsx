@@ -1,5 +1,6 @@
 import { ChangeEvent, useState } from "react";
 
+import { useT, useTPlural } from "../i18n";
 import {
   ImportResult,
   TxnImportRow,
@@ -14,6 +15,8 @@ interface Props {
 }
 
 export function ImportDialog({ accountId, onClose, onImported }: Props) {
+  const t = useT();
+  const tPlural = useTPlural();
   const [filename, setFilename] = useState<string | null>(null);
   const [rows, setRows] = useState<TxnImportRow[]>([]);
   const [parseErrors, setParseErrors] = useState<string[]>([]);
@@ -28,7 +31,7 @@ export function ImportDialog({ accountId, onClose, onImported }: Props) {
     setError(null);
     setFilename(file.name);
     const text = await file.text();
-    const parsed = parseTransactionsCsv(text);
+    const parsed = parseTransactionsCsv(text, t);
     setRows(parsed.rows);
     setParseErrors(parsed.errors);
   }
@@ -56,11 +59,11 @@ export function ImportDialog({ accountId, onClose, onImported }: Props) {
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <header className="modal-header">
-          <h3>Импорт транзакций</h3>
+          <h3>{t("import.title")}</h3>
           <button
             className="icon-btn"
             onClick={onClose}
-            aria-label="Закрыть"
+            aria-label={t("common.close")}
             type="button"
           >
             ×
@@ -76,16 +79,15 @@ export function ImportDialog({ accountId, onClose, onImported }: Props) {
                   accept=".csv,text/csv"
                   onChange={onFileChange}
                 />
-                {filename ? `Выбран: ${filename}` : "Выбрать CSV-файл"}
+                {filename
+                  ? t("import.buttonChosen", { filename })
+                  : t("import.buttonChooseFile")}
               </label>
-              <p className="hint">
-                Ожидаемые колонки: <code>occurred_at, peer, credit, debit, balance, description</code>.
-                Дата в формате ISO-8601 с offset (например, <code>2026-04-01T10:15:00+03:00</code>).
-              </p>
+              <p className="hint">{t("import.hintColumns")}</p>
 
               {parseErrors.length > 0 && (
                 <div className="errors-block">
-                  <strong>Проблемы при парсинге CSV:</strong>
+                  <strong>{t("import.parseErrorsTitle")}</strong>
                   <ul>
                     {parseErrors.map((e, i) => (
                       <li key={i}>{e}</li>
@@ -97,19 +99,19 @@ export function ImportDialog({ accountId, onClose, onImported }: Props) {
               {rows.length > 0 && (
                 <>
                   <p>
-                    <strong>Предпросмотр:</strong> {rows.length}{" "}
-                    {rows.length === 1 ? "строка" : "строк"}
+                    <strong>{t("import.previewLabel")}</strong>{" "}
+                    {tPlural("import.previewRows", rows.length)}
                   </p>
                   <div className="preview-table-wrap">
                     <table>
                       <thead>
                         <tr>
-                          <th>Дата</th>
-                          <th>Контрагент</th>
-                          <th>Поступление</th>
-                          <th>Списание</th>
-                          <th>Баланс</th>
-                          <th>Описание</th>
+                          <th>{t("import.previewDate")}</th>
+                          <th>{t("import.previewPeer")}</th>
+                          <th>{t("import.previewCredit")}</th>
+                          <th>{t("import.previewDebit")}</th>
+                          <th>{t("import.previewBalance")}</th>
+                          <th>{t("import.previewDescription")}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -127,7 +129,7 @@ export function ImportDialog({ accountId, onClose, onImported }: Props) {
                     </table>
                     {rows.length > 20 && (
                       <p className="hint">
-                        …показаны первые 20 из {rows.length}
+                        {t("import.previewMore", { total: rows.length })}
                       </p>
                     )}
                   </div>
@@ -141,26 +143,33 @@ export function ImportDialog({ accountId, onClose, onImported }: Props) {
           {result && (
             <>
               <p>
-                Импортировано <strong>{result.inserted}</strong> строк. Батч #
-                {result.batchId}.
+                {t("import.resultDone", {
+                  inserted: result.inserted,
+                  batchId: result.batchId,
+                })}
               </p>
               {result.validationErrors.length > 0 ? (
                 <div className="errors-block">
                   <strong>
-                    Разрывы в цепочке балансов ({result.validationErrors.length}):
+                    {t("import.resultBreaksTitle", {
+                      count: result.validationErrors.length,
+                    })}
                   </strong>
                   <ul>
                     {result.validationErrors.map((e) => (
                       <li key={e.txnId}>
-                        {e.occurredAtUtc} — «{e.description || "—"}»: ожидался
-                        баланс <strong>{e.expectedBalance}</strong>, в данных{" "}
-                        <strong>{e.actualBalance}</strong>
+                        {t("import.resultBreakLine", {
+                          date: e.occurredAtUtc,
+                          description: e.description || "—",
+                          expected: e.expectedBalance,
+                          actual: e.actualBalance,
+                        })}
                       </li>
                     ))}
                   </ul>
                 </div>
               ) : (
-                <p className="ok">Цепочка балансов целостна.</p>
+                <p className="ok">{t("import.resultOk")}</p>
               )}
             </>
           )}
@@ -170,7 +179,7 @@ export function ImportDialog({ accountId, onClose, onImported }: Props) {
           {!result ? (
             <>
               <button type="button" className="btn-ghost" onClick={onClose}>
-                Отмена
+                {t("common.cancel")}
               </button>
               <button
                 type="button"
@@ -178,12 +187,12 @@ export function ImportDialog({ accountId, onClose, onImported }: Props) {
                 disabled={submitting || rows.length === 0}
                 onClick={onConfirm}
               >
-                {submitting ? "Импортирую..." : "Импортировать"}
+                {submitting ? t("import.submitting") : t("import.submit")}
               </button>
             </>
           ) : (
             <button type="button" className="btn-primary" onClick={onClose}>
-              Готово
+              {t("import.doneButton")}
             </button>
           )}
         </footer>

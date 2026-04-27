@@ -22,6 +22,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "004_move_timezone_to_import_batch",
         include_str!("../migrations/004_move_timezone_to_import_batch.sql"),
     ),
+    (
+        5,
+        "005_add_app_settings",
+        include_str!("../migrations/005_add_app_settings.sql"),
+    ),
 ];
 
 pub fn open(data_dir: &Path) -> rusqlite::Result<Connection> {

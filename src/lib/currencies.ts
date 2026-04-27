@@ -167,10 +167,12 @@ export const CURRENCIES: Record<string, Currency> = {
 
 export const CURRENCY_LIST: Currency[] = Object.values(CURRENCIES);
 
+const byCode = (a: Currency, b: Currency) => a.code.localeCompare(b.code);
+
 export const FIAT_CURRENCIES: Currency[] = CURRENCY_LIST.filter(
   (c) => c.type === "fiat",
-);
+).sort(byCode);
 
 export const CRYPTO_CURRENCIES: Currency[] = CURRENCY_LIST.filter(
   (c) => c.type === "crypto",
-);
+).sort(byCode);

@@ -1,4 +1,4 @@
-# finances-v2
+# A2B Finances
 
 > Last updated: 2026-04-24 @ `a061a88`
 
@@ -54,6 +54,8 @@ export FINANCES_DATA_DIR="$HOME/.finances-v2"
 - Даты — `occurred_at_utc` (ISO-8601 UTC для сравнения) у каждой транзакции, плюс `timezone_offset` (`+03:00`) на уровне импорт-батча: все строки одной выписки разделяют один offset, дублировать его в каждой строке не имеет смысла.
 - Импорт транзакций группируется в батч (`import_batches`); удаление батча каскадно удаляет все его транзакции.
 - Миграции — массив `(version, name, sql)` в `db.rs`, применяются инкрементально через таблицу `schema_migrations`.
+- Настройки пользователя — таблица `app_settings (key, value)` + команды `get_setting` / `set_setting`. Сейчас один ключ — `locale`.
+- i18n — свой Context на React + JSON-файлы в [src/i18n/locales/](src/i18n/locales/). Стартовые языки: `ru`, `en`. Default = системный язык через `navigator.language`, fallback — `en`. Новый язык = новый JSON-файл + запись в `LANGUAGES`.
 
 ## Data Model
 
@@ -75,16 +77,27 @@ schema_migrations (version, name, applied_at)
 ```
 finances-v2/
 ├── src/                              React + TS фронтенд
-│   ├── App.tsx                       state-based роутинг (Accounts ↔ Transactions)
+│   ├── App.tsx                       табовая навигация (Categories / Accounts / Transactions / Settings)
 │   ├── App.css                       стили (без Tailwind)
+│   ├── main.tsx                      bootstrap: загрузка локали из БД + I18nProvider
+│   ├── components/
+│   │   ├── Tabs.tsx                  верхняя навигация по вкладкам
+│   │   └── AccountChips.tsx          multi-select фильтр счетов (чипы)
+│   ├── i18n/
+│   │   ├── index.ts                  Context, Provider, хук useT/useTPlural, реестр LANGUAGES
+│   │   └── locales/
+│   │       ├── ru.json               русские переводы
+│   │       └── en.json               английские переводы
 │   ├── lib/
-│   │   ├── api.ts                    типизированные обёртки над invoke
-│   │   ├── banks.ts                  справочник банков (сейчас: Bangkok Bank)
-│   │   ├── currencies.ts             справочник валют (155 ISO-кодов + BTC/ETH/USDT)
+│   │   ├── api.ts                    типизированные обёртки над invoke (включая getSetting/setSetting)
+│   │   ├── banks.ts                  справочник банков
+│   │   ├── currencies.ts             справочник валют (ISO-коды + крипта)
 │   │   └── csv.ts                    парсер CSV через papaparse
 │   └── pages/
-│       ├── Accounts.tsx              список счетов, форма создания, модалка редактирования/удаления
-│       ├── AccountTransactions.tsx   таблица транзакций + панель загрузок
+│       ├── Accounts.tsx              список счетов, форма, sub-view деталей с панелью «Загрузки» и валидацией
+│       ├── Transactions.tsx          вкладка Транзакции с чипами-фильтром
+│       ├── Categories.tsx            заглушка TBD
+│       ├── Settings.tsx              селектор языка (хранится в БД)
 │       └── ImportDialog.tsx          выбор CSV + превью + импорт
 ├── src-tauri/                        Rust backend
 │   ├── Cargo.toml                    зависимости: rusqlite, rust_decimal, chrono, thiserror
@@ -94,7 +107,8 @@ finances-v2/
 │   │   ├── 001_init.sql              accounts, import_batches, transactions
 │   │   ├── 002_add_account_name.sql  accounts.name
 │   │   ├── 003_add_transaction_peer.sql  transactions.peer
-│   │   └── 004_move_timezone_to_import_batch.sql  import_batches.timezone_offset, drop transactions.occurred_at_tz
+│   │   ├── 004_move_timezone_to_import_batch.sql  import_batches.timezone_offset, drop transactions.occurred_at_tz
+│   │   └── 005_add_app_settings.sql  таблица app_settings (key, value) для пользовательских настроек
 │   ├── .taurignore                   защита от dev-watcher лупа на файлах БД
 │   └── src/
 │       ├── main.rs                   точка входа
@@ -102,7 +116,8 @@ finances-v2/
 │       ├── db.rs                     открытие БД, миграции, тесты
 │       ├── money.rs                  parse_minor / format_minor + unit-тесты
 │       ├── accounts.rs               create/list/update/delete + команды
-│       └── transactions.rs           import/list/delete_batch/validate + команды + тесты
+│       ├── transactions.rs           import/list (с фильтром по account_ids)/delete_batch/validate
+│       └── settings.rs               get_setting / set_setting (UPSERT в app_settings)
 ├── scripts/
 │   ├── dev.sh                        запуск dev (проверяет FINANCES_DATA_DIR, нормализует в абсолют)
 │   └── build.sh                      релизная сборка

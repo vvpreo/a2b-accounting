@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Finances v2",
+  "productName": "A2B Finances",
   "version": "0.1.0",
   "identifier": "com.v3p.finances",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Finances v2",
+        "title": "A2B Finances",
         "width": 1200,
         "height": 800
       }

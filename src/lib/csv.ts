@@ -7,14 +7,25 @@ export interface CsvParseResult {
   errors: string[];
 }
 
-export function parseTransactionsCsv(text: string): CsvParseResult {
+type Translate = (
+  key: string,
+  params?: Record<string, string | number>,
+) => string;
+
+export function parseTransactionsCsv(
+  text: string,
+  t: Translate,
+): CsvParseResult {
   const { data, errors: parseErrors } = Papa.parse<Record<string, string>>(text, {
     header: true,
     skipEmptyLines: true,
   });
 
-  const errors: string[] = parseErrors.map(
-    (e) => `CSV parse error at row ${e.row ?? "?"}: ${e.message}`,
+  const errors: string[] = parseErrors.map((e) =>
+    t("errors.csvParse", {
+      row: e.row ?? "?",
+      message: e.message,
+    }),
   );
   const rows: TxnImportRow[] = [];
 
@@ -26,13 +37,13 @@ export function parseTransactionsCsv(text: string): CsvParseResult {
     const balance = (r.balance ?? "").trim();
     const description = (r.description ?? "").trim();
 
-    const rowNum = i + 2; // +1 for 0-index, +1 for header line
+    const rowNum = i + 2;
     if (!occurredAt) {
-      errors.push(`Row ${rowNum}: missing occurred_at`);
+      errors.push(t("errors.missingOccurredAt", { row: rowNum }));
       return;
     }
     if (!balance) {
-      errors.push(`Row ${rowNum}: missing balance`);
+      errors.push(t("errors.missingBalance", { row: rowNum }));
       return;
     }
     rows.push({ occurredAt, peer, credit, debit, balance, description });

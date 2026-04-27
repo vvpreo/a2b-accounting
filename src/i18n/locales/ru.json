@@ -1,0 +1,130 @@
+{
+  "tabs": {
+    "categories": "Категории",
+    "accounts": "Счета",
+    "transactions": "Транзакции",
+    "settings": "Настройки"
+  },
+  "toolbar": {
+    "createAccount": "Создать счёт",
+    "collapse": "Свернуть панель",
+    "expand": "Развернуть панель"
+  },
+  "common": {
+    "cancel": "Отмена",
+    "save": "Сохранить",
+    "saving": "Сохраняю...",
+    "delete": "Удалить",
+    "deleting": "Удаляю...",
+    "close": "Закрыть",
+    "back": "Назад",
+    "loading": "Загружаю...",
+    "yes": "Да",
+    "no": "Нет",
+    "all": "Все"
+  },
+  "accounts": {
+    "title": "Счета",
+    "create": "Завести счёт",
+    "fieldName": "Название счёта",
+    "fieldNamePlaceholder": "Например, «Зарплатный»",
+    "fieldBank": "Банк",
+    "fieldPreset": "Пресет",
+    "fieldCurrency": "Валюта",
+    "fieldCurrencyFiat": "Фиатные",
+    "fieldCurrencyCrypto": "Крипто",
+    "fieldAccountNumber": "Номер счёта",
+    "fieldAccountNumberOptional": "Номер счёта (необязательно)",
+    "fieldOwner": "Имя владельца",
+    "fieldOwnerOptional": "Имя владельца (необязательно)",
+    "tableId": "#",
+    "tableName": "Имя",
+    "tableBank": "Банк",
+    "tableCurrency": "Валюта",
+    "tableNumber": "Номер",
+    "tableOwner": "Владелец",
+    "tableCreated": "Создан",
+    "empty": "Пока нет счетов.",
+    "actionTransactions": "Транзакции →",
+    "actionImport": "Импорт CSV",
+    "actionDetails": "Подробнее",
+    "editTitle": "Редактировать счёт #{id}",
+    "deleteConfirm": "Удалить счёт «{name}»? Все его транзакции и загрузки будут удалены безвозвратно.",
+    "deleteConfirmYes": "Да, удалить",
+    "deleteButton": "Удалить счёт",
+    "detailsBack": "← К списку счетов",
+    "detailsEdit": "Изменить",
+    "detailsGoToTransactions": "Транзакции →",
+    "detailsBalanceChainOk": "Цепочка балансов: ✓ целостна",
+    "detailsBalanceChainBroken": {
+      "one": "В цепочке балансов {count} разрыв",
+      "few": "В цепочке балансов {count} разрыва",
+      "many": "В цепочке балансов {count} разрывов",
+      "other": "В цепочке балансов {count} разрывов"
+    },
+    "detailsBatchesTitle": "Загрузки",
+    "detailsBatchesEmpty": "Пока ничего не загружено.",
+    "detailsBatchTimezone": "TZ",
+    "detailsBatchRows": {
+      "one": "{count} строка",
+      "few": "{count} строки",
+      "many": "{count} строк",
+      "other": "{count} строк"
+    },
+    "detailsBatchDeleteConfirm": "Удалить загрузку? Все её транзакции пропадут.",
+    "detailsBatchDeleteYes": "Да, удалить"
+  },
+  "transactions": {
+    "title": "Транзакции",
+    "filterAll": "Все",
+    "tableAccount": "Счёт",
+    "tableDate": "Дата (UTC)",
+    "tablePeer": "Контрагент",
+    "tableCredit": "Поступление",
+    "tableDebit": "Списание",
+    "tableBalance": "Баланс",
+    "tableDescription": "Описание",
+    "empty": "Нет транзакций по выбранным счетам."
+  },
+  "import": {
+    "title": "Импорт транзакций",
+    "buttonChooseFile": "Выбрать CSV-файл",
+    "buttonChosen": "Выбран: {filename}",
+    "hintColumns": "Ожидаемые колонки: occurred_at, peer, credit, debit, balance, description. Дата в формате ISO-8601 с offset (например, 2026-04-01T10:15:00+03:00).",
+    "parseErrorsTitle": "Проблемы при парсинге CSV:",
+    "previewLabel": "Предпросмотр:",
+    "previewRows": {
+      "one": "{count} строка",
+      "few": "{count} строки",
+      "many": "{count} строк",
+      "other": "{count} строк"
+    },
+    "previewMore": "...показаны первые 20 из {total}",
+    "previewDate": "Дата",
+    "previewPeer": "Контрагент",
+    "previewCredit": "Поступление",
+    "previewDebit": "Списание",
+    "previewBalance": "Баланс",
+    "previewDescription": "Описание",
+    "submit": "Импортировать",
+    "submitting": "Импортирую...",
+    "resultDone": "Импортировано {inserted} строк. Батч #{batchId}.",
+    "resultBreaksTitle": "Разрывы в цепочке балансов ({count}):",
+    "resultBreakLine": "{date} — «{description}»: ожидался {expected}, в данных {actual}",
+    "resultOk": "Цепочка балансов целостна.",
+    "doneButton": "Готово"
+  },
+  "categories": {
+    "title": "Категории",
+    "tbd": "TBD: справочник категорий и правила автокатегоризации."
+  },
+  "settings": {
+    "title": "Настройки",
+    "language": "Язык интерфейса"
+  },
+  "errors": {
+    "missingOccurredAt": "Строка {row}: отсутствует occurred_at",
+    "missingBalance": "Строка {row}: отсутствует balance",
+    "csvParse": "Ошибка парсинга CSV в строке {row}: {message}"
+  }
+}

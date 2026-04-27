@@ -241,18 +241,26 @@ pub fn import_transactions(
 #[tauri::command]
 pub fn list_transactions(
     state: State<'_, DbState>,
-    account_id: i64,
+    account_ids: Option<Vec<i64>>,
 ) -> Result<Vec<Transaction>, String> {
     let conn = state.lock().map_err(|e| e.to_string())?;
-    let mut stmt = conn
-        .prepare(&format!(
-            "SELECT {TXN_COLUMNS} FROM transactions
-             WHERE account_id = ?1
-             ORDER BY occurred_at_utc ASC, id ASC"
-        ))
-        .map_err(|e| e.to_string())?;
+    let ids = account_ids.unwrap_or_default();
+    let where_clause = if ids.is_empty() {
+        String::new()
+    } else {
+        let placeholders = std::iter::repeat("?")
+            .take(ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("WHERE account_id IN ({placeholders})")
+    };
+    let sql = format!(
+        "SELECT {TXN_COLUMNS} FROM transactions {where_clause} \
+         ORDER BY occurred_at_utc ASC, id ASC"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map([account_id], txn_from_row)
+        .query_map(rusqlite::params_from_iter(ids.iter()), txn_from_row)
         .map_err(|e| e.to_string())?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| e.to_string())
@@ -361,6 +369,9 @@ fn check_chain(txns: &[ChainRow]) -> Vec<ValidationError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db;
+    use rusqlite::params;
+    use tempfile::TempDir;
 
     fn row(id: i64, credit: i64, debit: i64, balance: i64) -> ChainRow {
         ChainRow {
@@ -405,5 +416,109 @@ mod tests {
         assert_eq!(errors[0].txn_id, 2);
         assert_eq!(errors[0].expected_balance, "110.00");
         assert_eq!(errors[0].actual_balance, "120.00");
+    }
+
+    fn fixture_two_accounts() -> (TempDir, rusqlite::Connection, i64, i64) {
+        let dir = TempDir::new().unwrap();
+        let conn = db::open(dir.path()).unwrap();
+
+        let a1: i64 = conn
+            .query_row(
+                "INSERT INTO accounts (bank, currency, account_number, owner_name)
+                 VALUES ('B1', 'USD', '1', 'A') RETURNING id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let a2: i64 = conn
+            .query_row(
+                "INSERT INTO accounts (bank, currency, account_number, owner_name)
+                 VALUES ('B2', 'EUR', '2', 'B') RETURNING id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        for &acc in &[a1, a2] {
+            let batch: i64 = conn
+                .query_row(
+                    "INSERT INTO import_batches
+                     (account_id, imported_at, source_filename, row_count, timezone_offset)
+                     VALUES (?1, '2026-01-01T00:00:00Z', NULL, 2, '+00:00') RETURNING id",
+                    params![acc],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            conn.execute(
+                "INSERT INTO transactions
+                 (account_id, import_batch_id, occurred_at_utc, credit, debit, balance, description)
+                 VALUES
+                 (?1, ?2, '2026-01-01T10:00:00Z', 1000, 0, 1000, ''),
+                 (?1, ?2, '2026-01-02T10:00:00Z', 500,  0, 1500, '')",
+                params![acc, batch],
+            )
+            .unwrap();
+        }
+        (dir, conn, a1, a2)
+    }
+
+    fn list_with_filter(conn: &rusqlite::Connection, ids: &[i64]) -> Vec<i64> {
+        let where_clause = if ids.is_empty() {
+            String::new()
+        } else {
+            let placeholders = std::iter::repeat("?")
+                .take(ids.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("WHERE account_id IN ({placeholders})")
+        };
+        let sql = format!(
+            "SELECT account_id FROM transactions {where_clause} \
+             ORDER BY occurred_at_utc ASC, id ASC"
+        );
+        let mut stmt = conn.prepare(&sql).unwrap();
+        stmt.query_map(rusqlite::params_from_iter(ids.iter()), |r| r.get::<_, i64>(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn list_transactions_empty_filter_returns_all() {
+        let (_dir, conn, a1, a2) = fixture_two_accounts();
+        let result = list_with_filter(&conn, &[]);
+        assert_eq!(result.len(), 4);
+        assert_eq!(
+            result.iter().filter(|&&x| x == a1).count(),
+            2,
+            "should include account 1"
+        );
+        assert_eq!(
+            result.iter().filter(|&&x| x == a2).count(),
+            2,
+            "should include account 2"
+        );
+    }
+
+    #[test]
+    fn list_transactions_single_id_filters() {
+        let (_dir, conn, a1, _a2) = fixture_two_accounts();
+        let result = list_with_filter(&conn, &[a1]);
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().all(|&x| x == a1));
+    }
+
+    #[test]
+    fn list_transactions_multiple_ids_returns_union() {
+        let (_dir, conn, a1, a2) = fixture_two_accounts();
+        let result = list_with_filter(&conn, &[a1, a2]);
+        assert_eq!(result.len(), 4);
+    }
+
+    #[test]
+    fn list_transactions_unknown_id_returns_empty() {
+        let (_dir, conn, _a1, _a2) = fixture_two_accounts();
+        let result = list_with_filter(&conn, &[9999]);
+        assert!(result.is_empty());
     }
 }

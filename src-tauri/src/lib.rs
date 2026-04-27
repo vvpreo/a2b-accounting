@@ -1,6 +1,7 @@
 mod accounts;
 mod db;
 mod money;
+mod settings;
 mod transactions;
 
 use std::path::PathBuf;
@@ -51,6 +52,8 @@ pub fn run() {
             transactions::list_import_batches,
             transactions::delete_import_batch,
             transactions::validate_balance_chain,
+            settings::get_setting,
+            settings::set_setting,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

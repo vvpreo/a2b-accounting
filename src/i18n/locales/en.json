@@ -1,0 +1,124 @@
+{
+  "tabs": {
+    "categories": "Categories",
+    "accounts": "Accounts",
+    "transactions": "Transactions",
+    "settings": "Settings"
+  },
+  "toolbar": {
+    "createAccount": "Create account",
+    "collapse": "Collapse toolbar",
+    "expand": "Expand toolbar"
+  },
+  "common": {
+    "cancel": "Cancel",
+    "save": "Save",
+    "saving": "Saving...",
+    "delete": "Delete",
+    "deleting": "Deleting...",
+    "close": "Close",
+    "back": "Back",
+    "loading": "Loading...",
+    "yes": "Yes",
+    "no": "No",
+    "all": "All"
+  },
+  "accounts": {
+    "title": "Accounts",
+    "create": "Create account",
+    "fieldName": "Account name",
+    "fieldNamePlaceholder": "e.g. “Salary”",
+    "fieldBank": "Bank",
+    "fieldPreset": "Preset",
+    "fieldCurrency": "Currency",
+    "fieldCurrencyFiat": "Fiat",
+    "fieldCurrencyCrypto": "Crypto",
+    "fieldAccountNumber": "Account number",
+    "fieldAccountNumberOptional": "Account number (optional)",
+    "fieldOwner": "Owner name",
+    "fieldOwnerOptional": "Owner name (optional)",
+    "tableId": "#",
+    "tableName": "Name",
+    "tableBank": "Bank",
+    "tableCurrency": "Currency",
+    "tableNumber": "Number",
+    "tableOwner": "Owner",
+    "tableCreated": "Created",
+    "empty": "No accounts yet.",
+    "actionTransactions": "Transactions →",
+    "actionImport": "Import CSV",
+    "actionDetails": "Details",
+    "editTitle": "Edit account #{id}",
+    "deleteConfirm": "Delete account “{name}”? All its transactions and import batches will be removed permanently.",
+    "deleteConfirmYes": "Yes, delete",
+    "deleteButton": "Delete account",
+    "detailsBack": "← Back to accounts",
+    "detailsEdit": "Edit",
+    "detailsGoToTransactions": "Transactions →",
+    "detailsBalanceChainOk": "Balance chain: ✓ consistent",
+    "detailsBalanceChainBroken": {
+      "one": "Balance chain has {count} break",
+      "other": "Balance chain has {count} breaks"
+    },
+    "detailsBatchesTitle": "Imports",
+    "detailsBatchesEmpty": "Nothing imported yet.",
+    "detailsBatchTimezone": "TZ",
+    "detailsBatchRows": {
+      "one": "{count} row",
+      "other": "{count} rows"
+    },
+    "detailsBatchDeleteConfirm": "Delete this import? All of its transactions will be removed.",
+    "detailsBatchDeleteYes": "Yes, delete"
+  },
+  "transactions": {
+    "title": "Transactions",
+    "filterAll": "All",
+    "tableAccount": "Account",
+    "tableDate": "Date (UTC)",
+    "tablePeer": "Counterparty",
+    "tableCredit": "Credit",
+    "tableDebit": "Debit",
+    "tableBalance": "Balance",
+    "tableDescription": "Description",
+    "empty": "No transactions for the selected accounts."
+  },
+  "import": {
+    "title": "Import transactions",
+    "buttonChooseFile": "Choose CSV file",
+    "buttonChosen": "Chosen: {filename}",
+    "hintColumns": "Expected columns: occurred_at, peer, credit, debit, balance, description. Date in ISO-8601 with offset (e.g. 2026-04-01T10:15:00+03:00).",
+    "parseErrorsTitle": "CSV parsing problems:",
+    "previewLabel": "Preview:",
+    "previewRows": {
+      "one": "{count} row",
+      "other": "{count} rows"
+    },
+    "previewMore": "...showing first 20 of {total}",
+    "previewDate": "Date",
+    "previewPeer": "Counterparty",
+    "previewCredit": "Credit",
+    "previewDebit": "Debit",
+    "previewBalance": "Balance",
+    "previewDescription": "Description",
+    "submit": "Import",
+    "submitting": "Importing...",
+    "resultDone": "Imported {inserted} rows. Batch #{batchId}.",
+    "resultBreaksTitle": "Balance chain breaks ({count}):",
+    "resultBreakLine": "{date} — “{description}”: expected {expected}, got {actual}",
+    "resultOk": "Balance chain is consistent.",
+    "doneButton": "Done"
+  },
+  "categories": {
+    "title": "Categories",
+    "tbd": "TBD: a directory of categories and auto-categorisation rules."
+  },
+  "settings": {
+    "title": "Settings",
+    "language": "Interface language"
+  },
+  "errors": {
+    "missingOccurredAt": "Row {row}: missing occurred_at",
+    "missingBalance": "Row {row}: missing balance",
+    "csvParse": "CSV parse error at row {row}: {message}"
+  }
+}

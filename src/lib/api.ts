@@ -95,8 +95,12 @@ export function importTransactions(args: {
   return invoke<ImportResult>("import_transactions", args);
 }
 
-export function listTransactions(accountId: number): Promise<Transaction[]> {
-  return invoke<Transaction[]>("list_transactions", { accountId });
+export function listTransactions(
+  accountIds?: number[],
+): Promise<Transaction[]> {
+  return invoke<Transaction[]>("list_transactions", {
+    accountIds: accountIds && accountIds.length > 0 ? accountIds : null,
+  });
 }
 
 export function listImportBatches(accountId: number): Promise<ImportBatch[]> {
@@ -111,4 +115,12 @@ export function validateBalanceChain(
   accountId: number,
 ): Promise<ValidationError[]> {
   return invoke<ValidationError[]>("validate_balance_chain", { accountId });
+}
+
+export function getSetting(key: string): Promise<string | null> {
+  return invoke<string | null>("get_setting", { key });
+}
+
+export function setSetting(key: string, value: string): Promise<void> {
+  return invoke<void>("set_setting", { key, value });
 }

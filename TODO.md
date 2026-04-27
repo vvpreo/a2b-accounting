@@ -1,5 +1,7 @@
 # TODO
 
+- [ ] [Tabs navigation, multi-select transactions filter, i18n (ru/en)](docs/plans/tabs-navigation-and-i18n.md)
+
 # PLANNED
 
 # TO REVIEW
