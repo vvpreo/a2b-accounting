@@ -351,6 +351,11 @@ td.empty {
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
 }
 
+.modal--wide {
+  width: min(1400px, 98vw);
+  max-height: 96vh;
+}
+
 .modal-header {
   display: flex;
   align-items: center;
@@ -406,6 +411,80 @@ td.empty {
     border-color: #7f1d1d;
     color: #fca5a5;
   }
+}
+
+.import-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 16px;
+  margin-bottom: 12px;
+}
+
+.import-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.import-field span {
+  font-weight: 500;
+}
+
+.import-field select,
+.import-field input {
+  padding: 6px 8px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background: #ffffff;
+  font: inherit;
+  color: inherit;
+}
+
+.import-method {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  align-items: center;
+  padding: 8px 12px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.import-method legend {
+  font-weight: 500;
+  padding: 0 4px;
+}
+
+.import-method label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.import-method-disabled {
+  color: #71717a;
+  cursor: not-allowed;
+}
+
+.import-or {
+  margin: 12px 0 6px;
+  font-weight: 500;
+  font-size: 13px;
+  color: #52525b;
+}
+
+.import-paste {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background: #ffffff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  resize: vertical;
 }
 
 .file-input-label {
@@ -882,5 +961,18 @@ code {
     background: #18181b;
     border-color: #3f3f46;
     color: inherit;
+  }
+
+  .import-field select,
+  .import-field input,
+  .import-method,
+  .import-paste {
+    background: #18181b;
+    border-color: #3f3f46;
+    color: inherit;
+  }
+
+  .import-method-disabled {
+    color: #52525b;
   }
 }

@@ -7,6 +7,7 @@
   },
   "toolbar": {
     "createAccount": "Create account",
+    "importTransactions": "Import transactions",
     "collapse": "Collapse toolbar",
     "expand": "Expand toolbar"
   },
@@ -46,7 +47,6 @@
     "tableCreated": "Created",
     "empty": "No accounts yet.",
     "actionTransactions": "Transactions →",
-    "actionImport": "Import CSV",
     "actionDetails": "Details",
     "editTitle": "Edit account #{id}",
     "deleteConfirm": "Delete account “{name}”? All its transactions and import batches will be removed permanently.",
@@ -84,9 +84,15 @@
   },
   "import": {
     "title": "Import transactions",
+    "account": "Account",
+    "noAccounts": "Create an account first",
+    "defaultOffset": "Default UTC offset",
+    "pastePlaceholder": "Paste CSV content here — same columns as the file",
+    "pasteExample": "occurred_at,peer,credit,debit,balance,description\n2026-04-01T10:15:00,Coffee shop,,150.00,12340.50,Morning coffee\n",
     "buttonChooseFile": "Choose CSV file",
     "buttonChosen": "Chosen: {filename}",
-    "hintColumns": "Expected columns: occurred_at, peer, credit, debit, balance, description. Date in ISO-8601 with offset (e.g. 2026-04-01T10:15:00+03:00).",
+    "orPasteHere": "OR paste the file contents here:",
+    "hintColumns": "Expected columns: occurred_at, peer, credit, debit, balance, description. Date in ISO-8601 with offset (e.g. 2026-04-01T10:15:00+03:00) or without offset — the default will apply.",
     "parseErrorsTitle": "CSV parsing problems:",
     "previewLabel": "Preview:",
     "previewRows": {
@@ -102,6 +108,8 @@
     "previewDescription": "Description",
     "submit": "Import",
     "submitting": "Importing...",
+    "next": "Next",
+    "back": "Back",
     "resultDone": "Imported {inserted} rows. Batch #{batchId}.",
     "resultBreaksTitle": "Balance chain breaks ({count}):",
     "resultBreakLine": "{date} — “{description}”: expected {expected}, got {actual}",

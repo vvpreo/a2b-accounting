@@ -1,4 +1,4 @@
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, FixedOffset, NaiveDateTime, SecondsFormat, TimeZone, Utc};
 use rusqlite::{params, Connection, Row};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -78,16 +78,43 @@ fn parse_amount_or_zero(s: &str) -> Result<i64, String> {
     }
 }
 
-fn parse_datetime(s: &str) -> Result<(String, String), String> {
-    let dt = DateTime::parse_from_rfc3339(s.trim())
-        .map_err(|e| format!("invalid datetime '{s}': {e}"))?;
-    let utc = dt.with_timezone(&Utc).to_rfc3339_opts(SecondsFormat::Millis, true);
-    let offset = dt.offset().to_string();
-    Ok((utc, offset))
+fn parse_offset_str(s: &str) -> Result<FixedOffset, String> {
+    let probe = format!("2000-01-01T00:00:00{}", s.trim());
+    DateTime::parse_from_rfc3339(&probe)
+        .map(|dt| *dt.offset())
+        .map_err(|e| format!("invalid offset '{s}': {e}"))
 }
 
-fn parse_row(r: &TxnImportRow) -> Result<ParsedRow, String> {
-    let (occurred_at_utc, occurred_at_tz) = parse_datetime(&r.occurred_at)?;
+const NAIVE_FORMATS: &[&str] = &[
+    "%Y-%m-%dT%H:%M:%S%.f",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%d %H:%M:%S%.f",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%dT%H:%M",
+    "%Y-%m-%d %H:%M",
+];
+
+fn parse_datetime(s: &str, default_offset: &FixedOffset) -> Result<(String, String), String> {
+    let trimmed = s.trim();
+    if let Ok(dt) = DateTime::parse_from_rfc3339(trimmed) {
+        let utc = dt.with_timezone(&Utc).to_rfc3339_opts(SecondsFormat::Millis, true);
+        return Ok((utc, dt.offset().to_string()));
+    }
+    for fmt in NAIVE_FORMATS {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(trimmed, fmt) {
+            let dt = default_offset
+                .from_local_datetime(&naive)
+                .single()
+                .ok_or_else(|| format!("ambiguous local datetime '{trimmed}'"))?;
+            let utc = dt.with_timezone(&Utc).to_rfc3339_opts(SecondsFormat::Millis, true);
+            return Ok((utc, default_offset.to_string()));
+        }
+    }
+    Err(format!("invalid datetime '{trimmed}'"))
+}
+
+fn parse_row(r: &TxnImportRow, default_offset: &FixedOffset) -> Result<ParsedRow, String> {
+    let (occurred_at_utc, occurred_at_tz) = parse_datetime(&r.occurred_at, default_offset)?;
     let credit = parse_amount_or_zero(&r.credit)?;
     let debit = parse_amount_or_zero(&r.debit)?;
     if credit < 0 || debit < 0 {
@@ -144,16 +171,20 @@ pub fn import_transactions(
     state: State<'_, DbState>,
     account_id: i64,
     source_filename: Option<String>,
+    default_timezone_offset: String,
     rows: Vec<TxnImportRow>,
 ) -> Result<ImportResult, String> {
     if rows.is_empty() {
         return Err("no rows to import".to_string());
     }
 
+    let default_offset = parse_offset_str(&default_timezone_offset)?;
     let parsed: Vec<ParsedRow> = rows
         .iter()
         .enumerate()
-        .map(|(i, r)| parse_row(r).map_err(|e| format!("row {}: {e}", i + 1)))
+        .map(|(i, r)| {
+            parse_row(r, &default_offset).map_err(|e| format!("row {}: {e}", i + 1))
+        })
         .collect::<Result<_, _>>()?;
 
     let timezone_offset = parsed[0].occurred_at_tz.clone();

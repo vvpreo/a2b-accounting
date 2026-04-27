@@ -7,6 +7,7 @@
   },
   "toolbar": {
     "createAccount": "Создать счёт",
+    "importTransactions": "Импортировать транзакции",
     "collapse": "Свернуть панель",
     "expand": "Развернуть панель"
   },
@@ -46,7 +47,6 @@
     "tableCreated": "Создан",
     "empty": "Пока нет счетов.",
     "actionTransactions": "Транзакции →",
-    "actionImport": "Импорт CSV",
     "actionDetails": "Подробнее",
     "editTitle": "Редактировать счёт #{id}",
     "deleteConfirm": "Удалить счёт «{name}»? Все его транзакции и загрузки будут удалены безвозвратно.",
@@ -88,9 +88,15 @@
   },
   "import": {
     "title": "Импорт транзакций",
+    "account": "Счёт",
+    "noAccounts": "Сначала создайте счёт",
+    "defaultOffset": "Дефолтный offset от UTC",
+    "pastePlaceholder": "Вставьте CSV-содержимое сюда — те же колонки, что и в файле",
+    "pasteExample": "occurred_at,peer,credit,debit,balance,description\n2026-04-01T10:15:00,Кофейня,,150.00,12340.50,Утренний кофе\n",
     "buttonChooseFile": "Выбрать CSV-файл",
     "buttonChosen": "Выбран: {filename}",
-    "hintColumns": "Ожидаемые колонки: occurred_at, peer, credit, debit, balance, description. Дата в формате ISO-8601 с offset (например, 2026-04-01T10:15:00+03:00).",
+    "orPasteHere": "ИЛИ вставьте текст файла сюда:",
+    "hintColumns": "Ожидаемые колонки: occurred_at, peer, credit, debit, balance, description. Дата в формате ISO-8601 с offset (например, 2026-04-01T10:15:00+03:00) или без offset — тогда применится дефолтный.",
     "parseErrorsTitle": "Проблемы при парсинге CSV:",
     "previewLabel": "Предпросмотр:",
     "previewRows": {
@@ -108,6 +114,8 @@
     "previewDescription": "Описание",
     "submit": "Импортировать",
     "submitting": "Импортирую...",
+    "next": "Далее",
+    "back": "Назад",
     "resultDone": "Импортировано {inserted} строк. Батч #{batchId}.",
     "resultBreaksTitle": "Разрывы в цепочке балансов ({count}):",
     "resultBreakLine": "{date} — «{description}»: ожидался {expected}, в данных {actual}",

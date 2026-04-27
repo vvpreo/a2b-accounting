@@ -5,6 +5,7 @@ import { Tab, Tabs } from "./components/Tabs";
 import { Toolbar } from "./components/Toolbar";
 import { AccountsPage, CreateAccountModal } from "./pages/Accounts";
 import { CategoriesPage } from "./pages/Categories";
+import { ImportDialog } from "./pages/ImportDialog";
 import { SettingsPage } from "./pages/Settings";
 import { TransactionsPage } from "./pages/Transactions";
 
@@ -13,6 +14,7 @@ function App() {
   const [txnFilterAccountIds, setTxnFilterAccountIds] = useState<number[]>([]);
   const [toolbarExpanded, setToolbarExpanded] = useState(true);
   const [creatingAccount, setCreatingAccount] = useState(false);
+  const [importingTxns, setImportingTxns] = useState(false);
   const [accountsVersion, setAccountsVersion] = useState(0);
 
   function goToTransactions(accountIds: number[]) {
@@ -26,6 +28,7 @@ function App() {
         expanded={toolbarExpanded}
         onToggle={() => setToolbarExpanded((v) => !v)}
         onCreateAccount={() => setCreatingAccount(true)}
+        onImportTransactions={() => setImportingTxns(true)}
       />
       <Tabs active={tab} onChange={setTab} />
       {tab === "categories" && <CategoriesPage />}
@@ -51,6 +54,13 @@ function App() {
             setCreatingAccount(false);
             setAccountsVersion((v) => v + 1);
           }}
+        />
+      )}
+
+      {importingTxns && (
+        <ImportDialog
+          onClose={() => setImportingTxns(false)}
+          onImported={() => setAccountsVersion((v) => v + 1)}
         />
       )}
     </main>

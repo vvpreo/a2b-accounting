@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { useT, useTPlural } from "../i18n";
 import {
@@ -15,8 +16,6 @@ import {
 } from "../lib/api";
 import { ACCOUNT_PRESETS, findPresetByName } from "../lib/account-presets";
 import { CRYPTO_CURRENCIES, FIAT_CURRENCIES } from "../lib/currencies";
-import { ImportDialog } from "./ImportDialog";
-
 interface AccountFormValues {
   presetId: string;
   currency: string;
@@ -143,9 +142,6 @@ export function AccountsPage({ onGoToTransactions, version }: Props) {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Account | null>(null);
-  const [importingForAccount, setImportingForAccount] = useState<Account | null>(
-    null,
-  );
   const [detailAccountId, setDetailAccountId] = useState<number | null>(null);
 
   async function refresh() {
@@ -225,13 +221,6 @@ export function AccountsPage({ onGoToTransactions, version }: Props) {
                   <button
                     type="button"
                     className="btn-ghost"
-                    onClick={() => setImportingForAccount(a)}
-                  >
-                    {t("accounts.actionImport")}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-ghost"
                     onClick={() => setDetailAccountId(a.id)}
                   >
                     {t("accounts.actionDetails")}
@@ -258,13 +247,6 @@ export function AccountsPage({ onGoToTransactions, version }: Props) {
         />
       )}
 
-      {importingForAccount && (
-        <ImportDialog
-          accountId={importingForAccount.id}
-          onClose={() => setImportingForAccount(null)}
-          onImported={refresh}
-        />
-      )}
     </section>
   );
 }
@@ -500,7 +482,7 @@ function EditAccountModal({
 
   const busy = submitting || deleting;
 
-  return (
+  return createPortal(
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <header className="modal-header">
@@ -566,7 +548,8 @@ function EditAccountModal({
           </footer>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -596,7 +579,7 @@ export function CreateAccountModal({
     }
   }
 
-  return (
+  return createPortal(
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <header className="modal-header">
@@ -627,7 +610,8 @@ export function CreateAccountModal({
           </footer>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

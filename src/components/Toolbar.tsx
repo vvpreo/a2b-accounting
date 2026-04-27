@@ -4,9 +4,15 @@ interface Props {
   expanded: boolean;
   onToggle: () => void;
   onCreateAccount: () => void;
+  onImportTransactions: () => void;
 }
 
-export function Toolbar({ expanded, onToggle, onCreateAccount }: Props) {
+export function Toolbar({
+  expanded,
+  onToggle,
+  onCreateAccount,
+  onImportTransactions,
+}: Props) {
   const t = useT();
 
   if (!expanded) {
@@ -33,6 +39,13 @@ export function Toolbar({ expanded, onToggle, onCreateAccount }: Props) {
             onClick={onCreateAccount}
           >
             {t("toolbar.createAccount")}
+          </button>
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={onImportTransactions}
+          >
+            {t("toolbar.importTransactions")}
           </button>
         </div>
       </div>

@@ -90,6 +90,7 @@ export function deleteAccount(id: number): Promise<void> {
 export function importTransactions(args: {
   accountId: number;
   sourceFilename: string | null;
+  defaultTimezoneOffset: string;
   rows: TxnImportRow[];
 }): Promise<ImportResult> {
   return invoke<ImportResult>("import_transactions", args);

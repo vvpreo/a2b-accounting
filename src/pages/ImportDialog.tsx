@@ -1,50 +1,90 @@
-import { ChangeEvent, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { useT, useTPlural } from "../i18n";
 import {
+  Account,
   ImportResult,
   TxnImportRow,
   importTransactions,
+  listAccounts,
 } from "../lib/api";
 import { parseTransactionsCsv } from "../lib/csv";
 
 interface Props {
-  accountId: number;
+  initialAccountId?: number | null;
   onClose: () => void;
   onImported: () => void;
 }
 
-export function ImportDialog({ accountId, onClose, onImported }: Props) {
+type Step = 1 | 2;
+
+const OFFSET_OPTIONS = buildOffsetOptions();
+
+export function ImportDialog({
+  initialAccountId,
+  onClose,
+  onImported,
+}: Props) {
   const t = useT();
   const tPlural = useTPlural();
+
+  const [step, setStep] = useState<Step>(1);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [accountId, setAccountId] = useState<number | null>(
+    initialAccountId ?? null,
+  );
+  const [defaultOffset, setDefaultOffset] = useState<string>(systemOffset());
   const [filename, setFilename] = useState<string | null>(null);
-  const [rows, setRows] = useState<TxnImportRow[]>([]);
-  const [parseErrors, setParseErrors] = useState<string[]>([]);
+  const [rawText, setRawText] = useState<string>(() => t("import.pasteExample"));
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function onFileChange(e: ChangeEvent<HTMLInputElement>) {
+  useEffect(() => {
+    listAccounts()
+      .then((list) => {
+        setAccounts(list);
+        if (accountId === null && list.length > 0) {
+          setAccountId(list[0].id);
+        }
+      })
+      .catch((e) => setError(String(e)));
+  }, []);
+
+  const parsed = useMemo(() => {
+    if (!rawText.trim()) {
+      return { rows: [] as TxnImportRow[], errors: [] as string[] };
+    }
+    return parseTransactionsCsv(rawText, t);
+  }, [rawText, t]);
+
+  function onFileChange(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     setResult(null);
     setError(null);
     setFilename(file.name);
-    const text = await file.text();
-    const parsed = parseTransactionsCsv(text, t);
-    setRows(parsed.rows);
-    setParseErrors(parsed.errors);
+    file.text().then(setRawText).catch((err) => setError(String(err)));
+  }
+
+  function onPasteChange(e: ChangeEvent<HTMLTextAreaElement>) {
+    setResult(null);
+    setError(null);
+    setFilename(null);
+    setRawText(e.target.value);
   }
 
   async function onConfirm() {
-    if (rows.length === 0) return;
+    if (accountId === null || parsed.rows.length === 0) return;
     setSubmitting(true);
     setError(null);
     try {
       const res = await importTransactions({
         accountId,
         sourceFilename: filename,
-        rows,
+        defaultTimezoneOffset: defaultOffset,
+        rows: parsed.rows,
       });
       setResult(res);
       onImported();
@@ -55,9 +95,14 @@ export function ImportDialog({ accountId, onClose, onImported }: Props) {
     }
   }
 
-  return (
+  const canGoNext =
+    accountId !== null &&
+    parsed.rows.length > 0 &&
+    parsed.errors.length === 0;
+
+  return createPortal(
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal modal--wide" onClick={(e) => e.stopPropagation()}>
         <header className="modal-header">
           <h3>{t("import.title")}</h3>
           <button
@@ -71,8 +116,46 @@ export function ImportDialog({ accountId, onClose, onImported }: Props) {
         </header>
 
         <div className="modal-body">
-          {!result && (
+          {step === 1 && (
             <>
+              <div className="import-fields">
+                <label className="import-field">
+                  <span>{t("import.account")}</span>
+                  <select
+                    value={accountId ?? ""}
+                    onChange={(e) => setAccountId(Number(e.target.value))}
+                    disabled={accounts.length === 0}
+                  >
+                    {accounts.length === 0 ? (
+                      <option value="">{t("import.noAccounts")}</option>
+                    ) : (
+                      accounts.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.name || a.accountNumber || `#${a.id}`} —{" "}
+                          {a.bank} · {a.currency}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </label>
+
+                <label className="import-field">
+                  <span>{t("import.defaultOffset")}</span>
+                  <select
+                    value={defaultOffset}
+                    onChange={(e) => setDefaultOffset(e.target.value)}
+                  >
+                    {OFFSET_OPTIONS.map((o) => (
+                      <option key={o} value={o}>
+                        {o}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <p className="hint">{t("import.hintColumns")}</p>
+
               <label className="file-input-label">
                 <input
                   type="file"
@@ -83,59 +166,64 @@ export function ImportDialog({ accountId, onClose, onImported }: Props) {
                   ? t("import.buttonChosen", { filename })
                   : t("import.buttonChooseFile")}
               </label>
-              <p className="hint">{t("import.hintColumns")}</p>
 
-              {parseErrors.length > 0 && (
+              <p className="import-or">{t("import.orPasteHere")}</p>
+
+              <textarea
+                className="import-paste"
+                rows={10}
+                value={rawText}
+                placeholder={t("import.pastePlaceholder")}
+                onChange={onPasteChange}
+              />
+
+              {parsed.errors.length > 0 && (
                 <div className="errors-block">
                   <strong>{t("import.parseErrorsTitle")}</strong>
                   <ul>
-                    {parseErrors.map((e, i) => (
+                    {parsed.errors.map((e, i) => (
                       <li key={i}>{e}</li>
                     ))}
                   </ul>
                 </div>
               )}
 
-              {rows.length > 0 && (
-                <>
-                  <p>
-                    <strong>{t("import.previewLabel")}</strong>{" "}
-                    {tPlural("import.previewRows", rows.length)}
-                  </p>
-                  <div className="preview-table-wrap">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>{t("import.previewDate")}</th>
-                          <th>{t("import.previewPeer")}</th>
-                          <th>{t("import.previewCredit")}</th>
-                          <th>{t("import.previewDebit")}</th>
-                          <th>{t("import.previewBalance")}</th>
-                          <th>{t("import.previewDescription")}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {rows.slice(0, 20).map((r, i) => (
-                          <tr key={i}>
-                            <td>{r.occurredAt}</td>
-                            <td>{r.peer}</td>
-                            <td>{r.credit}</td>
-                            <td>{r.debit}</td>
-                            <td>{r.balance}</td>
-                            <td>{r.description}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    {rows.length > 20 && (
-                      <p className="hint">
-                        {t("import.previewMore", { total: rows.length })}
-                      </p>
-                    )}
-                  </div>
-                </>
-              )}
+              {error && <div className="error">{error}</div>}
+            </>
+          )}
 
+          {step === 2 && !result && (
+            <>
+              <p>
+                <strong>{t("import.previewLabel")}</strong>{" "}
+                {tPlural("import.previewRows", parsed.rows.length)}
+              </p>
+              <div className="preview-table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>{t("import.previewDate")}</th>
+                      <th>{t("import.previewPeer")}</th>
+                      <th>{t("import.previewCredit")}</th>
+                      <th>{t("import.previewDebit")}</th>
+                      <th>{t("import.previewBalance")}</th>
+                      <th>{t("import.previewDescription")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {parsed.rows.map((r, i) => (
+                      <tr key={i}>
+                        <td>{r.occurredAt}</td>
+                        <td>{r.peer}</td>
+                        <td>{r.credit}</td>
+                        <td>{r.debit}</td>
+                        <td>{r.balance}</td>
+                        <td>{r.description}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
               {error && <div className="error">{error}</div>}
             </>
           )}
@@ -176,7 +264,11 @@ export function ImportDialog({ accountId, onClose, onImported }: Props) {
         </div>
 
         <footer className="modal-footer">
-          {!result ? (
+          {result ? (
+            <button type="button" className="btn-primary" onClick={onClose}>
+              {t("import.doneButton")}
+            </button>
+          ) : step === 1 ? (
             <>
               <button type="button" className="btn-ghost" onClick={onClose}>
                 {t("common.cancel")}
@@ -184,19 +276,57 @@ export function ImportDialog({ accountId, onClose, onImported }: Props) {
               <button
                 type="button"
                 className="btn-primary"
-                disabled={submitting || rows.length === 0}
+                disabled={!canGoNext}
+                onClick={() => setStep(2)}
+              >
+                {t("import.next")}
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => setStep(1)}
+                disabled={submitting}
+              >
+                {t("import.back")}
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={submitting || parsed.rows.length === 0}
                 onClick={onConfirm}
               >
                 {submitting ? t("import.submitting") : t("import.submit")}
               </button>
             </>
-          ) : (
-            <button type="button" className="btn-primary" onClick={onClose}>
-              {t("import.doneButton")}
-            </button>
           )}
         </footer>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
+}
+
+function buildOffsetOptions(): string[] {
+  const offsets = [
+    "-12:00", "-11:00", "-10:00", "-09:30", "-09:00", "-08:00", "-07:00",
+    "-06:00", "-05:00", "-04:00", "-03:30", "-03:00", "-02:00", "-01:00",
+    "+00:00", "+01:00", "+02:00", "+03:00", "+03:30", "+04:00", "+04:30",
+    "+05:00", "+05:30", "+05:45", "+06:00", "+06:30", "+07:00", "+08:00",
+    "+08:45", "+09:00", "+09:30", "+10:00", "+10:30", "+11:00", "+12:00",
+    "+12:45", "+13:00", "+14:00",
+  ];
+  return offsets;
+}
+
+function systemOffset(): string {
+  const minutes = -new Date().getTimezoneOffset();
+  const sign = minutes >= 0 ? "+" : "-";
+  const abs = Math.abs(minutes);
+  const hh = String(Math.floor(abs / 60)).padStart(2, "0");
+  const mm = String(abs % 60).padStart(2, "0");
+  const formatted = `${sign}${hh}:${mm}`;
+  return OFFSET_OPTIONS.includes(formatted) ? formatted : "+00:00";
 }
