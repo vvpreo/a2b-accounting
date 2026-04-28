@@ -5,11 +5,27 @@ import { useT, useTPlural } from "../i18n";
 import {
   Account,
   ImportResult,
+  PreviewRowIssue,
+  PreviewRowIssueKind,
   TxnImportRow,
   importTransactions,
   listAccounts,
+  validateImportPreview,
 } from "../lib/api";
 import { parseTransactionsCsv } from "../lib/csv";
+import { formatMoney } from "../lib/money";
+
+type IssueFilter = "all" | PreviewRowIssueKind;
+const ISSUE_KINDS: PreviewRowIssueKind[] = [
+  "duplicate_db",
+  "duplicate_file",
+  "balance_db",
+  "balance_file",
+];
+
+function isDuplicate(kind: PreviewRowIssueKind): boolean {
+  return kind === "duplicate_db" || kind === "duplicate_file";
+}
 
 interface Props {
   initialAccountId?: number | null;
@@ -38,8 +54,11 @@ export function ImportDialog({
   const [filename, setFilename] = useState<string | null>(null);
   const [rawText, setRawText] = useState<string>(() => t("import.pasteExample"));
   const [submitting, setSubmitting] = useState(false);
+  const [validating, setValidating] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [previewIssues, setPreviewIssues] = useState<PreviewRowIssue[]>([]);
+  const [issueFilter, setIssueFilter] = useState<IssueFilter>("all");
 
   useEffect(() => {
     listAccounts()
@@ -75,8 +94,82 @@ export function ImportDialog({
     setRawText(e.target.value);
   }
 
+  const issuesByRow = useMemo(() => {
+    const map = new Map<number, PreviewRowIssue[]>();
+    for (const issue of previewIssues) {
+      const arr = map.get(issue.rowIndex);
+      if (arr) arr.push(issue);
+      else map.set(issue.rowIndex, [issue]);
+    }
+    return map;
+  }, [previewIssues]);
+
+  const issueCounts = useMemo(() => {
+    const counts: Record<PreviewRowIssueKind, Set<number>> = {
+      balance_db: new Set(),
+      balance_file: new Set(),
+      duplicate_db: new Set(),
+      duplicate_file: new Set(),
+    };
+    for (const i of previewIssues) {
+      counts[i.kind].add(i.rowIndex);
+    }
+    return {
+      balance_db: counts.balance_db.size,
+      balance_file: counts.balance_file.size,
+      duplicate_db: counts.duplicate_db.size,
+      duplicate_file: counts.duplicate_file.size,
+    };
+  }, [previewIssues]);
+
+  const skipRowIndices = useMemo(() => {
+    const skip = new Set<number>();
+    for (const issue of previewIssues) {
+      if (isDuplicate(issue.kind)) skip.add(issue.rowIndex);
+    }
+    return skip;
+  }, [previewIssues]);
+
+  const visibleRows = useMemo(() => {
+    return parsed.rows
+      .map((row, idx) => ({ row, idx }))
+      .filter(({ idx }) => {
+        if (issueFilter === "all") return true;
+        const rowIssues = issuesByRow.get(idx);
+        return !!rowIssues && rowIssues.some((x) => x.kind === issueFilter);
+      });
+  }, [parsed.rows, issuesByRow, issueFilter]);
+
+  async function goToPreview() {
+    if (accountId === null || parsed.rows.length === 0) return;
+    setValidating(true);
+    setError(null);
+    try {
+      const validation = await validateImportPreview({
+        accountId,
+        defaultTimezoneOffset: defaultOffset,
+        rows: parsed.rows,
+      });
+      setPreviewIssues(validation.rowIssues);
+      setIssueFilter("all");
+      setStep(2);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setValidating(false);
+    }
+  }
+
+  function backToStepOne() {
+    setStep(1);
+    setPreviewIssues([]);
+    setIssueFilter("all");
+  }
+
   async function onConfirm() {
     if (accountId === null || parsed.rows.length === 0) return;
+    const goodRows = parsed.rows.filter((_, idx) => !skipRowIndices.has(idx));
+    if (goodRows.length === 0) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -84,7 +177,7 @@ export function ImportDialog({
         accountId,
         sourceFilename: filename,
         defaultTimezoneOffset: defaultOffset,
-        rows: parsed.rows,
+        rows: goodRows,
       });
       setResult(res);
       onImported();
@@ -98,7 +191,9 @@ export function ImportDialog({
   const canGoNext =
     accountId !== null &&
     parsed.rows.length > 0 &&
-    parsed.errors.length === 0;
+    parsed.errors.length === 0 &&
+    !validating;
+  const importableCount = parsed.rows.length - skipRowIndices.size;
 
   return createPortal(
     <div className="modal-backdrop" onClick={onClose}>
@@ -201,29 +296,113 @@ export function ImportDialog({
 
           {step === 2 && !result && (
             <>
+              <div className="account-chips issue-filter-chips">
+                <button
+                  type="button"
+                  className={`chip${issueFilter === "all" ? " active" : ""}`}
+                  onClick={() => setIssueFilter("all")}
+                >
+                  {t("import.filterAll")} ({parsed.rows.length})
+                </button>
+                {ISSUE_KINDS.map((kind) =>
+                  issueCounts[kind] > 0 ? (
+                    <button
+                      key={kind}
+                      type="button"
+                      className={`chip${issueFilter === kind ? " active" : ""}`}
+                      onClick={() => setIssueFilter(kind)}
+                    >
+                      {t(`import.filter.${kind}`)} ({issueCounts[kind]})
+                    </button>
+                  ) : null,
+                )}
+              </div>
+              {skipRowIndices.size > 0 && (
+                <p className="hint">
+                  {tPlural("import.skipNotice", skipRowIndices.size)}
+                </p>
+              )}
               <div className="preview-table-wrap">
                 <table>
                   <thead>
                     <tr>
                       <th>{t("import.previewDate")}</th>
+                      <th className="num">{t("import.previewCredit")}</th>
+                      <th className="num">{t("import.previewDebit")}</th>
+                      <th className="num">{t("import.previewBalance")}</th>
                       <th>{t("import.previewPeer")}</th>
-                      <th>{t("import.previewCredit")}</th>
-                      <th>{t("import.previewDebit")}</th>
-                      <th>{t("import.previewBalance")}</th>
-                      <th>{t("import.previewDescription")}</th>
+                      <th>{t("import.previewBankDescription")}</th>
+                      <th>{t("import.previewComment")}</th>
+                      <th>{t("import.previewIssues")}</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {parsed.rows.map((r, i) => (
-                      <tr key={i}>
-                        <td>{r.occurredAt}</td>
-                        <td>{r.peer}</td>
-                        <td>{r.credit}</td>
-                        <td>{r.debit}</td>
-                        <td>{r.balance}</td>
-                        <td>{r.description}</td>
+                    {visibleRows.map(({ row, idx }) => {
+                      const rowIssues = issuesByRow.get(idx);
+                      const hasDup = rowIssues?.some((i) => isDuplicate(i.kind));
+                      const hasIssue = !!rowIssues && rowIssues.length > 0;
+                      const rowCls = hasDup
+                        ? "invalid"
+                        : hasIssue
+                        ? "warning"
+                        : "";
+                      return (
+                        <tr key={idx} className={rowCls}>
+                          <td>{row.occurredAt}</td>
+                          <td className="num">
+                            {row.credit && row.credit !== "0.00" ? (
+                              <span className="amount-credit">
+                                {formatMoney(row.credit)}
+                              </span>
+                            ) : (
+                              ""
+                            )}
+                          </td>
+                          <td className="num">
+                            {row.debit && row.debit !== "0.00" ? (
+                              <span className="amount-debit">
+                                {formatMoney(row.debit)}
+                              </span>
+                            ) : (
+                              ""
+                            )}
+                          </td>
+                          <td className="num">{formatMoney(row.balance)}</td>
+                          <td>{row.peer ?? ""}</td>
+                          <td>{row.bankDescription ?? ""}</td>
+                          <td>{row.comment ?? ""}</td>
+                          <td>
+                            {rowIssues?.map((issue, i) => (
+                              <div
+                                key={i}
+                                className={`row-issue${
+                                  isDuplicate(issue.kind) ? " row-issue--error" : " row-issue--warn"
+                                }`}
+                              >
+                                {issue.kind === "balance_db" ||
+                                issue.kind === "balance_file"
+                                  ? t(`import.issue.${issue.kind}`, {
+                                      expected: formatMoney(
+                                        issue.expectedBalance ?? "",
+                                      ),
+                                      actual: formatMoney(
+                                        issue.actualBalance ?? "",
+                                      ),
+                                    })
+                                  : t(`import.issue.${issue.kind}`)}
+                              </div>
+                            ))}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {visibleRows.length === 0 && (
+                      <tr>
+                        <td className="empty" colSpan={8}>
+                          {t("import.previewFilterEmpty")}
+                        </td>
                       </tr>
-                    ))}
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -239,6 +418,13 @@ export function ImportDialog({
                   batchId: result.batchId,
                 })}
               </p>
+              {result.correctionsInserted > 0 && (
+                <p className="hint">
+                  {t("import.resultCorrections", {
+                    count: result.correctionsInserted,
+                  })}
+                </p>
+              )}
               {result.validationErrors.length > 0 ? (
                 <div className="errors-block">
                   <strong>
@@ -251,9 +437,10 @@ export function ImportDialog({
                       <li key={e.txnId}>
                         {t("import.resultBreakLine", {
                           date: e.occurredAtUtc,
-                          description: e.description || "—",
-                          expected: e.expectedBalance,
-                          actual: e.actualBalance,
+                          description:
+                            e.bankDescription || e.comment || "—",
+                          expected: formatMoney(e.expectedBalance),
+                          actual: formatMoney(e.actualBalance),
                         })}
                       </li>
                     ))}
@@ -280,9 +467,9 @@ export function ImportDialog({
                 type="button"
                 className="btn-primary"
                 disabled={!canGoNext}
-                onClick={() => setStep(2)}
+                onClick={goToPreview}
               >
-                {t("import.next")}
+                {validating ? t("import.validating") : t("import.next")}
               </button>
             </>
           ) : (
@@ -290,7 +477,7 @@ export function ImportDialog({
               <button
                 type="button"
                 className="btn-ghost"
-                onClick={() => setStep(1)}
+                onClick={backToStepOne}
                 disabled={submitting}
               >
                 {t("import.back")}
@@ -298,10 +485,12 @@ export function ImportDialog({
               <button
                 type="button"
                 className="btn-primary"
-                disabled={submitting || parsed.rows.length === 0}
+                disabled={submitting || importableCount === 0}
                 onClick={onConfirm}
               >
-                {submitting ? t("import.submitting") : t("import.submit")}
+                {submitting
+                  ? t("import.submitting")
+                  : tPlural("import.submitWithCount", importableCount)}
               </button>
             </>
           )}

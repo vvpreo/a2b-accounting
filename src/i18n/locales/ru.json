@@ -76,15 +76,45 @@
   },
   "transactions": {
     "title": "Транзакции",
-    "filterAll": "Все",
     "tableAccount": "Счёт",
     "tableDate": "Дата (UTC)",
-    "tablePeer": "Контрагент",
     "tableCredit": "Поступление",
     "tableDebit": "Списание",
     "tableBalance": "Баланс",
-    "tableDescription": "Описание",
-    "empty": "Нет транзакций по выбранным счетам."
+    "tablePeer": "Контрагент",
+    "tableBankDescription": "Описание банка",
+    "tableComment": "Комментарий",
+    "empty": "Нет транзакций по выбранным фильтрам.",
+    "correctingLabel": "Корректирующая транзакция",
+    "commentPlaceholder": "—",
+    "filterAccounts": "Счета",
+    "filterAccountsAll": "Все счета",
+    "filterAccountsNone": "Не выбрано",
+    "filterAccountsEmpty": "Нет счетов",
+    "filterAccountsMany": "Выбрано: {count}",
+    "filterDateFrom": "С",
+    "filterDateTo": "По",
+    "filterKind": "Тип",
+    "filterKindAll": "Все",
+    "filterKindNone": "Не выбрано",
+    "filterKindMany": "Выбрано: {count}",
+    "filterColumns": "Колонки",
+    "filterColumnsAll": "Все",
+    "filterColumnsNone": "Только основные",
+    "filterColumnsMany": "Выбрано: {count}",
+    "applyButton": "Применить",
+    "kind": {
+      "correcting": "Корректирующие",
+      "incoming": "Входящие",
+      "outgoing": "Исходящие",
+      "with_bank_description": "С описанием банка",
+      "with_comment": "С комментариями"
+    },
+    "column": {
+      "peer": "Контрагент",
+      "bank_description": "Описание банка",
+      "comment": "Комментарий"
+    }
   },
   "import": {
     "title": "Импорт транзакций",
@@ -92,11 +122,11 @@
     "noAccounts": "Сначала создайте счёт",
     "defaultOffset": "Дефолтный offset от UTC",
     "pastePlaceholder": "Вставьте CSV-содержимое сюда — те же колонки, что и в файле",
-    "pasteExample": "occurred_at,peer,credit,debit,balance,description\n2026-04-01T10:15:00,Кофейня,,150.00,12340.50,Утренний кофе\n",
+    "pasteExample": "occurred_at,credit,debit,balance,peer,bank_description,comment\n2026-04-01T10:15:00,,150.00,12340.50,Кофейня,Утренний кофе,\n",
     "buttonChooseFile": "Выбрать CSV-файл",
     "buttonChosen": "Выбран: {filename}",
     "orPasteHere": "ИЛИ вставьте текст файла сюда:",
-    "hintColumns": "Ожидаемые колонки: occurred_at, peer, credit, debit, balance, description. Дата в формате ISO-8601 с offset (например, 2026-04-01T10:15:00+03:00) или без offset — тогда применится дефолтный.",
+    "hintColumns": "Ожидаемые колонки: occurred_at, credit, debit, balance, peer, bank_description, comment. Обязательные — occurred_at и balance; остальные могут быть пустыми. Поддерживаются разделители: запятая, табуляция, точка с запятой. Дата в формате ISO-8601 с offset (например, 2026-04-01T10:15:00+03:00) или без offset — тогда применится дефолтный.",
     "parseErrorsTitle": "Проблемы при парсинге CSV:",
     "titlePreviewSuffix": {
       "one": "(предпросмотр {count} строки)",
@@ -106,16 +136,46 @@
     },
     "previewMore": "...показаны первые 20 из {total}",
     "previewDate": "Дата",
-    "previewPeer": "Контрагент",
     "previewCredit": "Поступление",
     "previewDebit": "Списание",
     "previewBalance": "Баланс",
-    "previewDescription": "Описание",
+    "previewPeer": "Контрагент",
+    "previewBankDescription": "Описание банка",
+    "previewComment": "Комментарий",
+    "previewIssues": "Проблемы",
+    "previewFilterEmpty": "Нет строк с выбранным типом проблемы.",
+    "filterAll": "Все",
+    "filter": {
+      "duplicate_db": "Дубль с БД",
+      "duplicate_file": "Дубль в файле",
+      "balance_db": "Не сходится с БД",
+      "balance_file": "Не сходится в файле"
+    },
+    "issue": {
+      "duplicate_db": "Дубль с БД",
+      "duplicate_file": "Дубль строки выше в этом файле",
+      "balance_db": "Расхождение с БД ({expected} → {actual}). Будет добавлена корректирующая транзакция.",
+      "balance_file": "Разрыв в файле ({expected} → {actual}). Будет добавлена корректирующая транзакция."
+    },
+    "skipNotice": {
+      "one": "{count} дубль будет пропущен при импорте",
+      "few": "{count} дубля будут пропущены при импорте",
+      "many": "{count} дублей будут пропущены при импорте",
+      "other": "{count} дублей будут пропущены при импорте"
+    },
     "submit": "Импортировать",
+    "submitWithCount": {
+      "one": "Импортировать {count} строку",
+      "few": "Импортировать {count} строки",
+      "many": "Импортировать {count} строк",
+      "other": "Импортировать {count} строк"
+    },
     "submitting": "Импортирую...",
+    "validating": "Проверяю...",
     "next": "Далее",
     "back": "Назад",
     "resultDone": "Импортировано {inserted} строк. Батч #{batchId}.",
+    "resultCorrections": "Дополнительно создано {count} корректирующих проводок для закрытия разрывов баланса.",
     "resultBreaksTitle": "Разрывы в цепочке балансов ({count}):",
     "resultBreakLine": "{date} — «{description}»: ожидался {expected}, в данных {actual}",
     "resultOk": "Цепочка балансов целостна.",
@@ -132,6 +192,7 @@
   "errors": {
     "missingOccurredAt": "Строка {row}: отсутствует occurred_at",
     "missingBalance": "Строка {row}: отсутствует balance",
-    "csvParse": "Ошибка парсинга CSV в строке {row}: {message}"
+    "csvParse": "Ошибка парсинга CSV в строке {row}: {message}",
+    "unknownDelimiter": "Не удалось определить разделитель колонок в шапке. Поддерживаются: запятая, табуляция, точка с запятой."
   }
 }

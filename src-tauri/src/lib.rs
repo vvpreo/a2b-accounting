@@ -52,6 +52,8 @@ pub fn run() {
             transactions::list_import_batches,
             transactions::delete_import_batch,
             transactions::validate_balance_chain,
+            transactions::validate_import_preview,
+            transactions::update_transaction_comment,
             settings::get_setting,
             settings::set_setting,
         ])

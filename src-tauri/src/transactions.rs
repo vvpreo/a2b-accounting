@@ -1,5 +1,7 @@
+use std::collections::{HashMap, HashSet};
+
 use chrono::{DateTime, FixedOffset, NaiveDateTime, SecondsFormat, TimeZone, Utc};
-use rusqlite::{params, Connection, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -10,11 +12,12 @@ use crate::money;
 #[serde(rename_all = "camelCase")]
 pub struct TxnImportRow {
     pub occurred_at: String,
-    pub peer: String,
     pub credit: String,
     pub debit: String,
     pub balance: String,
-    pub description: String,
+    pub peer: Option<String>,
+    pub bank_description: Option<String>,
+    pub comment: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -24,11 +27,13 @@ pub struct Transaction {
     pub account_id: i64,
     pub import_batch_id: i64,
     pub occurred_at_utc: String,
-    pub peer: String,
     pub credit: String,
     pub debit: String,
     pub balance: String,
-    pub description: String,
+    pub peer: Option<String>,
+    pub bank_description: Option<String>,
+    pub comment: Option<String>,
+    pub is_correcting: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -49,7 +54,8 @@ pub struct ValidationError {
     pub expected_balance: String,
     pub actual_balance: String,
     pub occurred_at_utc: String,
-    pub description: String,
+    pub bank_description: Option<String>,
+    pub comment: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -57,17 +63,36 @@ pub struct ValidationError {
 pub struct ImportResult {
     pub batch_id: i64,
     pub inserted: i64,
+    pub corrections_inserted: i64,
     pub validation_errors: Vec<ValidationError>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewRowIssue {
+    pub row_index: usize,
+    pub kind: String,
+    pub expected_balance: Option<String>,
+    pub actual_balance: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportPreviewValidation {
+    pub row_issues: Vec<PreviewRowIssue>,
+}
+
+#[derive(Debug)]
 struct ParsedRow {
     occurred_at_utc: String,
     occurred_at_tz: String,
-    peer: String,
     credit: i64,
     debit: i64,
     balance: i64,
-    description: String,
+    peer: Option<String>,
+    bank_description: Option<String>,
+    comment: Option<String>,
+    is_correcting: bool,
 }
 
 fn parse_amount_or_zero(s: &str) -> Result<i64, String> {
@@ -113,6 +138,12 @@ fn parse_datetime(s: &str, default_offset: &FixedOffset) -> Result<(String, Stri
     Err(format!("invalid datetime '{trimmed}'"))
 }
 
+fn normalize_optional(s: &Option<String>) -> Option<String> {
+    s.as_ref()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
 fn parse_row(r: &TxnImportRow, default_offset: &FixedOffset) -> Result<ParsedRow, String> {
     let (occurred_at_utc, occurred_at_tz) = parse_datetime(&r.occurred_at, default_offset)?;
     let credit = parse_amount_or_zero(&r.credit)?;
@@ -127,11 +158,13 @@ fn parse_row(r: &TxnImportRow, default_offset: &FixedOffset) -> Result<ParsedRow
     Ok(ParsedRow {
         occurred_at_utc,
         occurred_at_tz,
-        peer: r.peer.clone(),
         credit,
         debit,
         balance,
-        description: r.description.clone(),
+        peer: normalize_optional(&r.peer),
+        bank_description: normalize_optional(&r.bank_description),
+        comment: normalize_optional(&r.comment),
+        is_correcting: false,
     })
 }
 
@@ -147,13 +180,15 @@ fn txn_from_row(row: &Row) -> rusqlite::Result<Transaction> {
         credit: money::format_minor(credit),
         debit: money::format_minor(debit),
         balance: money::format_minor(balance),
-        description: row.get(7)?,
-        peer: row.get(8)?,
+        peer: row.get(7)?,
+        bank_description: row.get(8)?,
+        comment: row.get(9)?,
+        is_correcting: row.get(10)?,
     })
 }
 
 const TXN_COLUMNS: &str =
-    "id, account_id, import_batch_id, occurred_at_utc, credit, debit, balance, description, peer";
+    "id, account_id, import_batch_id, occurred_at_utc, credit, debit, balance, peer, bank_description, comment, is_correcting";
 
 fn batch_from_row(row: &Row) -> rusqlite::Result<ImportBatch> {
     Ok(ImportBatch {
@@ -217,10 +252,13 @@ pub fn import_transactions(
         return Err(format!("account {account_id} does not exist"));
     }
 
+    let corrections =
+        synthesize_corrections(conn, account_id, &parsed, &timezone_offset)?;
+
     let tx = conn.transaction().map_err(|e| e.to_string())?;
 
     let imported_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-    let row_count = parsed.len() as i64;
+    let row_count = (parsed.len() + corrections.len()) as i64;
 
     let batch_id: i64 = tx
         .query_row(
@@ -238,20 +276,24 @@ pub fn import_transactions(
                 "INSERT INTO transactions (
                     account_id, import_batch_id,
                     occurred_at_utc,
-                    peer, credit, debit, balance, description
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    credit, debit, balance,
+                    peer, bank_description, comment,
+                    is_correcting
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             )
             .map_err(|e| e.to_string())?;
-        for p in &parsed {
+        for p in parsed.iter().chain(corrections.iter()) {
             stmt.execute(params![
                 account_id,
                 batch_id,
                 p.occurred_at_utc,
-                p.peer,
                 p.credit,
                 p.debit,
                 p.balance,
-                p.description,
+                p.peer,
+                p.bank_description,
+                p.comment,
+                p.is_correcting,
             ])
             .map_err(|e| e.to_string())?;
         }
@@ -264,9 +306,161 @@ pub fn import_transactions(
 
     Ok(ImportResult {
         batch_id,
-        inserted: row_count,
+        inserted: parsed.len() as i64,
+        corrections_inserted: corrections.len() as i64,
         validation_errors,
     })
+}
+
+/// Walk a chain that merges existing DB context (head + interval + tail)
+/// with the freshly parsed import rows, and emit a synthetic "correcting"
+/// row at every break that touches at least one new import row.
+///
+/// The correcting row is placed 1ms before `curr` and constructed so that
+/// `prev → correcting → curr` reconciles locally:
+///   correcting.balance = curr.balance - curr.credit + curr.debit
+///   correcting.delta   = correcting.balance - prev.balance
+fn synthesize_corrections(
+    conn: &Connection,
+    account_id: i64,
+    parsed: &[ParsedRow],
+    batch_tz_offset: &str,
+) -> Result<Vec<ParsedRow>, String> {
+    if parsed.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut sorted_idx: Vec<usize> = (0..parsed.len()).collect();
+    sorted_idx.sort_by(|&a, &b| parsed[a].occurred_at_utc.cmp(&parsed[b].occurred_at_utc));
+    let min_t = parsed[sorted_idx[0]].occurred_at_utc.clone();
+    let max_t = parsed[*sorted_idx.last().unwrap()].occurred_at_utc.clone();
+
+    let mut interval_stmt = conn
+        .prepare(
+            "SELECT occurred_at_utc, credit, debit, balance, peer, bank_description, comment
+             FROM transactions
+             WHERE account_id = ?1 AND occurred_at_utc >= ?2 AND occurred_at_utc <= ?3
+             ORDER BY occurred_at_utc ASC, id ASC",
+        )
+        .map_err(|e| e.to_string())?;
+    let interval: Vec<DbRecord> = interval_stmt
+        .query_map(params![account_id, min_t, max_t], db_record_from_row)
+        .map_err(|e| e.to_string())?
+        .collect::<rusqlite::Result<_>>()
+        .map_err(|e| e.to_string())?;
+
+    let head: Option<DbRecord> = conn
+        .query_row(
+            "SELECT occurred_at_utc, credit, debit, balance, peer, bank_description, comment
+             FROM transactions
+             WHERE account_id = ?1 AND occurred_at_utc < ?2
+             ORDER BY occurred_at_utc DESC, id DESC
+             LIMIT 1",
+            params![account_id, min_t],
+            db_record_from_row,
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+
+    let tail: Option<DbRecord> = conn
+        .query_row(
+            "SELECT occurred_at_utc, credit, debit, balance, peer, bank_description, comment
+             FROM transactions
+             WHERE account_id = ?1 AND occurred_at_utc > ?2
+             ORDER BY occurred_at_utc ASC, id ASC
+             LIMIT 1",
+            params![account_id, max_t],
+            db_record_from_row,
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+
+    let mut chain: Vec<ChainItem> = Vec::new();
+    if let Some(h) = &head {
+        chain.push(ChainItem {
+            origin: ItemOrigin::Db,
+            occurred_at_utc: h.occurred_at_utc.clone(),
+            credit: h.credit,
+            debit: h.debit,
+            balance: h.balance,
+        });
+    }
+    for r in &interval {
+        chain.push(ChainItem {
+            origin: ItemOrigin::Db,
+            occurred_at_utc: r.occurred_at_utc.clone(),
+            credit: r.credit,
+            debit: r.debit,
+            balance: r.balance,
+        });
+    }
+    for (idx, p) in parsed.iter().enumerate() {
+        chain.push(ChainItem {
+            origin: ItemOrigin::Import { row_index: idx },
+            occurred_at_utc: p.occurred_at_utc.clone(),
+            credit: p.credit,
+            debit: p.debit,
+            balance: p.balance,
+        });
+    }
+    if let Some(t) = &tail {
+        chain.push(ChainItem {
+            origin: ItemOrigin::Db,
+            occurred_at_utc: t.occurred_at_utc.clone(),
+            credit: t.credit,
+            debit: t.debit,
+            balance: t.balance,
+        });
+    }
+    chain.sort_by(|a, b| {
+        a.occurred_at_utc.cmp(&b.occurred_at_utc).then_with(|| {
+            origin_priority(&a.origin).cmp(&origin_priority(&b.origin))
+        })
+    });
+
+    let mut corrections: Vec<ParsedRow> = Vec::new();
+    for i in 1..chain.len() {
+        let prev = &chain[i - 1];
+        let curr = &chain[i];
+        let expected = prev.balance + curr.credit - curr.debit;
+        if expected == curr.balance {
+            continue;
+        }
+        // Skip pre-existing DB-only breaks — those existed before this
+        // import and are not our concern. Any break that touches at least
+        // one new import row gets an auto-correcting entry, including
+        // within-file gaps where the bank export itself was incomplete.
+        let prev_import = matches!(prev.origin, ItemOrigin::Import { .. });
+        let curr_import = matches!(curr.origin, ItemOrigin::Import { .. });
+        if !prev_import && !curr_import {
+            continue;
+        }
+
+        let target_balance = curr.balance - curr.credit + curr.debit;
+        let delta = target_balance - prev.balance;
+        let (credit, debit) = if delta >= 0 { (delta, 0) } else { (0, -delta) };
+
+        let curr_dt = DateTime::parse_from_rfc3339(&curr.occurred_at_utc)
+            .map_err(|e| format!("invalid stored timestamp '{}': {e}", curr.occurred_at_utc))?;
+        let new_dt = curr_dt - chrono::Duration::milliseconds(1);
+        let new_utc = new_dt
+            .with_timezone(&Utc)
+            .to_rfc3339_opts(SecondsFormat::Millis, true);
+
+        corrections.push(ParsedRow {
+            occurred_at_utc: new_utc,
+            occurred_at_tz: batch_tz_offset.to_string(),
+            credit,
+            debit,
+            balance: target_balance,
+            peer: None,
+            bank_description: None,
+            comment: None,
+            is_correcting: true,
+        });
+    }
+
+    Ok(corrections)
 }
 
 #[tauri::command]
@@ -334,6 +528,28 @@ pub fn delete_import_batch(
 }
 
 #[tauri::command]
+pub fn update_transaction_comment(
+    state: State<'_, DbState>,
+    id: i64,
+    comment: Option<String>,
+) -> Result<(), String> {
+    let normalized = comment
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty());
+    let conn = state.lock().map_err(|e| e.to_string())?;
+    let updated = conn
+        .execute(
+            "UPDATE transactions SET comment = ?1 WHERE id = ?2",
+            params![normalized, id],
+        )
+        .map_err(|e| e.to_string())?;
+    if updated == 0 {
+        return Err(format!("transaction {id} does not exist"));
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub fn validate_balance_chain(
     state: State<'_, DbState>,
     account_id: i64,
@@ -348,7 +564,8 @@ struct ChainRow {
     credit: i64,
     debit: i64,
     balance: i64,
-    description: String,
+    bank_description: Option<String>,
+    comment: Option<String>,
 }
 
 fn validate_account_chain(
@@ -356,7 +573,7 @@ fn validate_account_chain(
     account_id: i64,
 ) -> rusqlite::Result<Vec<ValidationError>> {
     let mut stmt = conn.prepare(
-        "SELECT id, occurred_at_utc, credit, debit, balance, description
+        "SELECT id, occurred_at_utc, credit, debit, balance, bank_description, comment
          FROM transactions
          WHERE account_id = ?1
          ORDER BY occurred_at_utc ASC, id ASC",
@@ -370,12 +587,293 @@ fn validate_account_chain(
                 credit: r.get(2)?,
                 debit: r.get(3)?,
                 balance: r.get(4)?,
-                description: r.get(5)?,
+                bank_description: r.get(5)?,
+                comment: r.get(6)?,
             })
         })?
         .collect::<rusqlite::Result<_>>()?;
 
     Ok(check_chain(&txns))
+}
+
+#[derive(Debug, Clone)]
+struct DbRecord {
+    occurred_at_utc: String,
+    credit: i64,
+    debit: i64,
+    balance: i64,
+    peer: Option<String>,
+    bank_description: Option<String>,
+    comment: Option<String>,
+}
+
+fn db_record_from_row(row: &Row) -> rusqlite::Result<DbRecord> {
+    Ok(DbRecord {
+        occurred_at_utc: row.get(0)?,
+        credit: row.get(1)?,
+        debit: row.get(2)?,
+        balance: row.get(3)?,
+        peer: row.get(4)?,
+        bank_description: row.get(5)?,
+        comment: row.get(6)?,
+    })
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ItemOrigin {
+    Db,
+    Import { row_index: usize },
+}
+
+#[derive(Debug)]
+struct ChainItem {
+    origin: ItemOrigin,
+    occurred_at_utc: String,
+    credit: i64,
+    debit: i64,
+    balance: i64,
+}
+
+fn origin_priority(o: &ItemOrigin) -> u8 {
+    match o {
+        ItemOrigin::Db => 0,
+        ItemOrigin::Import { .. } => 1,
+    }
+}
+
+#[derive(Hash, Eq, PartialEq, Clone)]
+struct DupeKey {
+    occurred_at_utc: String,
+    credit: i64,
+    debit: i64,
+    balance: i64,
+    peer: Option<String>,
+    bank_description: Option<String>,
+    comment: Option<String>,
+}
+
+#[tauri::command]
+pub fn validate_import_preview(
+    state: State<'_, DbState>,
+    account_id: i64,
+    default_timezone_offset: String,
+    rows: Vec<TxnImportRow>,
+) -> Result<ImportPreviewValidation, String> {
+    if rows.is_empty() {
+        return Ok(ImportPreviewValidation { row_issues: vec![] });
+    }
+
+    let default_offset = parse_offset_str(&default_timezone_offset)?;
+    let parsed: Vec<ParsedRow> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            parse_row(r, &default_offset).map_err(|e| format!("row {}: {e}", i + 1))
+        })
+        .collect::<Result<_, _>>()?;
+
+    let conn = state.lock().map_err(|e| e.to_string())?;
+
+    let account_exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM accounts WHERE id = ?1",
+            [account_id],
+            |_| Ok(true),
+        )
+        .unwrap_or(false);
+    if !account_exists {
+        return Err(format!("account {account_id} does not exist"));
+    }
+
+    let issues =
+        compute_preview_issues(&conn, account_id, &parsed).map_err(|e| e.to_string())?;
+    Ok(ImportPreviewValidation { row_issues: issues })
+}
+
+fn compute_preview_issues(
+    conn: &Connection,
+    account_id: i64,
+    parsed: &[ParsedRow],
+) -> rusqlite::Result<Vec<PreviewRowIssue>> {
+    if parsed.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut sorted_idx: Vec<usize> = (0..parsed.len()).collect();
+    sorted_idx.sort_by(|&a, &b| parsed[a].occurred_at_utc.cmp(&parsed[b].occurred_at_utc));
+    let min_t = parsed[sorted_idx[0]].occurred_at_utc.clone();
+    let max_t = parsed[*sorted_idx.last().unwrap()].occurred_at_utc.clone();
+
+    let mut interval_stmt = conn.prepare(
+        "SELECT occurred_at_utc, credit, debit, balance, peer, bank_description, comment
+         FROM transactions
+         WHERE account_id = ?1 AND occurred_at_utc >= ?2 AND occurred_at_utc <= ?3
+         ORDER BY occurred_at_utc ASC, id ASC",
+    )?;
+    let interval: Vec<DbRecord> = interval_stmt
+        .query_map(params![account_id, min_t, max_t], db_record_from_row)?
+        .collect::<rusqlite::Result<_>>()?;
+
+    let head: Option<DbRecord> = conn
+        .query_row(
+            "SELECT occurred_at_utc, credit, debit, balance, peer, bank_description, comment
+             FROM transactions
+             WHERE account_id = ?1 AND occurred_at_utc < ?2
+             ORDER BY occurred_at_utc DESC, id DESC
+             LIMIT 1",
+            params![account_id, min_t],
+            db_record_from_row,
+        )
+        .optional()?;
+
+    let tail: Option<DbRecord> = conn
+        .query_row(
+            "SELECT occurred_at_utc, credit, debit, balance, peer, bank_description, comment
+             FROM transactions
+             WHERE account_id = ?1 AND occurred_at_utc > ?2
+             ORDER BY occurred_at_utc ASC, id ASC
+             LIMIT 1",
+            params![account_id, max_t],
+            db_record_from_row,
+        )
+        .optional()?;
+
+    let mut issues: Vec<PreviewRowIssue> = Vec::new();
+
+    // Step 1: duplicate detection runs first. A duplicated row swallows all
+    // other checks for that index — we don't want to chase balance breaks
+    // through rows we're not going to import anyway.
+    let db_keys: HashSet<DupeKey> = interval
+        .iter()
+        .map(|r| DupeKey {
+            occurred_at_utc: r.occurred_at_utc.clone(),
+            credit: r.credit,
+            debit: r.debit,
+            balance: r.balance,
+            peer: r.peer.clone(),
+            bank_description: r.bank_description.clone(),
+            comment: r.comment.clone(),
+        })
+        .collect();
+    let mut seen_imports: HashMap<DupeKey, usize> = HashMap::new();
+    let mut dup_set: HashSet<usize> = HashSet::new();
+    for (idx, p) in parsed.iter().enumerate() {
+        let key = DupeKey {
+            occurred_at_utc: p.occurred_at_utc.clone(),
+            credit: p.credit,
+            debit: p.debit,
+            balance: p.balance,
+            peer: p.peer.clone(),
+            bank_description: p.bank_description.clone(),
+            comment: p.comment.clone(),
+        };
+        if db_keys.contains(&key) {
+            dup_set.insert(idx);
+            issues.push(PreviewRowIssue {
+                row_index: idx,
+                kind: "duplicate_db".to_string(),
+                expected_balance: None,
+                actual_balance: None,
+            });
+        } else if seen_imports.contains_key(&key) {
+            dup_set.insert(idx);
+            issues.push(PreviewRowIssue {
+                row_index: idx,
+                kind: "duplicate_file".to_string(),
+                expected_balance: None,
+                actual_balance: None,
+            });
+        } else {
+            seen_imports.insert(key, idx);
+        }
+    }
+
+    // Step 2: balance chain check. Skip rows already flagged as duplicates.
+    let mut chain: Vec<ChainItem> = Vec::new();
+    if let Some(h) = &head {
+        chain.push(ChainItem {
+            origin: ItemOrigin::Db,
+            occurred_at_utc: h.occurred_at_utc.clone(),
+            credit: h.credit,
+            debit: h.debit,
+            balance: h.balance,
+        });
+    }
+    for r in &interval {
+        chain.push(ChainItem {
+            origin: ItemOrigin::Db,
+            occurred_at_utc: r.occurred_at_utc.clone(),
+            credit: r.credit,
+            debit: r.debit,
+            balance: r.balance,
+        });
+    }
+    for (idx, p) in parsed.iter().enumerate() {
+        chain.push(ChainItem {
+            origin: ItemOrigin::Import { row_index: idx },
+            occurred_at_utc: p.occurred_at_utc.clone(),
+            credit: p.credit,
+            debit: p.debit,
+            balance: p.balance,
+        });
+    }
+    if let Some(t) = &tail {
+        chain.push(ChainItem {
+            origin: ItemOrigin::Db,
+            occurred_at_utc: t.occurred_at_utc.clone(),
+            credit: t.credit,
+            debit: t.debit,
+            balance: t.balance,
+        });
+    }
+    chain.sort_by(|a, b| {
+        a.occurred_at_utc.cmp(&b.occurred_at_utc).then_with(|| {
+            origin_priority(&a.origin).cmp(&origin_priority(&b.origin))
+        })
+    });
+
+    let mut balance_seen: HashSet<usize> = HashSet::new();
+    for i in 1..chain.len() {
+        let prev = &chain[i - 1];
+        let curr = &chain[i];
+        let expected = prev.balance + curr.credit - curr.debit;
+        if expected == curr.balance {
+            continue;
+        }
+        // If the involved import row is a duplicate, no balance issue is
+        // emitted for it — duplicates take precedence and the row won't be
+        // imported anyway.
+        let attribute_to: Option<usize> = match curr.origin {
+            ItemOrigin::Import { row_index } if !dup_set.contains(&row_index) => {
+                Some(row_index)
+            }
+            ItemOrigin::Import { .. } => None,
+            ItemOrigin::Db => chain[..=i].iter().rev().find_map(|x| match x.origin {
+                ItemOrigin::Import { row_index } if !dup_set.contains(&row_index) => {
+                    Some(row_index)
+                }
+                _ => None,
+            }),
+        };
+        let Some(idx) = attribute_to else { continue };
+        if !balance_seen.insert(idx) {
+            continue;
+        }
+        // If either side of the broken pair is from the DB the discrepancy
+        // is "vs DB"; if both sides are import rows it's "in file".
+        let kind = match (curr.origin, prev.origin) {
+            (ItemOrigin::Import { .. }, ItemOrigin::Import { .. }) => "balance_file",
+            _ => "balance_db",
+        };
+        issues.push(PreviewRowIssue {
+            row_index: idx,
+            kind: kind.to_string(),
+            expected_balance: Some(money::format_minor(expected)),
+            actual_balance: Some(money::format_minor(curr.balance)),
+        });
+    }
+
+    Ok(issues)
 }
 
 fn check_chain(txns: &[ChainRow]) -> Vec<ValidationError> {
@@ -390,7 +888,8 @@ fn check_chain(txns: &[ChainRow]) -> Vec<ValidationError> {
                 expected_balance: money::format_minor(expected),
                 actual_balance: money::format_minor(curr.balance),
                 occurred_at_utc: curr.occurred_at_utc.clone(),
-                description: curr.description.clone(),
+                bank_description: curr.bank_description.clone(),
+                comment: curr.comment.clone(),
             });
         }
     }
@@ -411,7 +910,8 @@ mod tests {
             credit,
             debit,
             balance,
-            description: format!("txn {id}"),
+            bank_description: Some(format!("txn {id}")),
+            comment: None,
         }
     }
 
@@ -482,10 +982,10 @@ mod tests {
                 .unwrap();
             conn.execute(
                 "INSERT INTO transactions
-                 (account_id, import_batch_id, occurred_at_utc, credit, debit, balance, description)
+                 (account_id, import_batch_id, occurred_at_utc, credit, debit, balance)
                  VALUES
-                 (?1, ?2, '2026-01-01T10:00:00Z', 1000, 0, 1000, ''),
-                 (?1, ?2, '2026-01-02T10:00:00Z', 500,  0, 1500, '')",
+                 (?1, ?2, '2026-01-01T10:00:00Z', 1000, 0, 1000),
+                 (?1, ?2, '2026-01-02T10:00:00Z', 500,  0, 1500)",
                 params![acc, batch],
             )
             .unwrap();
@@ -551,5 +1051,405 @@ mod tests {
         let (_dir, conn, _a1, _a2) = fixture_two_accounts();
         let result = list_with_filter(&conn, &[9999]);
         assert!(result.is_empty());
+    }
+
+    fn parsed(
+        occurred: &str,
+        peer: &str,
+        credit: i64,
+        debit: i64,
+        balance: i64,
+        bank_description: &str,
+    ) -> ParsedRow {
+        let opt_str = |s: &str| {
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        };
+        ParsedRow {
+            occurred_at_utc: occurred.to_string(),
+            occurred_at_tz: "+00:00".to_string(),
+            credit,
+            debit,
+            balance,
+            peer: opt_str(peer),
+            bank_description: opt_str(bank_description),
+            comment: None,
+            is_correcting: false,
+        }
+    }
+
+    fn fixture_account_with_batch() -> (TempDir, rusqlite::Connection, i64, i64) {
+        let dir = TempDir::new().unwrap();
+        let conn = db::open(dir.path()).unwrap();
+        let a: i64 = conn
+            .query_row(
+                "INSERT INTO accounts (bank, currency, account_number, owner_name)
+                 VALUES ('B', 'USD', '1', 'A') RETURNING id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let batch: i64 = conn
+            .query_row(
+                "INSERT INTO import_batches
+                 (account_id, imported_at, source_filename, row_count, timezone_offset)
+                 VALUES (?1, '2026-01-01T00:00:00Z', NULL, 0, '+00:00') RETURNING id",
+                params![a],
+                |r| r.get(0),
+            )
+            .unwrap();
+        (dir, conn, a, batch)
+    }
+
+    fn insert_db_txn(
+        conn: &rusqlite::Connection,
+        account_id: i64,
+        batch_id: i64,
+        occurred: &str,
+        peer: &str,
+        credit: i64,
+        debit: i64,
+        balance: i64,
+        bank_description: &str,
+    ) {
+        let peer_opt: Option<&str> = if peer.is_empty() { None } else { Some(peer) };
+        let bank_opt: Option<&str> = if bank_description.is_empty() {
+            None
+        } else {
+            Some(bank_description)
+        };
+        conn.execute(
+            "INSERT INTO transactions
+             (account_id, import_batch_id, occurred_at_utc, credit, debit, balance,
+              peer, bank_description, comment)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL)",
+            params![
+                account_id,
+                batch_id,
+                occurred,
+                credit,
+                debit,
+                balance,
+                peer_opt,
+                bank_opt
+            ],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn preview_empty_returns_no_issues() {
+        let (_dir, conn, a, _b) = fixture_account_with_batch();
+        let issues = compute_preview_issues(&conn, a, &[]).unwrap();
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn preview_internal_consistent_no_db_no_issues() {
+        let (_dir, conn, a, _b) = fixture_account_with_batch();
+        let rows = vec![
+            parsed("2026-04-01T10:00:00Z", "p1", 0, 0, 1000, ""),
+            parsed("2026-04-02T10:00:00Z", "p2", 500, 0, 1500, ""),
+            parsed("2026-04-03T10:00:00Z", "p3", 0, 200, 1300, ""),
+        ];
+        let issues = compute_preview_issues(&conn, a, &rows).unwrap();
+        assert!(issues.is_empty(), "{:?}", issues);
+    }
+
+    #[test]
+    fn preview_internal_break_attributed_to_broken_row() {
+        let (_dir, conn, a, _b) = fixture_account_with_batch();
+        let rows = vec![
+            parsed("2026-04-01T10:00:00Z", "p1", 0, 0, 1000, ""),
+            parsed("2026-04-02T10:00:00Z", "p2", 500, 0, 1700, ""), // expected 1500
+            parsed("2026-04-03T10:00:00Z", "p3", 0, 200, 1500, ""), // ok vs prev
+        ];
+        let issues = compute_preview_issues(&conn, a, &rows).unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].row_index, 1);
+        assert_eq!(issues[0].kind, "balance_file");
+        assert_eq!(issues[0].expected_balance.as_deref(), Some("15.00"));
+        assert_eq!(issues[0].actual_balance.as_deref(), Some("17.00"));
+    }
+
+    #[test]
+    fn preview_db_head_boundary_break_marks_first_import() {
+        let (_dir, conn, a, b) = fixture_account_with_batch();
+        insert_db_txn(&conn, a, b, "2026-03-31T10:00:00Z", "salary", 0, 0, 1000, "");
+        let rows = vec![
+            parsed("2026-04-01T10:00:00Z", "p1", 200, 0, 1300, ""), // expected 1200
+            parsed("2026-04-02T10:00:00Z", "p2", 0, 100, 1200, ""), // ok vs prev
+        ];
+        let issues = compute_preview_issues(&conn, a, &rows).unwrap();
+        let balance: Vec<_> = issues
+            .iter()
+            .filter(|i| i.kind == "balance_db")
+            .collect();
+        assert_eq!(balance.len(), 1);
+        assert_eq!(balance[0].row_index, 0);
+        assert_eq!(balance[0].expected_balance.as_deref(), Some("12.00"));
+        assert_eq!(balance[0].actual_balance.as_deref(), Some("13.00"));
+    }
+
+    #[test]
+    fn preview_db_tail_boundary_break_marks_last_import() {
+        let (_dir, conn, a, b) = fixture_account_with_batch();
+        insert_db_txn(&conn, a, b, "2026-04-10T10:00:00Z", "later", 0, 50, 950, "");
+        let rows = vec![
+            parsed("2026-04-01T10:00:00Z", "p1", 0, 0, 1000, ""),
+            parsed("2026-04-02T10:00:00Z", "p2", 0, 100, 900, ""),
+        ];
+        let issues = compute_preview_issues(&conn, a, &rows).unwrap();
+        // curr=DB tail, prev=last import → involves DB → balance_db
+        let balance: Vec<_> = issues
+            .iter()
+            .filter(|i| i.kind == "balance_db")
+            .collect();
+        assert_eq!(balance.len(), 1);
+        assert_eq!(balance[0].row_index, 1);
+        assert_eq!(balance[0].expected_balance.as_deref(), Some("8.50"));
+        assert_eq!(balance[0].actual_balance.as_deref(), Some("9.50"));
+    }
+
+    #[test]
+    fn preview_duplicate_with_db_marks_import_row() {
+        let (_dir, conn, a, b) = fixture_account_with_batch();
+        insert_db_txn(
+            &conn,
+            a,
+            b,
+            "2026-04-01T10:00:00.000Z",
+            "shop",
+            0,
+            300,
+            700,
+            "groceries",
+        );
+        let rows = vec![
+            parsed("2026-04-01T10:00:00.000Z", "shop", 0, 300, 700, "groceries"),
+            parsed("2026-04-02T10:00:00.000Z", "p2", 100, 0, 800, ""),
+        ];
+        let issues = compute_preview_issues(&conn, a, &rows).unwrap();
+        let dupe: Vec<_> = issues
+            .iter()
+            .filter(|i| i.kind == "duplicate_db")
+            .collect();
+        assert_eq!(dupe.len(), 1);
+        assert_eq!(dupe[0].row_index, 0);
+    }
+
+    #[test]
+    fn preview_duplicate_within_imports_marks_later_occurrences() {
+        let (_dir, conn, a, _b) = fixture_account_with_batch();
+        let rows = vec![
+            parsed("2026-04-01T10:00:00Z", "p1", 0, 0, 1000, "a"),
+            parsed("2026-04-01T10:00:00Z", "p1", 0, 0, 1000, "a"),
+            parsed("2026-04-01T10:00:00Z", "p1", 0, 0, 1000, "a"),
+        ];
+        let issues = compute_preview_issues(&conn, a, &rows).unwrap();
+        let dupe: Vec<_> = issues
+            .iter()
+            .filter(|i| i.kind == "duplicate_file")
+            .collect();
+        assert_eq!(dupe.len(), 2, "first occurrence kept, others flagged");
+        assert_eq!(dupe[0].row_index, 1);
+        assert_eq!(dupe[1].row_index, 2);
+    }
+
+    #[test]
+    fn preview_duplicate_swallows_balance_check() {
+        // Row 0 is a duplicate of an existing DB record. Row 1 has a balance
+        // gap, but that gap stems from row 0 being broken. Since row 0 is a
+        // duplicate it must NOT also be flagged with a balance issue.
+        let (_dir, conn, a, b) = fixture_account_with_batch();
+        insert_db_txn(
+            &conn,
+            a,
+            b,
+            "2026-03-31T10:00:00Z",
+            "shop",
+            0,
+            300,
+            700,
+            "groceries",
+        );
+        let rows = vec![
+            // Same key as the DB row above — duplicate_db
+            parsed("2026-03-31T10:00:00Z", "shop", 0, 300, 700, "groceries"),
+            // Internally consistent with row 0
+            parsed("2026-04-01T10:00:00Z", "p2", 0, 100, 600, ""),
+        ];
+        let issues = compute_preview_issues(&conn, a, &rows).unwrap();
+        let dup: Vec<_> = issues.iter().filter(|i| i.row_index == 0).collect();
+        assert_eq!(dup.len(), 1);
+        assert_eq!(dup[0].kind, "duplicate_db");
+        // Row 0 must not have a balance issue even if the chain check would
+        // otherwise emit one.
+        assert!(!issues
+            .iter()
+            .any(|i| i.row_index == 0 && i.kind.starts_with("balance")));
+    }
+
+    #[test]
+    fn preview_full_dupe_key_distinguishes_by_description() {
+        let (_dir, conn, a, _b) = fixture_account_with_batch();
+        let rows = vec![
+            parsed("2026-04-01T10:00:00Z", "p1", 0, 0, 1000, "alpha"),
+            parsed("2026-04-01T10:00:00Z", "p1", 0, 0, 1000, "beta"),
+        ];
+        let issues = compute_preview_issues(&conn, a, &rows).unwrap();
+        let dupe: Vec<_> = issues
+            .iter()
+            .filter(|i| i.kind.starts_with("duplicate"))
+            .collect();
+        assert!(dupe.is_empty(), "different description => not a duplicate");
+    }
+
+    #[test]
+    fn synthesize_no_corrections_when_chain_is_clean() {
+        let (_dir, conn, a, _b) = fixture_account_with_batch();
+        let rows = vec![
+            parsed("2026-04-01T10:00:00Z", "p1", 0, 0, 1000, ""),
+            parsed("2026-04-02T10:00:00Z", "p2", 500, 0, 1500, ""),
+        ];
+        let corr = synthesize_corrections(&conn, a, &rows, "+00:00").unwrap();
+        assert!(corr.is_empty());
+    }
+
+    #[test]
+    fn synthesize_corrects_within_file_break() {
+        // Pure within-file gap: DB has nothing, but row 1 has +200 unexpected
+        // jump. Now auto-corrected so the on-disk chain stays consistent.
+        let (_dir, conn, a, _b) = fixture_account_with_batch();
+        let rows = vec![
+            parsed("2026-04-01T10:00:00Z", "p1", 0, 0, 1000, ""),
+            parsed("2026-04-02T10:00:00Z", "p2", 500, 0, 1700, ""), // expected 1500
+            parsed("2026-04-03T10:00:00Z", "p3", 0, 200, 1500, ""),
+        ];
+        let corr = synthesize_corrections(&conn, a, &rows, "+00:00").unwrap();
+        assert_eq!(corr.len(), 1);
+        let c = &corr[0];
+        assert!(c.is_correcting);
+        // target = curr.balance - curr.credit = 1700 - 500 = 1200
+        // delta = 1200 - 1000 = 200 → credit 200
+        assert_eq!(c.balance, 1200);
+        assert_eq!(c.credit, 200);
+        assert_eq!(c.debit, 0);
+        assert_eq!(c.occurred_at_utc, "2026-04-02T09:59:59.999Z");
+    }
+
+    #[test]
+    fn synthesize_skips_pre_existing_db_break() {
+        // DB already has a broken chain. Import sits clearly after it and
+        // is internally consistent. The pre-existing DB break must not be
+        // touched — only breaks that touch the new batch are corrected.
+        let (_dir, conn, a, b) = fixture_account_with_batch();
+        // DB[0]: balance 1000
+        insert_db_txn(&conn, a, b, "2026-03-01T10:00:00Z", "x", 0, 0, 1000, "");
+        // DB[1]: claims balance 1500 with credit 100 → broken (expected 1100)
+        insert_db_txn(&conn, a, b, "2026-03-02T10:00:00Z", "y", 100, 0, 1500, "");
+        // Import continues from DB[1] consistently.
+        let rows = vec![parsed("2026-04-01T10:00:00Z", "p1", 0, 200, 1300, "")];
+        let corr = synthesize_corrections(&conn, a, &rows, "+00:00").unwrap();
+        assert!(corr.is_empty(), "pre-existing DB break must not be corrected: {:?}", corr);
+    }
+
+    #[test]
+    fn synthesize_corrects_db_head_boundary() {
+        // DB at T0 ends at balance 1000. First import row introduces a +10 gap.
+        let (_dir, conn, a, b) = fixture_account_with_batch();
+        insert_db_txn(&conn, a, b, "2026-03-31T10:00:00Z", "salary", 0, 0, 1000, "");
+        let rows = vec![
+            parsed("2026-04-01T10:00:00Z", "p1", 200, 0, 1300, ""), // expected 1200
+            parsed("2026-04-02T10:00:00Z", "p2", 0, 100, 1200, ""),
+        ];
+        let corr = synthesize_corrections(&conn, a, &rows, "+00:00").unwrap();
+        assert_eq!(corr.len(), 1);
+        let c = &corr[0];
+        assert!(c.is_correcting);
+        // Target balance for the correcting txn = curr.balance - curr.credit
+        //                                       = 1300 - 200 = 1100
+        assert_eq!(c.balance, 1100);
+        // delta = 1100 - 1000 = 100 → credit
+        assert_eq!(c.credit, 100);
+        assert_eq!(c.debit, 0);
+        // Inserted 1ms before curr (2026-04-01T10:00:00Z)
+        assert_eq!(c.occurred_at_utc, "2026-04-01T09:59:59.999Z");
+        assert!(c.peer.is_none());
+        assert!(c.bank_description.is_none());
+        assert!(c.comment.is_none());
+    }
+
+    #[test]
+    fn synthesize_corrects_db_tail_boundary_with_negative_delta() {
+        // DB tail comes after the import. Last import balance breaks chain to tail.
+        let (_dir, conn, a, b) = fixture_account_with_batch();
+        // Tail: balance 950 with debit 50 → expected_prev=1000
+        insert_db_txn(&conn, a, b, "2026-04-10T10:00:00Z", "later", 0, 50, 950, "");
+        let rows = vec![
+            parsed("2026-04-01T10:00:00Z", "p1", 0, 0, 1000, ""),
+            // Internally consistent end balance 900 — but DB tail expects 1000.
+            parsed("2026-04-02T10:00:00Z", "p2", 0, 100, 900, ""),
+        ];
+        let corr = synthesize_corrections(&conn, a, &rows, "+00:00").unwrap();
+        assert_eq!(corr.len(), 1);
+        let c = &corr[0];
+        // target_balance = tail.balance - tail.credit + tail.debit = 950 - 0 + 50 = 1000
+        // delta = 1000 - 900 = 100 → credit 100
+        assert_eq!(c.balance, 1000);
+        assert_eq!(c.credit, 100);
+        assert_eq!(c.debit, 0);
+        // 1ms before tail (2026-04-10T10:00:00Z)
+        assert_eq!(c.occurred_at_utc, "2026-04-10T09:59:59.999Z");
+    }
+
+    #[test]
+    fn import_inserts_correcting_row_and_chain_becomes_consistent() {
+        let (_dir, conn, a, b) = fixture_account_with_batch();
+        insert_db_txn(&conn, a, b, "2026-03-31T10:00:00Z", "salary", 0, 0, 1000, "");
+        let rows = vec![
+            parsed("2026-04-01T10:00:00Z", "p1", 200, 0, 1300, ""), // gap +100 vs DB
+            parsed("2026-04-02T10:00:00Z", "p2", 0, 100, 1200, ""),
+        ];
+        let corr = synthesize_corrections(&conn, a, &rows, "+00:00").unwrap();
+        assert_eq!(corr.len(), 1);
+
+        // Materialise: insert all rows + corrections into a fresh batch and
+        // confirm validate_account_chain returns no errors.
+        let batch: i64 = conn
+            .query_row(
+                "INSERT INTO import_batches
+                 (account_id, imported_at, source_filename, row_count, timezone_offset)
+                 VALUES (?1, '2026-04-15T00:00:00Z', NULL, 3, '+00:00') RETURNING id",
+                params![a],
+                |r| r.get(0),
+            )
+            .unwrap();
+        for p in rows.iter().chain(corr.iter()) {
+            conn.execute(
+                "INSERT INTO transactions
+                 (account_id, import_batch_id, occurred_at_utc, credit, debit, balance,
+                  peer, bank_description, comment, is_correcting)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    a,
+                    batch,
+                    p.occurred_at_utc,
+                    p.credit,
+                    p.debit,
+                    p.balance,
+                    p.peer,
+                    p.bank_description,
+                    p.comment,
+                    p.is_correcting,
+                ],
+            )
+            .unwrap();
+        }
+        let errs = validate_account_chain(&conn, a).unwrap();
+        assert!(errs.is_empty(), "chain should be consistent after correction: {:?}", errs);
     }
 }

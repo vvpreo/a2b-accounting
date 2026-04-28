@@ -13,7 +13,7 @@ export interface AccountPreset {
 export const IMPORT_FORMATS: Record<string, ImportFormat> = {
   "generic-csv-v1": {
     id: "generic-csv-v1",
-    name: "Generic CSV (occurred_at,peer,credit,debit,balance,description)",
+    name: "Generic CSV (occurred_at,credit,debit,balance,peer,bank_description,comment)",
   },
   "bangkok-bank-csv-v1": {
     id: "bangkok-bank-csv-v1",

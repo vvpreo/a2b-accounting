@@ -15,11 +15,13 @@ export interface Transaction {
   accountId: number;
   importBatchId: number;
   occurredAtUtc: string;
-  peer: string;
   credit: string;
   debit: string;
   balance: string;
-  description: string;
+  peer: string | null;
+  bankDescription: string | null;
+  comment: string | null;
+  isCorrecting: boolean;
 }
 
 export interface ImportBatch {
@@ -36,22 +38,42 @@ export interface ValidationError {
   expectedBalance: string;
   actualBalance: string;
   occurredAtUtc: string;
-  description: string;
+  bankDescription: string | null;
+  comment: string | null;
 }
 
 export interface ImportResult {
   batchId: number;
   inserted: number;
+  correctionsInserted: number;
   validationErrors: ValidationError[];
+}
+
+export type PreviewRowIssueKind =
+  | "balance_db"
+  | "balance_file"
+  | "duplicate_db"
+  | "duplicate_file";
+
+export interface PreviewRowIssue {
+  rowIndex: number;
+  kind: PreviewRowIssueKind;
+  expectedBalance: string | null;
+  actualBalance: string | null;
+}
+
+export interface ImportPreviewValidation {
+  rowIssues: PreviewRowIssue[];
 }
 
 export interface TxnImportRow {
   occurredAt: string;
-  peer: string;
   credit: string;
   debit: string;
   balance: string;
-  description: string;
+  peer: string | null;
+  bankDescription: string | null;
+  comment: string | null;
 }
 
 export function dataDir(): Promise<string> {
@@ -116,6 +138,21 @@ export function validateBalanceChain(
   accountId: number,
 ): Promise<ValidationError[]> {
   return invoke<ValidationError[]>("validate_balance_chain", { accountId });
+}
+
+export function updateTransactionComment(
+  id: number,
+  comment: string | null,
+): Promise<void> {
+  return invoke<void>("update_transaction_comment", { id, comment });
+}
+
+export function validateImportPreview(args: {
+  accountId: number;
+  defaultTimezoneOffset: string;
+  rows: TxnImportRow[];
+}): Promise<ImportPreviewValidation> {
+  return invoke<ImportPreviewValidation>("validate_import_preview", args);
 }
 
 export function getSetting(key: string): Promise<string | null> {

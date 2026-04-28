@@ -27,6 +27,16 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "005_add_app_settings",
         include_str!("../migrations/005_add_app_settings.sql"),
     ),
+    (
+        6,
+        "006_replace_description_columns",
+        include_str!("../migrations/006_replace_description_columns.sql"),
+    ),
+    (
+        7,
+        "007_add_transaction_is_correcting",
+        include_str!("../migrations/007_add_transaction_is_correcting.sql"),
+    ),
 ];
 
 pub fn open(data_dir: &Path) -> rusqlite::Result<Connection> {
@@ -133,7 +143,7 @@ mod tests {
 
         conn.execute(
             "INSERT INTO transactions
-             (account_id, import_batch_id, occurred_at_utc, credit, debit, balance, description)
+             (account_id, import_batch_id, occurred_at_utc, credit, debit, balance, bank_description)
              VALUES
              (?1, ?2, '2026-04-01T10:00:00Z', 0,    500, 9500, 'coffee'),
              (?1, ?2, '2026-04-01T18:00:00Z', 1000, 0,   10500, 'salary')",
@@ -196,7 +206,7 @@ mod tests {
 
         let res = conn.execute(
             "INSERT INTO transactions
-             (account_id, import_batch_id, occurred_at_utc, credit, debit, balance, description)
+             (account_id, import_batch_id, occurred_at_utc, credit, debit, balance, bank_description)
              VALUES (?1, ?2, '2026-04-01T10:00:00Z', 100, 100, 0, 'bad')",
             params![account_id, batch_id],
         );

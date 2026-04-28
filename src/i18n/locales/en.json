@@ -72,15 +72,45 @@
   },
   "transactions": {
     "title": "Transactions",
-    "filterAll": "All",
     "tableAccount": "Account",
     "tableDate": "Date (UTC)",
-    "tablePeer": "Counterparty",
     "tableCredit": "Credit",
     "tableDebit": "Debit",
     "tableBalance": "Balance",
-    "tableDescription": "Description",
-    "empty": "No transactions for the selected accounts."
+    "tablePeer": "Counterparty",
+    "tableBankDescription": "Bank description",
+    "tableComment": "Comment",
+    "empty": "No transactions match the selected filters.",
+    "correctingLabel": "Correcting entry",
+    "commentPlaceholder": "—",
+    "filterAccounts": "Accounts",
+    "filterAccountsAll": "All accounts",
+    "filterAccountsNone": "None selected",
+    "filterAccountsEmpty": "No accounts",
+    "filterAccountsMany": "Selected: {count}",
+    "filterDateFrom": "From",
+    "filterDateTo": "To",
+    "filterKind": "Type",
+    "filterKindAll": "All",
+    "filterKindNone": "None selected",
+    "filterKindMany": "Selected: {count}",
+    "filterColumns": "Columns",
+    "filterColumnsAll": "All",
+    "filterColumnsNone": "Core only",
+    "filterColumnsMany": "Selected: {count}",
+    "applyButton": "Apply",
+    "kind": {
+      "correcting": "Correcting",
+      "incoming": "Incoming",
+      "outgoing": "Outgoing",
+      "with_bank_description": "With bank description",
+      "with_comment": "With comments"
+    },
+    "column": {
+      "peer": "Counterparty",
+      "bank_description": "Bank description",
+      "comment": "Comment"
+    }
   },
   "import": {
     "title": "Import transactions",
@@ -88,11 +118,11 @@
     "noAccounts": "Create an account first",
     "defaultOffset": "Default UTC offset",
     "pastePlaceholder": "Paste CSV content here — same columns as the file",
-    "pasteExample": "occurred_at,peer,credit,debit,balance,description\n2026-04-01T10:15:00,Coffee shop,,150.00,12340.50,Morning coffee\n",
+    "pasteExample": "occurred_at,credit,debit,balance,peer,bank_description,comment\n2026-04-01T10:15:00,,150.00,12340.50,Coffee shop,Morning coffee,\n",
     "buttonChooseFile": "Choose CSV file",
     "buttonChosen": "Chosen: {filename}",
     "orPasteHere": "OR paste the file contents here:",
-    "hintColumns": "Expected columns: occurred_at, peer, credit, debit, balance, description. Date in ISO-8601 with offset (e.g. 2026-04-01T10:15:00+03:00) or without offset — the default will apply.",
+    "hintColumns": "Expected columns: occurred_at, credit, debit, balance, peer, bank_description, comment. Required: occurred_at and balance; the rest may be empty. Supported delimiters: comma, tab, semicolon. Date in ISO-8601 with offset (e.g. 2026-04-01T10:15:00+03:00) or without offset — the default will apply.",
     "parseErrorsTitle": "CSV parsing problems:",
     "titlePreviewSuffix": {
       "one": "(preview of {count} row)",
@@ -100,16 +130,42 @@
     },
     "previewMore": "...showing first 20 of {total}",
     "previewDate": "Date",
-    "previewPeer": "Counterparty",
     "previewCredit": "Credit",
     "previewDebit": "Debit",
     "previewBalance": "Balance",
-    "previewDescription": "Description",
+    "previewPeer": "Counterparty",
+    "previewBankDescription": "Bank description",
+    "previewComment": "Comment",
+    "previewIssues": "Issues",
+    "previewFilterEmpty": "No rows match the selected issue.",
+    "filterAll": "All",
+    "filter": {
+      "duplicate_db": "Duplicate vs DB",
+      "duplicate_file": "Duplicate in file",
+      "balance_db": "Mismatch vs DB",
+      "balance_file": "Mismatch in file"
+    },
+    "issue": {
+      "duplicate_db": "Duplicate of an existing DB row",
+      "duplicate_file": "Duplicate of an earlier row in this file",
+      "balance_db": "Mismatch with DB ({expected} → {actual}). A correcting entry will be added.",
+      "balance_file": "Gap in file ({expected} → {actual}). A correcting entry will be added."
+    },
+    "skipNotice": {
+      "one": "{count} duplicate will be skipped on import",
+      "other": "{count} duplicates will be skipped on import"
+    },
     "submit": "Import",
+    "submitWithCount": {
+      "one": "Import {count} row",
+      "other": "Import {count} rows"
+    },
     "submitting": "Importing...",
+    "validating": "Checking...",
     "next": "Next",
     "back": "Back",
     "resultDone": "Imported {inserted} rows. Batch #{batchId}.",
+    "resultCorrections": "Additionally inserted {count} correcting entries to close balance gaps.",
     "resultBreaksTitle": "Balance chain breaks ({count}):",
     "resultBreakLine": "{date} — “{description}”: expected {expected}, got {actual}",
     "resultOk": "Balance chain is consistent.",
@@ -126,6 +182,7 @@
   "errors": {
     "missingOccurredAt": "Row {row}: missing occurred_at",
     "missingBalance": "Row {row}: missing balance",
-    "csvParse": "CSV parse error at row {row}: {message}"
+    "csvParse": "CSV parse error at row {row}: {message}",
+    "unknownDelimiter": "Could not determine column delimiter in the header. Supported: comma, tab, semicolon."
   }
 }
