@@ -1,7 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import {
+  CSSProperties,
+  ReactElement,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
-import { useT } from "../i18n";
+import { useI18n, useT } from "../i18n";
 import {
   Account,
   Transaction,
@@ -26,8 +34,14 @@ const ROW_KINDS: RowKind[] = [
   "with_comment",
 ];
 
-type ColumnKey = "peer" | "bank_description" | "comment";
-const COLUMN_KEYS: ColumnKey[] = ["peer", "bank_description", "comment"];
+type ColumnKey = "category" | "comment" | "peer" | "bank_description";
+const COLUMN_KEYS: ColumnKey[] = [
+  "category",
+  "comment",
+  "peer",
+  "bank_description",
+];
+const DEFAULT_VISIBLE_COLUMNS: ColumnKey[] = ["category", "comment"];
 
 function rowMatchesKind(row: { isCorrecting: boolean; credit: string; debit: string; bankDescription: string | null; comment: string | null }, kind: RowKind): boolean {
   switch (kind) {
@@ -52,12 +66,15 @@ interface Props {
 
 function defaultDateFrom(): string {
   const d = new Date();
-  d.setMonth(d.getMonth() - 3);
+  d.setDate(1);
+  d.setMonth(d.getMonth() - 2);
   return toDateInputValue(d);
 }
 
 function defaultDateTo(): string {
-  return toDateInputValue(new Date());
+  const d = new Date();
+  d.setMonth(d.getMonth() + 1, 0);
+  return toDateInputValue(d);
 }
 
 function toDateInputValue(d: Date): string {
@@ -73,6 +90,7 @@ export function TransactionsPage({
   version,
 }: Props) {
   const t = useT();
+  const { locale } = useI18n();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [txns, setTxns] = useState<Transaction[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -80,7 +98,7 @@ export function TransactionsPage({
     ...ROW_KINDS,
   ]);
   const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(() => [
-    ...COLUMN_KEYS,
+    ...DEFAULT_VISIBLE_COLUMNS,
   ]);
   const [dateFrom, setDateFrom] = useState<string>(defaultDateFrom);
   const [dateTo, setDateTo] = useState<string>(defaultDateTo);
@@ -115,10 +133,25 @@ export function TransactionsPage({
     setAccountsInitialised(true);
   }, [accounts, accountsInitialised, selectedAccountIds, onChangeSelectedAccountIds]);
 
+  const scrollWrapRef = useRef<HTMLDivElement>(null);
+  const theadRef = useRef<HTMLTableSectionElement>(null);
+  const [theadHeight, setTheadHeight] = useState(0);
+
+  useLayoutEffect(() => {
+    const el = theadRef.current;
+    if (!el) return;
+    const update = () => setTheadHeight(el.offsetHeight);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const accountById = new Map(accounts.map((a) => [a.id, a]));
+  const showCategory = visibleColumns.includes("category");
+  const showComment = visibleColumns.includes("comment");
   const showPeer = visibleColumns.includes("peer");
   const showBankDescription = visibleColumns.includes("bank_description");
-  const showComment = visibleColumns.includes("comment");
   const visibleColCount = 5 + visibleColumns.length; // account/date/credit/debit/balance + optional
 
   const visibleTxns = useMemo(() => {
@@ -134,6 +167,11 @@ export function TransactionsPage({
       return selectedKinds.some((k) => rowMatchesKind(x, k));
     });
   }, [txns, selectedAccountIds, selectedKinds, dateFrom, dateTo]);
+
+  useLayoutEffect(() => {
+    const el = scrollWrapRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [visibleTxns, visibleColumns]);
 
   async function persistComment(id: number, raw: string) {
     const trimmed = raw.trim();
@@ -250,20 +288,31 @@ export function TransactionsPage({
 
       {error && <div className="error">{error}</div>}
 
-      <div className="txns-wrap">
+      <div
+        className="txns-wrap"
+        ref={scrollWrapRef}
+        style={
+          theadHeight
+            ? ({ "--thead-h": `${theadHeight}px` } as CSSProperties)
+            : undefined
+        }
+      >
         <table>
-          <thead>
+          <thead ref={theadRef}>
             <tr>
-              <th>{t("transactions.tableAccount")}</th>
-              <th className="col-date">{t("transactions.tableDate")}</th>
-              <th className="num">{t("transactions.tableCredit")}</th>
-              <th className="num">{t("transactions.tableDebit")}</th>
-              <th className="num">{t("transactions.tableBalance")}</th>
+              <th className="col-fixed">{t("transactions.tableAccount")}</th>
+              <th className="col-fixed">{t("transactions.tableDate")}</th>
+              <th className="col-fixed num">{t("transactions.tableCredit")}</th>
+              <th className="col-fixed num">{t("transactions.tableDebit")}</th>
+              <th className="col-fixed num col-divider">
+                {t("transactions.tableBalance")}
+              </th>
+              {showCategory && <th>{t("transactions.tableCategory")}</th>}
+              {showComment && <th>{t("transactions.tableComment")}</th>}
               {showPeer && <th>{t("transactions.tablePeer")}</th>}
               {showBankDescription && (
                 <th>{t("transactions.tableBankDescription")}</th>
               )}
-              {showComment && <th>{t("transactions.tableComment")}</th>}
             </tr>
           </thead>
           <tbody>
@@ -274,16 +323,34 @@ export function TransactionsPage({
                 </td>
               </tr>
             ) : (
-              visibleTxns.map((x) => {
+              visibleTxns.flatMap((x, i) => {
                 const acc = accountById.get(x.accountId);
                 const accLabel = acc
                   ? `${acc.name || acc.accountNumber} · ${acc.currency}`
                   : `#${x.accountId}`;
-                return (
+                const prev = i > 0 ? visibleTxns[i - 1] : null;
+                const isMonthStart =
+                  !prev || !sameUtcMonth(prev.occurredAtUtc, x.occurredAtUtc);
+                const nodes: ReactElement[] = [];
+                if (isMonthStart) {
+                  nodes.push(
+                    <tr key={`sep:${x.id}`} className="month-separator">
+                      <td colSpan={visibleColCount}>
+                        {formatMonthLabel(x.occurredAtUtc, locale)}
+                      </td>
+                    </tr>,
+                  );
+                }
+                nodes.push(
                   <tr key={x.id} className={x.isCorrecting ? "is-correcting" : ""}>
-                    <td>{accLabel}</td>
-                    <td className="col-date">{formatInstant(x.occurredAtUtc)}</td>
-                    <td className="num">
+                    <td className="col-fixed">{accLabel}</td>
+                    <td className="col-fixed">
+                      {formatInstant(x.occurredAtUtc)}{" "}
+                      <span className="dow">
+                        ({formatDayOfWeekShort(x.occurredAtUtc, locale)})
+                      </span>
+                    </td>
+                    <td className="col-fixed num">
                       {x.credit !== "0.00" ? (
                         <span className="amount-credit">
                           {formatMoney(x.credit)}
@@ -292,7 +359,7 @@ export function TransactionsPage({
                         ""
                       )}
                     </td>
-                    <td className="num">
+                    <td className="col-fixed num">
                       {x.debit !== "0.00" ? (
                         <span className="amount-debit">
                           {formatMoney(x.debit)}
@@ -301,17 +368,10 @@ export function TransactionsPage({
                         ""
                       )}
                     </td>
-                    <td className="num">{formatMoney(x.balance)}</td>
-                    {showPeer && (
-                      <td>
-                        {x.isCorrecting
-                          ? t("transactions.correctingLabel")
-                          : x.peer ?? ""}
-                      </td>
-                    )}
-                    {showBankDescription && (
-                      <td>{x.bankDescription ?? ""}</td>
-                    )}
+                    <td className="col-fixed num col-divider">
+                      {formatMoney(x.balance)}
+                    </td>
+                    {showCategory && <td className="cell-placeholder">—</td>}
                     {showComment && (
                       <td>
                         <input
@@ -339,8 +399,19 @@ export function TransactionsPage({
                         />
                       </td>
                     )}
-                  </tr>
+                    {showPeer && (
+                      <td>
+                        {x.isCorrecting
+                          ? t("transactions.correctingLabel")
+                          : x.peer ?? ""}
+                      </td>
+                    )}
+                    {showBankDescription && (
+                      <td>{x.bankDescription ?? ""}</td>
+                    )}
+                  </tr>,
                 );
+                return nodes;
               })
             )}
           </tbody>
@@ -354,4 +425,34 @@ function formatInstant(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toISOString().slice(0, 19).replace("T", " ");
+}
+
+function formatDayOfWeekShort(iso: string, locale: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const dow = new Intl.DateTimeFormat(locale, {
+    weekday: "short",
+    timeZone: "UTC",
+  }).format(d);
+  return dow.slice(0, 2).toUpperCase();
+}
+
+function sameUtcMonth(aIso: string, bIso: string): boolean {
+  const a = new Date(aIso);
+  const b = new Date(bIso);
+  return (
+    a.getUTCFullYear() === b.getUTCFullYear() &&
+    a.getUTCMonth() === b.getUTCMonth()
+  );
+}
+
+function formatMonthLabel(iso: string, locale: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const month = new Intl.DateTimeFormat(locale, {
+    month: "long",
+    timeZone: "UTC",
+  }).format(d);
+  const cap = month.charAt(0).toUpperCase() + month.slice(1);
+  return `${cap} ${d.getUTCFullYear()}`;
 }

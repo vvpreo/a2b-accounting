@@ -81,6 +81,7 @@
     "tableCredit": "Поступление",
     "tableDebit": "Списание",
     "tableBalance": "Баланс",
+    "tableCategory": "Категория",
     "tablePeer": "Контрагент",
     "tableBankDescription": "Описание банка",
     "tableComment": "Комментарий",
@@ -94,7 +95,7 @@
     "filterAccountsMany": "Выбрано: {count}",
     "filterDateFrom": "С",
     "filterDateTo": "По",
-    "filterKind": "Тип",
+    "filterKind": "Фильтр",
     "filterKindAll": "Все",
     "filterKindNone": "Не выбрано",
     "filterKindMany": "Выбрано: {count}",
@@ -111,9 +112,10 @@
       "with_comment": "С комментариями"
     },
     "column": {
+      "category": "Категория",
+      "comment": "Комментарий",
       "peer": "Контрагент",
-      "bank_description": "Описание банка",
-      "comment": "Комментарий"
+      "bank_description": "Описание банка"
     }
   },
   "import": {

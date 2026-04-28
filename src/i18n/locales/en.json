@@ -77,6 +77,7 @@
     "tableCredit": "Credit",
     "tableDebit": "Debit",
     "tableBalance": "Balance",
+    "tableCategory": "Category",
     "tablePeer": "Counterparty",
     "tableBankDescription": "Bank description",
     "tableComment": "Comment",
@@ -90,7 +91,7 @@
     "filterAccountsMany": "Selected: {count}",
     "filterDateFrom": "From",
     "filterDateTo": "To",
-    "filterKind": "Type",
+    "filterKind": "Filter",
     "filterKindAll": "All",
     "filterKindNone": "None selected",
     "filterKindMany": "Selected: {count}",
@@ -107,9 +108,10 @@
       "with_comment": "With comments"
     },
     "column": {
+      "category": "Category",
+      "comment": "Comment",
       "peer": "Counterparty",
-      "bank_description": "Bank description",
-      "comment": "Comment"
+      "bank_description": "Bank description"
     }
   },
   "import": {

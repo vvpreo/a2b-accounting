@@ -53,6 +53,19 @@ body {
   overflow: auto;
 }
 
+.page--transactions table {
+  table-layout: fixed;
+  overflow: visible;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.page--transactions thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
 .app-header {
   margin-bottom: 24px;
 }
@@ -263,11 +276,60 @@ td.num {
   font-variant-numeric: tabular-nums;
 }
 
-th.col-date,
-td.col-date {
-  width: 1%;
-  white-space: nowrap;
+th.col-fixed,
+td.col-fixed {
+  width: 200px;
+  min-width: 200px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
+}
+
+th.col-divider,
+td.col-divider {
+  border-right: 2px solid #d4d4d8;
+}
+
+td.cell-placeholder {
+  color: #9ca3af;
+}
+
+tr.month-separator td {
+  background: #f4f4f5;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #52525b;
+  padding: 6px 10px;
+  border-top: 2px solid #d4d4d8;
+  position: sticky;
+  top: var(--thead-h, 29px);
+  z-index: 0;
+}
+
+.dow {
+  color: #9ca3af;
+  margin-left: 2px;
+}
+
+@media (prefers-color-scheme: dark) {
+  th.col-divider,
+  td.col-divider {
+    border-right-color: #3f3f46;
+  }
+  td.cell-placeholder {
+    color: #71717a;
+  }
+  tr.month-separator td {
+    background: #1f1f22;
+    color: #a1a1aa;
+    border-top-color: #3f3f46;
+  }
+  .dow {
+    color: #71717a;
+  }
 }
 
 .amount-credit {
