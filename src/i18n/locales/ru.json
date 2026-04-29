@@ -78,7 +78,7 @@
   "transactions": {
     "title": "Транзакции",
     "tableAccount": "Счёт",
-    "tableDate": "Дата (UTC)",
+    "tableDate": "Дата",
     "tableCredit": "Поступление",
     "tableDebit": "Списание",
     "tableBalance": "Баланс",
@@ -117,6 +117,24 @@
       "comment": "Комментарий",
       "peer": "Контрагент",
       "bank_description": "Описание банка"
+    },
+    "categories": {
+      "pickerSearchPlaceholder": "Найти категорию",
+      "pickerEmptyIncome": "Нет категорий для поступлений. Создайте их на вкладке «Категории».",
+      "pickerEmptyExpense": "Нет категорий для расходов. Создайте их на вкладке «Категории».",
+      "pickerNoMatches": "Ничего не найдено",
+      "cellEmpty": "Без категорий",
+      "cellMore": "+{count}",
+      "cellUncategorized": "Без категории",
+      "editButton": "Редактировать категории",
+      "modalTitle": "Распределение категорий",
+      "modalTotal": "Сумма",
+      "modalAddCategory": "+ Добавить категорию",
+      "modalRemove": "Удалить",
+      "modalMoveUp": "Выше",
+      "modalMoveDown": "Ниже",
+      "modalDistribution": "Распределение",
+      "modalUncategorized": "Без категории"
     }
   },
   "import": {

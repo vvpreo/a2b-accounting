@@ -3,6 +3,7 @@ mod categories;
 mod db;
 mod money;
 mod settings;
+mod transaction_categories;
 mod transactions;
 
 use std::path::PathBuf;
@@ -41,6 +42,7 @@ pub fn run() {
     DATA_DIR.set(dir).expect("data dir already initialized");
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage::<db::DbState>(Mutex::new(conn))
         .invoke_handler(tauri::generate_handler![
             data_dir,
@@ -52,6 +54,8 @@ pub fn run() {
             categories::list_categories,
             categories::update_category,
             categories::delete_category,
+            transaction_categories::set_transaction_categories,
+            transaction_categories::list_transactions_categories,
             transactions::import_transactions,
             transactions::list_transactions,
             transactions::list_import_batches,

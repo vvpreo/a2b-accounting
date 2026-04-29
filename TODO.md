@@ -1,5 +1,6 @@
 # TODO
 
+- [ ] [Привязка категорий к транзакциям с распределением долей](docs/plans/transaction-categorization.md)
 - [ ] [Tabs navigation, multi-select transactions filter, i18n (ru/en)](docs/plans/tabs-navigation-and-i18n.md)
 
 # PLANNED

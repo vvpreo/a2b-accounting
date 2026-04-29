@@ -145,6 +145,37 @@ export function deleteCategory(id: number): Promise<void> {
   return invoke<void>("delete_category", { id });
 }
 
+export interface TransactionCategoryView {
+  transactionId: number;
+  categoryId: number;
+  shareMinor: number;
+  position: number;
+  categoryName: string;
+  categoryColor: string;
+  categoryKind: CategoryKind;
+}
+
+export interface TransactionCategoryItem {
+  categoryId: number;
+  shareMinor: number;
+  position: number;
+}
+
+export function setTransactionCategories(args: {
+  transactionId: number;
+  items: TransactionCategoryItem[];
+}): Promise<void> {
+  return invoke<void>("set_transaction_categories", args);
+}
+
+export function listTransactionsCategories(
+  accountIds?: number[],
+): Promise<TransactionCategoryView[]> {
+  return invoke<TransactionCategoryView[]>("list_transactions_categories", {
+    accountIds: accountIds && accountIds.length > 0 ? accountIds : null,
+  });
+}
+
 export function importTransactions(args: {
   accountId: number;
   sourceFilename: string | null;

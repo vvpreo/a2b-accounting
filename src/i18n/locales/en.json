@@ -74,7 +74,7 @@
   "transactions": {
     "title": "Transactions",
     "tableAccount": "Account",
-    "tableDate": "Date (UTC)",
+    "tableDate": "Date",
     "tableCredit": "Credit",
     "tableDebit": "Debit",
     "tableBalance": "Balance",
@@ -113,6 +113,24 @@
       "comment": "Comment",
       "peer": "Counterparty",
       "bank_description": "Bank description"
+    },
+    "categories": {
+      "pickerSearchPlaceholder": "Find a category",
+      "pickerEmptyIncome": "No income categories yet. Create one on the Categories tab.",
+      "pickerEmptyExpense": "No expense categories yet. Create one on the Categories tab.",
+      "pickerNoMatches": "No matches",
+      "cellEmpty": "No categories",
+      "cellMore": "+{count}",
+      "cellUncategorized": "Uncategorized",
+      "editButton": "Edit categories",
+      "modalTitle": "Category split",
+      "modalTotal": "Total",
+      "modalAddCategory": "+ Add category",
+      "modalRemove": "Remove",
+      "modalMoveUp": "Move up",
+      "modalMoveDown": "Move down",
+      "modalDistribution": "Distribution",
+      "modalUncategorized": "Uncategorized"
     }
   },
   "import": {

@@ -10,6 +10,7 @@ import {
   listCategories,
   updateCategory,
 } from "../lib/api";
+import { buildTree, CategoryNode } from "../lib/category-tree";
 import {
   ROOT_PALETTE,
   deriveChildColor,
@@ -18,35 +19,6 @@ import {
 } from "../lib/colors";
 
 const MAX_VISIBLE_DEPTH = 3;
-
-interface CategoryNode {
-  category: Category;
-  depth: number;
-  children: CategoryNode[];
-}
-
-function buildTree(categories: Category[], kind: CategoryKind): CategoryNode[] {
-  const filtered = categories.filter((c) => c.kind === kind);
-  const byParent = new Map<number | null, Category[]>();
-  for (const c of filtered) {
-    const key = c.parentId ?? null;
-    if (!byParent.has(key)) byParent.set(key, []);
-    byParent.get(key)!.push(c);
-  }
-  for (const arr of byParent.values()) {
-    arr.sort((a, b) => a.name.localeCompare(b.name));
-  }
-
-  function build(parentId: number | null, depth: number): CategoryNode[] {
-    const items = byParent.get(parentId) ?? [];
-    return items.map((c) => ({
-      category: c,
-      depth,
-      children: build(c.id, depth + 1),
-    }));
-  }
-  return build(null, 0);
-}
 
 export function CategoriesPage() {
   const t = useT();
@@ -235,18 +207,22 @@ function CategoryNodeRow({
           {canAddChild && (
             <button
               type="button"
-              className="btn-ghost btn-sm"
+              className="categories-action-btn"
               onClick={() => onCreateChild(node.category)}
+              aria-label={t("categories.createChild")}
+              title={t("categories.createChild")}
             >
-              {t("categories.createChild")}
+              +
             </button>
           )}
           <button
             type="button"
-            className="btn-ghost btn-sm"
+            className="categories-action-btn"
             onClick={() => onEdit(node.category)}
+            aria-label={t("categories.edit")}
+            title={t("categories.edit")}
           >
-            {t("categories.edit")}
+            ✎
           </button>
         </span>
       </div>

@@ -9,7 +9,8 @@ interface Props {
 
 export function Tabs({ active, onChange }: Props) {
   const t = useT();
-  const main: Tab[] = ["categories", "accounts", "transactions"];
+  const main: Tab[] = ["accounts", "transactions"];
+  const aside: Tab[] = ["categories", "settings"];
 
   return (
     <nav className="tabs">
@@ -25,13 +26,18 @@ export function Tabs({ active, onChange }: Props) {
           </button>
         ))}
       </div>
-      <button
-        type="button"
-        className={`tab-button${active === "settings" ? " active" : ""}`}
-        onClick={() => onChange("settings")}
-      >
-        {t("tabs.settings")}
-      </button>
+      <div className="tabs-aside">
+        {aside.map((tab) => (
+          <button
+            key={tab}
+            type="button"
+            className={`tab-button${active === tab ? " active" : ""}`}
+            onClick={() => onChange(tab)}
+          >
+            {t(`tabs.${tab}`)}
+          </button>
+        ))}
+      </div>
     </nav>
   );
 }

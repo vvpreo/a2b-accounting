@@ -13,11 +13,14 @@ import { useI18n, useT } from "../i18n";
 import {
   Account,
   Transaction,
+  TransactionCategoryView,
   listAccounts,
   listTransactions,
+  listTransactionsCategories,
   updateTransactionComment,
 } from "../lib/api";
-import { formatMoney } from "../lib/money";
+import { formatMoney, parseMoneyToMinor } from "../lib/money";
+import { CategoriesCell } from "./transactions/CategoriesCell";
 
 type RowKind =
   | "correcting"
@@ -95,6 +98,10 @@ export function TransactionsPage({
   const { locale } = useI18n();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [txns, setTxns] = useState<Transaction[]>([]);
+  const [txnCategories, setTxnCategories] = useState<TransactionCategoryView[]>(
+    [],
+  );
+  const [categoriesVersion, setCategoriesVersion] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [selectedKinds, setSelectedKinds] = useState<RowKind[]>(() => [
     ...ROW_KINDS,
@@ -123,6 +130,33 @@ export function TransactionsPage({
       cancelled = true;
     };
   }, [version]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listTransactionsCategories(undefined)
+      .then((tc) => {
+        if (!cancelled) setTxnCategories(tc);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [version, categoriesVersion]);
+
+  const categoriesByTxn = useMemo(() => {
+    const map = new Map<number, TransactionCategoryView[]>();
+    for (const tc of txnCategories) {
+      const arr = map.get(tc.transactionId);
+      if (arr) arr.push(tc);
+      else map.set(tc.transactionId, [tc]);
+    }
+    for (const arr of map.values()) {
+      arr.sort((a, b) => a.position - b.position);
+    }
+    return map;
+  }, [txnCategories]);
 
   // First-time default for the account filter: select all accounts. After this
   // initialisation the user owns the selection — clearing it stays cleared.
@@ -305,15 +339,19 @@ export function TransactionsPage({
         <table>
           <thead ref={theadRef}>
             <tr>
-              <th className="col-fixed">{t("transactions.tableAccount")}</th>
-              <th className="col-fixed">{t("transactions.tableDate")}</th>
+              <th className="col-fixed col-account">{t("transactions.tableAccount")}</th>
+              <th className="col-fixed col-date">{t("transactions.tableDate")}</th>
               <th className="col-fixed num">{t("transactions.tableCredit")}</th>
               <th className="col-fixed num">{t("transactions.tableDebit")}</th>
               <th className="col-fixed num col-divider">
                 {t("transactions.tableBalance")}
               </th>
-              {showCategory && <th>{t("transactions.tableCategory")}</th>}
-              {showComment && <th>{t("transactions.tableComment")}</th>}
+              {showCategory && (
+                <th className="col-category">{t("transactions.tableCategory")}</th>
+              )}
+              {showComment && (
+                <th className="col-comment">{t("transactions.tableComment")}</th>
+              )}
               {showPeer && <th>{t("transactions.tablePeer")}</th>}
               {showBankDescription && (
                 <th>{t("transactions.tableBankDescription")}</th>
@@ -335,7 +373,7 @@ export function TransactionsPage({
                   : `#${x.accountId}`;
                 const prev = i > 0 ? visibleTxns[i - 1] : null;
                 const isMonthStart =
-                  !prev || !sameUtcMonth(prev.occurredAtUtc, x.occurredAtUtc);
+                  !prev || !sameLocalMonth(prev.occurredAtUtc, x.occurredAtUtc);
                 const nodes: ReactElement[] = [];
                 if (isMonthStart) {
                   nodes.push(
@@ -348,9 +386,12 @@ export function TransactionsPage({
                 }
                 nodes.push(
                   <tr key={x.id} className={x.isCorrecting ? "is-correcting" : ""}>
-                    <td className="col-fixed">{accLabel}</td>
-                    <td className="col-fixed">
-                      {formatInstant(x.occurredAtUtc)}{" "}
+                    <td className="col-fixed col-account">{accLabel}</td>
+                    <td
+                      className="col-fixed col-date"
+                      title={formatInstantUtc(x.occurredAtUtc)}
+                    >
+                      {formatInstantLocal(x.occurredAtUtc)}{" "}
                       <span className="dow">
                         ({formatDayOfWeekShort(x.occurredAtUtc, locale)})
                       </span>
@@ -376,9 +417,24 @@ export function TransactionsPage({
                     <td className="col-fixed num col-divider">
                       {formatMoney(x.balance)}
                     </td>
-                    {showCategory && <td className="cell-placeholder">—</td>}
+                    {showCategory && (() => {
+                      const totalMinor =
+                        (parseMoneyToMinor(x.credit) ?? 0) +
+                        (parseMoneyToMinor(x.debit) ?? 0);
+                      const kind = x.credit !== "0.00" ? "income" : "expense";
+                      const entries = categoriesByTxn.get(x.id) ?? [];
+                      return (
+                        <CategoriesCell
+                          transactionId={x.id}
+                          totalMinor={totalMinor}
+                          kind={kind}
+                          entries={entries}
+                          onChanged={() => setCategoriesVersion((v) => v + 1)}
+                        />
+                      );
+                    })()}
                     {showComment && (
-                      <td>
+                      <td className="col-comment">
                         <input
                           key={`${x.id}:${x.comment ?? ""}`}
                           className="inline-edit"
@@ -426,10 +482,21 @@ export function TransactionsPage({
   );
 }
 
-function formatInstant(iso: string): string {
+function formatInstantLocal(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toISOString().slice(0, 19).replace("T", " ");
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  return `${y}-${m}-${day} ${h}:${mi}`;
+}
+
+function formatInstantUtc(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return `${d.toISOString().slice(0, 19).replace("T", " ")} UTC`;
 }
 
 function formatDayOfWeekShort(iso: string, locale: string): string {
@@ -437,17 +504,15 @@ function formatDayOfWeekShort(iso: string, locale: string): string {
   if (Number.isNaN(d.getTime())) return "";
   const dow = new Intl.DateTimeFormat(locale, {
     weekday: "short",
-    timeZone: "UTC",
   }).format(d);
   return dow.slice(0, 2).toUpperCase();
 }
 
-function sameUtcMonth(aIso: string, bIso: string): boolean {
+function sameLocalMonth(aIso: string, bIso: string): boolean {
   const a = new Date(aIso);
   const b = new Date(bIso);
   return (
-    a.getUTCFullYear() === b.getUTCFullYear() &&
-    a.getUTCMonth() === b.getUTCMonth()
+    a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth()
   );
 }
 
@@ -456,8 +521,7 @@ function formatMonthLabel(iso: string, locale: string): string {
   if (Number.isNaN(d.getTime())) return iso;
   const month = new Intl.DateTimeFormat(locale, {
     month: "long",
-    timeZone: "UTC",
   }).format(d);
   const cap = month.charAt(0).toUpperCase() + month.slice(1);
-  return `${cap} ${d.getUTCFullYear()}`;
+  return `${cap} ${d.getFullYear()}`;
 }
