@@ -1,6 +1,6 @@
 # A2B Finances
 
-> Last updated: 2026-04-29 @ `17965d6`
+> Last updated: 2026-04-29 @ `0d42a4d`
 
 Десктоп-приложение для учёта и планирования личных финансов В3П. Табличный интерфейс, локальная БД SQLite, офлайн-first, фокус на скорость разработки и ручной ввод/импорт банковских выгрузок.
 
@@ -30,9 +30,12 @@ export FINANCES_DATA_DIR="$HOME/.finances-v2"
 ┌──────────────────────────────────────────────┐
 │  Webview (React 19 + TS + Vite)             │
 │    src/pages/      — экраны                  │
+│    src/components/ — переиспользуемые блоки  │
 │    src/lib/api.ts  — типизированные вызовы   │
 │    src/lib/csv.ts  — парсинг CSV (papaparse) │
-│    src/lib/colors.ts — палитра + оттенки     │
+│    src/lib/colors.ts       — палитра + оттенки │
+│    src/lib/distribution.ts — каскадные доли   │
+│    src/lib/category-tree.ts — построение дерева │
 └───────────────────┬──────────────────────────┘
                     │  invoke(cmd, args)
 ┌───────────────────▼──────────────────────────┐
@@ -40,6 +43,7 @@ export FINANCES_DATA_DIR="$HOME/.finances-v2"
 │    src-tauri/src/accounts.rs                 │
 │    src-tauri/src/transactions.rs             │
 │    src-tauri/src/categories.rs               │
+│    src-tauri/src/transaction_categories.rs   │
 │    src-tauri/src/db.rs     — миграции        │
 │    src-tauri/src/money.rs  — копейки ⇄ "123.45" │
 └───────────────────┬──────────────────────────┘
@@ -52,33 +56,40 @@ export FINANCES_DATA_DIR="$HOME/.finances-v2"
 
 Принципы:
 - Вся SQL — на Rust-стороне; TypeScript не знает про схему.
-- Деньги — `INTEGER` в минимальных единицах валюты (копейки/центы), scale = 2. Конверсия через `rust_decimal` в Rust и строки на фронте.
-- Даты — `occurred_at_utc` (ISO-8601 UTC для сравнения) у каждой транзакции, плюс `timezone_offset` (`+03:00`) на уровне импорт-батча: все строки одной выписки разделяют один offset, дублировать его в каждой строке не имеет смысла.
+- Деньги — `INTEGER` в минимальных единицах валюты (копейки/центы), scale = 2. Конверсия через `rust_decimal` в Rust и строки на фронте; на фронте есть `parseMoneyToMinor` / `formatMinorAsMoney` для копеечных операций (доли, слайдеры).
+- Даты — `occurred_at_utc` (ISO-8601 UTC для сравнения и хранения) у каждой транзакции, плюс `timezone_offset` (`+03:00`) на уровне импорт-батча. В UI даты отображаются в локальной таймзоне ОС, а на hover ячейки показывается оригинальный UTC-таймстамп.
 - Импорт транзакций группируется в батч (`import_batches`); удаление батча каскадно удаляет все его транзакции.
 - Миграции — массив `(version, name, sql)` в `db.rs`, применяются инкрементально через таблицу `schema_migrations`.
 - Настройки пользователя — таблица `app_settings (key, value)` + команды `get_setting` / `set_setting`. Сейчас один ключ — `locale`.
 - Категории — отдельная таблица с произвольной вложенностью (`parent_id`); поле `kind ∈ {income, expense}` хранится на каждой строке и наследуется потомками; UI ограничивает дерево тремя уровнями.
+- Привязка транзакции к категориям — `transaction_categories(transaction_id, category_id, share_minor, position)`. Сумма долей `≤` сумме транзакции; разница — виртуальная «Без категории», вычисляется на лету. Атомарная замена через `set_transaction_categories`.
+- Состояние окна (позиция, размер, maximized, fullscreen) сохраняется между запусками плагином `tauri-plugin-window-state`.
 - i18n — свой Context на React + JSON-файлы в [src/i18n/locales/](src/i18n/locales/). Стартовые языки: `ru`, `en`. Default = системный язык через `navigator.language`, fallback — `en`. Новый язык = новый JSON-файл + запись в `LANGUAGES`.
 
 ## Data Model
 
 ```sql
-accounts         (id, name, bank, currency, account_number, owner_name, created_at)
-                  UNIQUE(bank, account_number)
-import_batches   (id, account_id → accounts, imported_at, source_filename, row_count,
-                  timezone_offset)
-                  ON DELETE CASCADE
-transactions     (id, account_id → accounts, import_batch_id → import_batches,
-                  occurred_at_utc, peer, credit, debit, balance,
-                  bank_description, comment, is_correcting)
-                  CHECK (credit = 0 OR debit = 0)
-                  ON DELETE CASCADE (обе FK)
-categories       (id, name, color, kind, parent_id → categories, created_at)
-                  CHECK (kind IN ('income','expense'))
-                  UNIQUE(parent_id, name)
-                  ON DELETE CASCADE (parent_id)
-app_settings     (key, value)
-schema_migrations (version, name, applied_at)
+accounts                 (id, name, bank, currency, account_number, owner_name, created_at)
+                          UNIQUE(bank, account_number)
+import_batches           (id, account_id → accounts, imported_at, source_filename, row_count,
+                          timezone_offset)
+                          ON DELETE CASCADE
+transactions             (id, account_id → accounts, import_batch_id → import_batches,
+                          occurred_at_utc, peer, credit, debit, balance,
+                          bank_description, comment, is_correcting)
+                          CHECK (credit = 0 OR debit = 0)
+                          ON DELETE CASCADE (обе FK)
+categories               (id, name, color, kind, parent_id → categories, created_at)
+                          CHECK (kind IN ('income','expense'))
+                          UNIQUE(parent_id, name)
+                          ON DELETE CASCADE (parent_id)
+transaction_categories   (transaction_id → transactions, category_id → categories,
+                          share_minor, position)
+                          PRIMARY KEY (transaction_id, category_id)
+                          CHECK (share_minor > 0)
+                          ON DELETE CASCADE (обе FK)
+app_settings             (key, value)
+schema_migrations        (version, name, applied_at)
 ```
 
 ## Repository Structure
@@ -86,32 +97,38 @@ schema_migrations (version, name, applied_at)
 ```
 finances-v2/
 ├── src/                              React + TS фронтенд
-│   ├── App.tsx                       табовая навигация (Categories / Accounts / Transactions / Settings)
+│   ├── App.tsx                       табы; на старте автоматически выбирает Транзакции, если они есть, иначе Счета
 │   ├── App.css                       стили (без Tailwind)
 │   ├── main.tsx                      bootstrap: загрузка локали из БД + I18nProvider
 │   ├── components/
-│   │   ├── Tabs.tsx                  верхняя навигация по вкладкам
-│   │   └── MultiSelectDropdown.tsx   универсальный multi-select
+│   │   ├── Tabs.tsx                  верхняя навигация (Счета/Транзакции слева, Категории/Настройки справа)
+│   │   ├── MultiSelectDropdown.tsx   универсальный multi-select
+│   │   ├── CategoryPickerPopover.tsx anchored-поповер выбора категории с поиском и kind-фильтром
+│   │   └── CategoryDistributionModal.tsx модалка распределения долей по категориям с каскадными слайдерами
 │   ├── i18n/
-│   │   ├── index.ts                  Context, Provider, хук useT/useTPlural, реестр LANGUAGES
+│   │   ├── index.ts                  Context, Provider, хуки useT/useTPlural, реестр LANGUAGES
 │   │   └── locales/
 │   │       ├── ru.json               русские переводы
 │   │       └── en.json               английские переводы
 │   ├── lib/
-│   │   ├── api.ts                    типизированные обёртки над invoke (включая getSetting/setSetting)
+│   │   ├── api.ts                    типизированные обёртки над invoke
 │   │   ├── account-presets.ts        пресеты счетов (банк + валюта по умолчанию)
 │   │   ├── colors.ts                 палитра категорий + генерация оттенков из родительского hue
+│   │   ├── category-tree.ts          buildTree/flattenTree (общая утилита для Categories.tsx и пикера)
 │   │   ├── currencies.ts             справочник валют (ISO-коды + крипта)
 │   │   ├── csv.ts                    парсер CSV через papaparse
-│   │   └── money.ts                  утилиты для денежных строк
+│   │   ├── distribution.ts           equalSplit/addEqualToCategorized/setShareAt и т.д. — чистая математика долей в копейках
+│   │   └── money.ts                  formatMoney + parseMoneyToMinor + formatMinorAsMoney
 │   └── pages/
 │       ├── Accounts.tsx              список счетов, форма, sub-view деталей с панелью «Загрузки» и валидацией
-│       ├── Transactions.tsx          вкладка Транзакции с чипами-фильтром, sticky-шапкой и группировкой по месяцам
-│       ├── Categories.tsx            CRUD категорий: две секции (Доходы/Расходы), дерево до 3 уровней
+│       ├── Transactions.tsx          таблица транзакций с фильтрами, sticky-шапкой, группировкой по месяцам и колонкой категорий
+│       ├── transactions/
+│       │   └── CategoriesCell.tsx    ячейка категорий: пропорциональные полосы, hover-tooltip, инлайн-пикер, кнопка-карандаш
+│       ├── Categories.tsx            CRUD категорий: две секции (Доходы/Расходы), дерево до 3 уровней, hover-кнопки + и ✎
 │       ├── Settings.tsx              селектор языка (хранится в БД)
 │       └── ImportDialog.tsx          двухшаговый мастер импорта CSV (preview + import)
 ├── src-tauri/                        Rust backend
-│   ├── Cargo.toml                    зависимости: rusqlite, rust_decimal, chrono, thiserror
+│   ├── Cargo.toml                    зависимости: rusqlite, rust_decimal, chrono, thiserror, tauri-plugin-window-state
 │   ├── tauri.conf.json               конфигурация окна и бандла
 │   ├── capabilities/default.json     permissions webview
 │   ├── migrations/
@@ -122,16 +139,18 @@ finances-v2/
 │   │   ├── 005_add_app_settings.sql  таблица app_settings (key, value)
 │   │   ├── 006_replace_description_columns.sql  transactions.bank_description + transactions.comment
 │   │   ├── 007_add_transaction_is_correcting.sql  transactions.is_correcting
-│   │   └── 008_add_categories.sql    таблица categories (kind, parent_id, color)
+│   │   ├── 008_add_categories.sql    таблица categories (kind, parent_id, color)
+│   │   └── 009_add_transaction_categories.sql  таблица transaction_categories
 │   ├── .taurignore                   защита от dev-watcher лупа на файлах БД
 │   └── src/
 │       ├── main.rs                   точка входа
-│       ├── lib.rs                    Tauri Builder + регистрация команд
+│       ├── lib.rs                    Tauri Builder + регистрация команд + плагин window-state
 │       ├── db.rs                     открытие БД, миграции, тесты
 │       ├── money.rs                  parse_minor / format_minor + unit-тесты
 │       ├── accounts.rs               create/list/update/delete + команды
 │       ├── transactions.rs           import/list (с фильтром по account_ids)/delete_batch/validate/preview
 │       ├── categories.rs             create/list/update/delete + наследование kind + тесты
+│       ├── transaction_categories.rs set/list с проверкой kind, инварианта суммы и каскадов + тесты
 │       └── settings.rs               get_setting / set_setting (UPSERT в app_settings)
 ├── scripts/
 │   ├── dev.sh                        запуск dev (проверяет FINANCES_DATA_DIR, нормализует в абсолют)
@@ -160,7 +179,7 @@ finances-v2/
 ```bash
 cd src-tauri && cargo test --lib
 ```
-Юнит-тесты покрывают: парсинг/форматирование денег, идемпотентность миграций, FK-каскад, CHECK-constraint, валидацию цепочки балансов, поведение категорий (CHECK на kind, UNIQUE сиблингов, каскадное удаление).
+55 юнит-тестов покрывают: парсинг/форматирование денег, идемпотентность миграций, FK-каскад, CHECK-constraint, валидацию цепочки балансов, поведение категорий (CHECK на kind, UNIQUE сиблингов, каскадное удаление) и привязок транзакций к категориям (kind-матч, инвариант суммы, атомарная замена, оба каскада).
 
 Фронтенд — только tsc-проверка через `npm run build`.
 
@@ -187,6 +206,7 @@ occurred_at,credit,debit,balance,peer,bank_description,comment
 ### Замечания по dev-режиму
 - Если `FINANCES_DATA_DIR` указывает внутрь `src-tauri/`, dev-watcher зациклится на изменениях файлов БД. `dev.sh` нормализует относительные пути к корню проекта, а `src-tauri/.taurignore` страхует от повторения.
 - WAL-режим SQLite включён (`PRAGMA journal_mode=WAL`) — рядом с `.db` появятся `-wal` и `-shm` файлы.
+- Состояние окна сохраняется плагином `tauri-plugin-window-state` рядом с appdata; чтобы сбросить геометрию, удалите соответствующий файл состояния.
 
 ## Development
 
@@ -195,26 +215,29 @@ occurred_at,credit,debit,balance,peer,bank_description,comment
 - Нативные JS-диалоги (`window.confirm`, `window.alert`, `window.prompt`) в Tauri webview не работают — используем инлайн-подтверждения в UI.
 - Деньги никогда не ходят через `number` с плавающей точкой — только строки `"123.45"` на границе и `i64` копейки внутри.
 - Действия (создать счёт, импортировать транзакции) живут в шапке соответствующего экрана — глобального тулбара больше нет.
+- При старте приложение делает один `listTransactions()` и переключается на вкладку Транзакции, если они есть; иначе остаётся на Счетах.
 
 ## Current Status
 
 Готовый функционал:
-- Модель данных и схема миграций (счета, транзакции, батчи импорта, настройки, категории).
+- Модель данных и схема миграций (счета, транзакции, батчи импорта, настройки, категории, привязки категорий к транзакциям).
 - CRUD по счетам с пресетами банков и валидацией цепочки балансов на детальной странице.
 - Двухшаговый мастер импорта CSV: предпросмотр с подсветкой проблем (дубли, разрывы), автоматическое создание корректирующих транзакций.
-- Вкладка «Транзакции» с multi-select фильтром по счетам, sticky-шапкой, группировкой по месяцам.
-- Справочник категорий: иерархия доходов/расходов, до трёх уровней в UI, палитра цветов с авто-производными оттенками.
+- Вкладка «Транзакции»: multi-select фильтр по счетам, sticky-шапка, группировка по месяцам в локальном времени, динамическая ширина первых 5 колонок (по контенту), эластичная колонка комментария, локальное отображение даты с UTC-таймстампом в title-tooltip.
+- Колонка «Категория» в таблице транзакций: пропорциональные цветные полосы, серая полоса «Без категории» для нераспределённого остатка, hover-tooltip с точными суммами и процентами, инлайн-пикер выбора категории с поиском и фильтром по kind, иконка-карандаш открывает модалку с каскадными слайдерами для тонкой настройки распределения.
+- Справочник категорий: иерархия доходов/расходов до трёх уровней в UI, палитра цветов с авто-производными оттенками, компактные иконки + и ✎ при наведении на строку.
 - i18n (ru/en), хранение выбранного языка в БД.
+- Сохранение позиции и размера окна между запусками.
 
 В очереди (`TO REVIEW` в [TODO.md](TODO.md)):
 - Приёмка справочника категорий.
 - Приёмка модели данных и импорта.
 
 Не вошло в MVP:
-- Привязка категорий к транзакциям (категоризация и автоматические правила).
+- Авто-категоризация (правила для автоматического проставления категорий импортированным транзакциям).
 - Теги, отчёты, бюджеты.
 - Мультивалютные переводы между счетами.
 - Специфические парсеры под каждый банк (сейчас только универсальный CSV).
-- Редактирование отдельной транзакции — пока только bulk-импорт + комментарий + удаление батча.
+- Редактирование отдельной транзакции — пока только bulk-импорт + комментарий + категории + удаление батча.
 - Валюты со scale ≠ 2 (JPY, KWD).
 - Шифрование БД.
