@@ -22,6 +22,32 @@ export FINANCES_DATA_DIR="$HOME/.finances-v2"
 
 Если в корне проекта есть `.envrc` с `FINANCES_DATA_DIR`, direnv подхватит её автоматически.
 
+## Установка собранного DMG
+
+Каждый push в `main` автоматически собирает Apple Silicon DMG и публикует его как rolling-релиз `latest` (workflow [.github/workflows/release-latest.yml](.github/workflows/release-latest.yml)). Свежий билд всегда доступен по тегу `latest`.
+
+```bash
+# 1. Скачать (репо приватный — нужен gh CLI с авторизацией)
+gh release download latest \
+  --repo <owner>/<repo> \
+  --pattern "*.dmg" --clobber
+
+# 2. Смонтировать и установить
+hdiutil attach A2B-Finances-latest-arm64.dmg
+cp -R "/Volumes/A2B Finances/A2B Finances.app" /Applications/
+hdiutil detach "/Volumes/A2B Finances"
+
+# 3. Снять карантин (приложение не подписано Apple ID)
+xattr -cr "/Applications/A2B Finances.app"
+
+# 4. Запустить
+open "/Applications/A2B Finances.app"
+```
+
+Альтернативно при первом запуске можно открыть приложение через ПКМ → «Открыть» в Finder и согласиться на запуск неподписанного бинаря.
+
+**Где живут данные:** `~/Library/Application Support/net.vvpreo.finances/finances.db` (плюс WAL-файлы). Это путь по умолчанию для production-DMG. Между обновлениями приложение сохраняет БД и применяет новые миграции на старте автоматически (см. `db.rs` и идемпотентную таблицу `schema_migrations`).
+
 ## Architecture
 
 Два слоя, общающиеся через Tauri `invoke`:
@@ -201,7 +227,7 @@ occurred_at,credit,debit,balance,peer,bank_description,comment
 ## Configuration
 
 ### Переменные окружения
-- **`FINANCES_DATA_DIR`** (обязательная) — абсолютный путь к директории для всех данных приложения. В этой директории создаются `finances.db` + WAL-файлы. Если путь не существует — создаётся. Если переменная не задана — приложение падает с понятным сообщением.
+- **`FINANCES_DATA_DIR`** (опциональная, override) — абсолютный путь к директории для данных приложения. Если переменная не задана, приложение использует стандартный macOS-путь `~/Library/Application Support/net.vvpreo.finances/` (через `AppHandle::path().app_data_dir()`). В обеих ветках в директории создаются `finances.db` + WAL-файлы; путь создаётся, если не существует. Override используется в dev-режиме (через `.envrc`), чтобы не мешать продакшн-данным DMG-сборки.
 
 ### Замечания по dev-режиму
 - Если `FINANCES_DATA_DIR` указывает внутрь `src-tauri/`, dev-watcher зациклится на изменениях файлов БД. `dev.sh` нормализует относительные пути к корню проекта, а `src-tauri/.taurignore` страхует от повторения.

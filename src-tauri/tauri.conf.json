@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "A2B Finances",
   "version": "0.1.0",
-  "identifier": "com.v3p.finances",
+  "identifier": "net.vvpreo.finances",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
