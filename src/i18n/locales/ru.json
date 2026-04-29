@@ -186,7 +186,23 @@
   },
   "categories": {
     "title": "Категории",
-    "tbd": "TBD: справочник категорий и правила автокатегоризации."
+    "sectionIncome": "Доходы",
+    "sectionExpense": "Расходы",
+    "createRoot": "+ Создать категорию",
+    "createChild": "+ Подкатегория",
+    "edit": "Изменить",
+    "delete": "Удалить",
+    "empty": "Пока нет категорий.",
+    "modalCreateTitle": "Новая категория",
+    "modalCreateChildTitle": "Новая подкатегория «{parent}»",
+    "modalEditTitle": "Редактировать категорию",
+    "fieldName": "Название",
+    "fieldNamePlaceholder": "Например, «Продукты»",
+    "fieldColor": "Цвет",
+    "colorTabPalette": "Палитра",
+    "colorTabShades": "Оттенки родителя",
+    "deleteConfirm": "Удалить категорию «{name}»? Все её подкатегории будут удалены безвозвратно.",
+    "deleteConfirmYes": "Да, удалить"
   },
   "settings": {
     "title": "Настройки",

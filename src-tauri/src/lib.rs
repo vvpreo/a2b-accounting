@@ -1,4 +1,5 @@
 mod accounts;
+mod categories;
 mod db;
 mod money;
 mod settings;
@@ -47,6 +48,10 @@ pub fn run() {
             accounts::list_accounts,
             accounts::update_account,
             accounts::delete_account,
+            categories::create_category,
+            categories::list_categories,
+            categories::update_category,
+            categories::delete_category,
             transactions::import_transactions,
             transactions::list_transactions,
             transactions::list_import_batches,

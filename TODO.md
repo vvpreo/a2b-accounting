@@ -6,6 +6,7 @@
 
 # TO REVIEW
 
+- [ ] Categories CRUD (income/expense, hierarchical tree, palette + shade-derived colors)
 - [ ] [Data model & import mechanism (accounts, transactions, import batches)](docs/plans/data-model-and-import.md)
 
 # DONE

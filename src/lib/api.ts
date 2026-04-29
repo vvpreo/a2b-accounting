@@ -24,6 +24,17 @@ export interface Transaction {
   isCorrecting: boolean;
 }
 
+export type CategoryKind = "income" | "expense";
+
+export interface Category {
+  id: number;
+  name: string;
+  color: string;
+  kind: CategoryKind;
+  parentId: number | null;
+  createdAt: string;
+}
+
 export interface ImportBatch {
   id: number;
   accountId: number;
@@ -107,6 +118,31 @@ export function updateAccount(args: {
 
 export function deleteAccount(id: number): Promise<void> {
   return invoke<void>("delete_account", { id });
+}
+
+export function createCategory(args: {
+  name: string;
+  color: string;
+  kind: CategoryKind;
+  parentId: number | null;
+}): Promise<Category> {
+  return invoke<Category>("create_category", args);
+}
+
+export function listCategories(): Promise<Category[]> {
+  return invoke<Category[]>("list_categories");
+}
+
+export function updateCategory(args: {
+  id: number;
+  name: string;
+  color: string;
+}): Promise<Category> {
+  return invoke<Category>("update_category", args);
+}
+
+export function deleteCategory(id: number): Promise<void> {
+  return invoke<void>("delete_category", { id });
 }
 
 export function importTransactions(args: {

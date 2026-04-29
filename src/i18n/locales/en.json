@@ -176,7 +176,23 @@
   },
   "categories": {
     "title": "Categories",
-    "tbd": "TBD: a directory of categories and auto-categorisation rules."
+    "sectionIncome": "Income",
+    "sectionExpense": "Expenses",
+    "createRoot": "+ Create category",
+    "createChild": "+ Subcategory",
+    "edit": "Edit",
+    "delete": "Delete",
+    "empty": "No categories yet.",
+    "modalCreateTitle": "New category",
+    "modalCreateChildTitle": "New subcategory of “{parent}”",
+    "modalEditTitle": "Edit category",
+    "fieldName": "Name",
+    "fieldNamePlaceholder": "e.g. “Groceries”",
+    "fieldColor": "Color",
+    "colorTabPalette": "Palette",
+    "colorTabShades": "Parent shades",
+    "deleteConfirm": "Delete category “{name}”? All its subcategories will be removed permanently.",
+    "deleteConfirmYes": "Yes, delete"
   },
   "settings": {
     "title": "Settings",
