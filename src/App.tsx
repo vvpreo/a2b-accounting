@@ -2,7 +2,6 @@ import { useState } from "react";
 
 import "./App.css";
 import { Tab, Tabs } from "./components/Tabs";
-import { Toolbar } from "./components/Toolbar";
 import { AccountsPage, CreateAccountModal } from "./pages/Accounts";
 import { CategoriesPage } from "./pages/Categories";
 import { ImportDialog } from "./pages/ImportDialog";
@@ -12,7 +11,6 @@ import { TransactionsPage } from "./pages/Transactions";
 function App() {
   const [tab, setTab] = useState<Tab>("accounts");
   const [txnFilterAccountIds, setTxnFilterAccountIds] = useState<number[]>([]);
-  const [toolbarExpanded, setToolbarExpanded] = useState(true);
   const [creatingAccount, setCreatingAccount] = useState(false);
   const [importingTxns, setImportingTxns] = useState(false);
   const [accountsVersion, setAccountsVersion] = useState(0);
@@ -24,17 +22,12 @@ function App() {
 
   return (
     <main className="container">
-      <Toolbar
-        expanded={toolbarExpanded}
-        onToggle={() => setToolbarExpanded((v) => !v)}
-        onCreateAccount={() => setCreatingAccount(true)}
-        onImportTransactions={() => setImportingTxns(true)}
-      />
       <Tabs active={tab} onChange={setTab} />
       {tab === "categories" && <CategoriesPage />}
       {tab === "accounts" && (
         <AccountsPage
           onGoToTransactions={goToTransactions}
+          onCreateAccount={() => setCreatingAccount(true)}
           version={accountsVersion}
         />
       )}
@@ -43,6 +36,7 @@ function App() {
           selectedAccountIds={txnFilterAccountIds}
           onChangeSelectedAccountIds={setTxnFilterAccountIds}
           version={accountsVersion}
+          onImportTransactions={() => setImportingTxns(true)}
         />
       )}
       {tab === "settings" && <SettingsPage />}

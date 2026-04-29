@@ -27,6 +27,7 @@
   "accounts": {
     "title": "Счета",
     "create": "Завести счёт",
+    "add": "Добавить счёт",
     "fieldName": "Название счёта",
     "fieldNamePlaceholder": "Например, «Зарплатный»",
     "fieldBank": "Банк",

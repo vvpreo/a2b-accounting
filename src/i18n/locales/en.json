@@ -27,6 +27,7 @@
   "accounts": {
     "title": "Accounts",
     "create": "Create account",
+    "add": "Add account",
     "fieldName": "Account name",
     "fieldNamePlaceholder": "e.g. “Salary”",
     "fieldBank": "Bank",

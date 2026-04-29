@@ -134,10 +134,15 @@ function AccountFields({
 
 interface Props {
   onGoToTransactions: (accountIds: number[]) => void;
+  onCreateAccount: () => void;
   version: number;
 }
 
-export function AccountsPage({ onGoToTransactions, version }: Props) {
+export function AccountsPage({
+  onGoToTransactions,
+  onCreateAccount,
+  version,
+}: Props) {
   const t = useT();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -231,6 +236,16 @@ export function AccountsPage({ onGoToTransactions, version }: Props) {
           )}
         </tbody>
       </table>
+
+      <div className="accounts-add-row">
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={onCreateAccount}
+        >
+          {t("accounts.add")}
+        </button>
+      </div>
 
       {editing && (
         <EditAccountModal

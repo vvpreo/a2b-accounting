@@ -62,6 +62,7 @@ interface Props {
   selectedAccountIds: number[];
   onChangeSelectedAccountIds: (ids: number[]) => void;
   version: number;
+  onImportTransactions: () => void;
 }
 
 function defaultDateFrom(): string {
@@ -88,6 +89,7 @@ export function TransactionsPage({
   selectedAccountIds,
   onChangeSelectedAccountIds,
   version,
+  onImportTransactions,
 }: Props) {
   const t = useT();
   const { locale } = useI18n();
@@ -193,8 +195,23 @@ export function TransactionsPage({
 
   return (
     <section className="page page--transactions">
-      {filtersExpanded ? (
-        <section className="filter-bar">
+      <section
+        className={`filter-bar${filtersExpanded ? "" : " filter-bar--collapsed"}`}
+      >
+        <button
+          type="button"
+          className="filter-bar-handle"
+          onClick={() => setFiltersExpanded((v) => !v)}
+          aria-label={
+            filtersExpanded ? t("toolbar.collapse") : t("toolbar.expand")
+          }
+          title={
+            filtersExpanded ? t("toolbar.collapse") : t("toolbar.expand")
+          }
+        >
+          <span className="filter-bar-handle-grip" />
+        </button>
+        {filtersExpanded && (
           <div className="filter-bar-row">
             <label className="filter-field">
               <span>{t("transactions.filterAccounts")}</span>
@@ -263,28 +280,16 @@ export function TransactionsPage({
                 applyLabel={t("transactions.applyButton")}
               />
             </label>
+            <button
+              type="button"
+              className="btn-primary filter-bar-action"
+              onClick={onImportTransactions}
+            >
+              {t("toolbar.importTransactions")}
+            </button>
           </div>
-          <button
-            type="button"
-            className="global-toolbar-collapse"
-            onClick={() => setFiltersExpanded(false)}
-            aria-label={t("toolbar.collapse")}
-            title={t("toolbar.collapse")}
-          >
-            ▲
-          </button>
-        </section>
-      ) : (
-        <button
-          type="button"
-          className="global-toolbar-handle"
-          onClick={() => setFiltersExpanded(true)}
-          aria-label={t("toolbar.expand")}
-          title={t("toolbar.expand")}
-        >
-          <span className="global-toolbar-handle-grip" />
-        </button>
-      )}
+        )}
+      </section>
 
       {error && <div className="error">{error}</div>}
 
