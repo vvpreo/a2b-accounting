@@ -120,11 +120,13 @@ export function ReportViewPage({ view, onEdit }: Props) {
 
   const [range, setRange] = useState<ReportRange>(config.defaultRange);
   const [granularity, setGranularity] = useState<Granularity>(config.defaultGranularity);
+  const [showTotal, setShowTotal] = useState(true);
 
   // Reset runtime controls when switching between saved views.
   useEffect(() => {
     setRange(config.defaultRange);
     setGranularity(config.defaultGranularity);
+    setShowTotal(true);
   }, [view.id, config.defaultRange, config.defaultGranularity]);
 
   const [response, setResponse] = useState<ReportResponse | null>(null);
@@ -225,6 +227,14 @@ export function ReportViewPage({ view, onEdit }: Props) {
             ))}
           </select>
         </label>
+        <label className="report-controls-toggle">
+          <input
+            type="checkbox"
+            checked={showTotal}
+            onChange={(e) => setShowTotal(e.target.checked)}
+          />
+          <span>{t("report.showTotalColumn")}</span>
+        </label>
         <button
           type="button"
           className="icon-btn report-edit-btn"
@@ -245,6 +255,7 @@ export function ReportViewPage({ view, onEdit }: Props) {
         <PivotTable
           response={response}
           initialExpanded={config.expandedCategoryIds}
+          showTotal={showTotal}
         />
       )}
     </section>
@@ -254,21 +265,35 @@ export function ReportViewPage({ view, onEdit }: Props) {
 interface PivotProps {
   response: ReportResponse;
   initialExpanded: number[];
+  showTotal: boolean;
 }
 
-function PivotTable({ response, initialExpanded }: PivotProps) {
+function PivotTable({ response, initialExpanded, showTotal }: PivotProps) {
   const t = useT();
   const { periods, expense, income } = response;
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
   const [incomeCollapsed, setIncomeCollapsed] = useState(false);
   const [expenseCollapsed, setExpenseCollapsed] = useState(false);
 
-  // Switching to a different view resets all collapse state.
+  // Switching to a different view (or recomputing) resets collapse state.
+  // Default: collapse every group row (any category that has descendants in
+  // the rendered list). The user opens the report and sees roll-ups; they
+  // expand individual groups they want to drill into. Section headers stay
+  // expanded so the totals are immediately visible.
   useEffect(() => {
-    setCollapsed(new Set());
+    const groupIds = new Set<number>();
+    for (const section of [income, expense]) {
+      const { hasDescendants } = analyzeRows(section.rows);
+      for (let i = 0; i < section.rows.length; i++) {
+        if (hasDescendants[i] && section.rows[i].categoryId != null) {
+          groupIds.add(section.rows[i].categoryId!);
+        }
+      }
+    }
+    setCollapsed(groupIds);
     setIncomeCollapsed(false);
     setExpenseCollapsed(false);
-  }, [response, initialExpanded]);
+  }, [response, initialExpanded, income, expense]);
 
   function toggleRow(catId: number) {
     setCollapsed((prev) => {
@@ -294,6 +319,7 @@ function PivotTable({ response, initialExpanded }: PivotProps) {
     groupNameTemplate,
     foldLabel: t("report.fold"),
     unfoldLabel: t("report.unfold"),
+    showTotal,
   });
   const expenseRows = renderSection({
     section: expense,
@@ -307,6 +333,7 @@ function PivotTable({ response, initialExpanded }: PivotProps) {
     groupNameTemplate,
     foldLabel: t("report.fold"),
     unfoldLabel: t("report.unfold"),
+    showTotal,
   });
 
   const isEmpty = expense.rows.length === 0 && income.rows.length === 0;
@@ -314,6 +341,16 @@ function PivotTable({ response, initialExpanded }: PivotProps) {
   if (isEmpty) {
     return <div className="report-empty">{t("report.empty")}</div>;
   }
+
+  const metricsRows = renderMetricsSection({
+    periods,
+    income,
+    expense,
+    sectionTitle: t("report.sectionMetrics"),
+    netLabel: t("report.metricNet"),
+    cumulativeLabel: t("report.metricNetCumulative"),
+    showTotal,
+  });
 
   return (
     <div className="pivot-wrap">
@@ -326,12 +363,15 @@ function PivotTable({ response, initialExpanded }: PivotProps) {
                 {p.label}
               </th>
             ))}
-            <th className="pivot-total-col">{t("report.totalColumn")}</th>
+            {showTotal && (
+              <th className="pivot-total-col">{t("report.totalColumn")}</th>
+            )}
           </tr>
         </thead>
         <tbody>
           {income.rows.length > 0 && incomeRows}
           {expense.rows.length > 0 && expenseRows}
+          {metricsRows}
         </tbody>
       </table>
     </div>
@@ -352,6 +392,7 @@ interface RenderSectionArgs {
   groupNameTemplate: string;
   foldLabel: string;
   unfoldLabel: string;
+  showTotal: boolean;
 }
 
 // One row in the visual plan. A backend row that has selected descendants is
@@ -432,6 +473,7 @@ function renderSection({
   groupNameTemplate,
   foldLabel,
   unfoldLabel,
+  showTotal,
 }: RenderSectionArgs): React.ReactElement[] {
   const { rows } = section;
   const { parents, hasDescendants, subtreeValues, subtreeMinor, subtreeTotal, subtreeTotalMinor } =
@@ -476,9 +518,11 @@ function renderSection({
           {formatMoney(v)}
         </td>
       ))}
-      <td className="pivot-value-cell pivot-value-cell--total">
-        {formatMoney(sectionTotalStr)}
-      </td>
+      {showTotal && (
+        <td className="pivot-value-cell pivot-value-cell--total">
+          {formatMoney(sectionTotalStr)}
+        </td>
+      )}
     </tr>,
   );
 
@@ -518,7 +562,7 @@ function renderSection({
       >
         <td
           className="pivot-name-cell"
-          style={{ paddingLeft: `${10 + entry.depth * 18}px` }}
+          style={{ paddingLeft: `${12 + entry.depth * 22}px` }}
         >
           {entry.collapsible && id != null ? (
             <button
@@ -552,9 +596,11 @@ function renderSection({
             {formatMoney(v)}
           </td>
         ))}
-        <td className="pivot-value-cell pivot-value-cell--total">
-          {formatMoney(entry.total)}
-        </td>
+        {showTotal && (
+          <td className="pivot-value-cell pivot-value-cell--total">
+            {formatMoney(entry.total)}
+          </td>
+        )}
       </tr>,
     );
 
@@ -641,4 +687,102 @@ function analyzeRows(rows: ReportRow[]): RowAnalysis {
     subtreeTotal,
     subtreeTotalMinor,
   };
+}
+
+interface RenderMetricsArgs {
+  periods: ReportResponse["periods"];
+  income: SectionData;
+  expense: SectionData;
+  sectionTitle: string;
+  netLabel: string;
+  cumulativeLabel: string;
+  showTotal: boolean;
+}
+
+// Sums every row's per-period values. Backend allocates each transaction share
+// to exactly one row (selected category or uncategorized), so summing every row
+// equals the section total — no double-counting from parent/child duplication.
+function sumSectionPerPeriodMinor(rows: ReportRow[], nPeriods: number): number[] {
+  const out = new Array<number>(nPeriods).fill(0);
+  for (const r of rows) {
+    for (let k = 0; k < nPeriods; k++) {
+      out[k] += parseMoneyToMinor(r.values[k]) ?? 0;
+    }
+  }
+  return out;
+}
+
+function signClass(minor: number): string {
+  if (minor > 0) return "pivot-value-cell--positive";
+  if (minor < 0) return "pivot-value-cell--negative";
+  return "";
+}
+
+function renderMetricsSection({
+  periods,
+  income,
+  expense,
+  sectionTitle,
+  netLabel,
+  cumulativeLabel,
+  showTotal,
+}: RenderMetricsArgs): React.ReactElement[] {
+  const nPeriods = periods.length;
+  const incomePerPeriod = sumSectionPerPeriodMinor(income.rows, nPeriods);
+  const expensePerPeriod = sumSectionPerPeriodMinor(expense.rows, nPeriods);
+
+  const netPerPeriod = incomePerPeriod.map((inc, k) => inc - expensePerPeriod[k]);
+  const netTotal = netPerPeriod.reduce((a, b) => a + b, 0);
+
+  // Cumulative = running net from the start of the range. The total column
+  // mirrors the final cumulative — that's the answer to "am I in the green
+  // for this whole period?".
+  const cumulativePerPeriod: number[] = [];
+  let acc = 0;
+  for (const v of netPerPeriod) {
+    acc += v;
+    cumulativePerPeriod.push(acc);
+  }
+  const cumulativeTotal = acc;
+
+  const renderRow = (
+    key: string,
+    label: string,
+    values: number[],
+    total: number,
+  ): React.ReactElement => (
+    <tr key={key} className="pivot-row pivot-row--metric">
+      <td className="pivot-name-cell">
+        <span className="pivot-fold-spacer" aria-hidden />
+        <span className="pivot-name-text">{label}</span>
+      </td>
+      {values.map((m, idx) => (
+        <td key={idx} className={`pivot-value-cell ${signClass(m)}`.trim()}>
+          {formatMoney(formatMinorAsMoney(m))}
+        </td>
+      ))}
+      {showTotal && (
+        <td
+          className={`pivot-value-cell pivot-value-cell--total ${signClass(total)}`.trim()}
+        >
+          {formatMoney(formatMinorAsMoney(total))}
+        </td>
+      )}
+    </tr>
+  );
+
+  return [
+    <tr key="header-metrics" className="pivot-row pivot-row--section">
+      <td className="pivot-name-cell pivot-name-cell--section">
+        <span className="pivot-fold-spacer" aria-hidden />
+        <span className="pivot-name-text">{sectionTitle}</span>
+      </td>
+      {periods.map((_, idx) => (
+        <td key={idx} className="pivot-value-cell" />
+      ))}
+      {showTotal && <td className="pivot-value-cell pivot-value-cell--total" />}
+    </tr>,
+    renderRow("metric-net", netLabel, netPerPeriod, netTotal),
+    renderRow("metric-cumulative", cumulativeLabel, cumulativePerPeriod, cumulativeTotal),
+  ];
 }

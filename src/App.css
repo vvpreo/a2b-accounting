@@ -2539,6 +2539,30 @@ code {
   color: inherit;
 }
 
+/* Inline checkbox toggles in the report controls bar — sit on the baseline of
+   the selects rather than stacking the label on top of the input. */
+.report-controls-toggle {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #18181b;
+}
+
+.report-controls-toggle input {
+  padding: 0;
+  margin: 0;
+  width: auto;
+}
+
+@media (prefers-color-scheme: dark) {
+  .report-controls-toggle {
+    color: #e4e4e7;
+  }
+}
+
 .report-loading,
 .report-empty {
   padding: 24px;
@@ -2621,25 +2645,30 @@ code {
   white-space: nowrap;
 }
 
+/* Fold/unfold glyphs (▸ ▾) — same size and width across section headers,
+   group rows, and the spacer placeholder so every arrow lines up vertically
+   regardless of nesting depth. Bold + bumped font-size makes them easy to
+   target by eye. */
 .pivot-fold-btn {
   background: transparent;
   border: 0;
   color: #52525b;
   cursor: pointer;
-  font-size: 11px;
-  width: 18px;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  width: 22px;
   text-align: center;
   padding: 0;
 }
 
 .pivot-fold-btn--section {
   color: inherit;
-  font-size: 12px;
 }
 
 .pivot-fold-spacer {
   display: inline-block;
-  width: 18px;
+  width: 22px;
 }
 
 .pivot-swatch {
@@ -2663,6 +2692,16 @@ code {
 .pivot-value-cell--total {
   background: #f8fafc;
   font-weight: 500;
+}
+
+/* Sign-colored cells in the Metrics section. Default (zero) keeps the inherited
+   text color so the row reads neutral when nothing happened that period. */
+.pivot-value-cell--positive {
+  color: #16a34a;
+}
+
+.pivot-value-cell--negative {
+  color: #dc2626;
 }
 
 .pivot-row--uncat .pivot-name-text {
@@ -2790,6 +2829,14 @@ code {
 
   .pivot-row--group:hover td {
     background: #2a2a30;
+  }
+
+  .pivot-value-cell--positive {
+    color: #4ade80;
+  }
+
+  .pivot-value-cell--negative {
+    color: #f87171;
   }
 
   .confirm-inline-text {
