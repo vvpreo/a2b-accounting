@@ -53,10 +53,27 @@ pub struct SectionData {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct BalanceMetrics {
+    /// Per-period sum of opening balances across the selected accounts. The
+    /// opening balance for a period is the running balance JUST BEFORE the
+    /// first transaction of that period in each account (i.e. the closing
+    /// balance carried over from the previous period; zero if the account
+    /// had no prior activity).
+    pub opening: Vec<String>,
+    /// Per-period sum of closing balances across the selected accounts. The
+    /// closing balance for a period is the running balance AFTER the last
+    /// transaction of that period in each account (which equals the opening
+    /// balance if the account had no transactions in that period).
+    pub closing: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReportResponse {
     pub periods: Vec<PeriodColumn>,
     pub expense: SectionData,
     pub income: SectionData,
+    pub balances: BalanceMetrics,
 }
 
 // ---------- Pure helpers (covered by unit tests) ----------
@@ -102,6 +119,75 @@ fn period_key(date: NaiveDate, gran: Granularity) -> String {
         }
         Granularity::Month => format!("{}-{:02}", date.year(), date.month()),
     }
+}
+
+fn last_day_of_month(y: i32, m: u32) -> NaiveDate {
+    let next = if m == 12 {
+        NaiveDate::from_ymd_opt(y + 1, 1, 1)
+    } else {
+        NaiveDate::from_ymd_opt(y, m + 1, 1)
+    };
+    next.unwrap().pred_opt().unwrap()
+}
+
+/// Per-period (start_date, end_date) inclusive bounds for the same enumeration
+/// used by `enumerate_periods`. Used by the balance metric pipeline to find the
+/// running balance just-before each period start and at each period end.
+fn period_bounds(from: NaiveDate, to: NaiveDate, gran: Granularity) -> Vec<(NaiveDate, NaiveDate)> {
+    if to < from {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    match gran {
+        Granularity::Year => {
+            for y in from.year()..=to.year() {
+                let start = NaiveDate::from_ymd_opt(y, 1, 1).unwrap();
+                let end = NaiveDate::from_ymd_opt(y, 12, 31).unwrap();
+                out.push((start, end));
+            }
+        }
+        Granularity::Quarter => {
+            let mut y = from.year();
+            let mut q = (from.month() - 1) / 3 + 1;
+            let to_y = to.year();
+            let to_q = (to.month() - 1) / 3 + 1;
+            loop {
+                let start_m = (q - 1) * 3 + 1;
+                let end_m = start_m + 2;
+                let start = NaiveDate::from_ymd_opt(y, start_m, 1).unwrap();
+                let end = last_day_of_month(y, end_m);
+                out.push((start, end));
+                if y == to_y && q == to_q {
+                    break;
+                }
+                q += 1;
+                if q > 4 {
+                    q = 1;
+                    y += 1;
+                }
+            }
+        }
+        Granularity::Month => {
+            let mut y = from.year();
+            let mut m = from.month();
+            let to_y = to.year();
+            let to_m = to.month();
+            loop {
+                let start = NaiveDate::from_ymd_opt(y, m, 1).unwrap();
+                let end = last_day_of_month(y, m);
+                out.push((start, end));
+                if y == to_y && m == to_m {
+                    break;
+                }
+                m += 1;
+                if m > 12 {
+                    m = 1;
+                    y += 1;
+                }
+            }
+        }
+    }
+    out
 }
 
 fn enumerate_periods(from: NaiveDate, to: NaiveDate, gran: Granularity) -> Vec<String> {
@@ -317,6 +403,133 @@ fn load_transactions(
         .map_err(|e| e.to_string())
 }
 
+#[derive(Debug, Clone)]
+struct BalanceTxn {
+    account_id: i64,
+    local_date: NaiveDate,
+    occurred_at_utc: String,
+    id: i64,
+    balance: i64,
+}
+
+/// Load every transaction for `account_ids` whose local date is on or before
+/// `to_local`, with its running `balance` field. Includes correcting
+/// transactions because they participate in the actual balance chain (we want
+/// the same number the bank shows, not a synthetic income/expense view).
+/// Returns rows sorted by (account_id, local_date, occurred_at_utc, id).
+fn load_balance_history(
+    conn: &Connection,
+    account_ids: &[i64],
+    to_local: NaiveDate,
+) -> Result<Vec<BalanceTxn>, String> {
+    if account_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Use a generous UTC ceiling — `to_local + 1 day` UTC catches anything that
+    // could possibly be on or before `to_local` once the per-batch tz offset is
+    // applied. We re-filter by local_date in Rust below.
+    let utc_hi = format!(
+        "{}T23:59:59.999Z",
+        to_local.succ_opt().unwrap_or(to_local)
+    );
+    let placeholders: Vec<String> = (1..=account_ids.len())
+        .map(|i| format!("?{}", i + 1))
+        .collect();
+    let sql = format!(
+        "SELECT t.id, t.account_id, t.occurred_at_utc, ib.timezone_offset, t.balance
+         FROM transactions t
+         JOIN import_batches ib ON ib.id = t.import_batch_id
+         WHERE t.occurred_at_utc <= ?1
+           AND t.account_id IN ({})",
+        placeholders.join(",")
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(utc_hi)];
+    for id in account_ids {
+        params_vec.push(Box::new(*id));
+    }
+    let params_refs: Vec<&dyn rusqlite::ToSql> =
+        params_vec.iter().map(|b| b.as_ref()).collect();
+    let mut rows = stmt
+        .query(params_refs.as_slice())
+        .map_err(|e| e.to_string())?;
+    let mut out: Vec<BalanceTxn> = Vec::new();
+    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        let id: i64 = row.get(0).map_err(|e| e.to_string())?;
+        let account_id: i64 = row.get(1).map_err(|e| e.to_string())?;
+        let utc: String = row.get(2).map_err(|e| e.to_string())?;
+        let tz: String = row.get(3).map_err(|e| e.to_string())?;
+        let balance: i64 = row.get(4).map_err(|e| e.to_string())?;
+        let local = local_date(&utc, &tz)?;
+        if local > to_local {
+            continue;
+        }
+        out.push(BalanceTxn {
+            account_id,
+            local_date: local,
+            occurred_at_utc: utc,
+            id,
+            balance,
+        });
+    }
+    out.sort_by(|a, b| {
+        a.account_id
+            .cmp(&b.account_id)
+            .then(a.local_date.cmp(&b.local_date))
+            .then(a.occurred_at_utc.cmp(&b.occurred_at_utc))
+            .then(a.id.cmp(&b.id))
+    });
+    Ok(out)
+}
+
+/// Walk per-account history once, snapshotting the running balance just
+/// before each period start (opening) and at each period end (closing). The
+/// returned vectors are summed across all selected accounts — currencies are
+/// added 1:1, matching the existing income/expense aggregation behavior
+/// (mixed_currency_accounts_sum_one_to_one test).
+fn compute_balance_metrics(
+    history: &[BalanceTxn],
+    bounds: &[(NaiveDate, NaiveDate)],
+) -> (Vec<i64>, Vec<i64>) {
+    let n_periods = bounds.len();
+    let mut opening = vec![0_i64; n_periods];
+    let mut closing = vec![0_i64; n_periods];
+    if n_periods == 0 {
+        return (opening, closing);
+    }
+    // History is sorted by account_id, so accumulate per-account runs by
+    // detecting account boundaries in the slice.
+    let mut start = 0;
+    while start < history.len() {
+        let acc = history[start].account_id;
+        let mut end = start + 1;
+        while end < history.len() && history[end].account_id == acc {
+            end += 1;
+        }
+        let txns = &history[start..end];
+        let mut cursor = 0;
+        let mut last_balance = 0_i64;
+        for (i, (p_start, p_end)) in bounds.iter().enumerate() {
+            // Advance the cursor past every txn dated strictly before this
+            // period start; that gives us the opening balance.
+            while cursor < txns.len() && txns[cursor].local_date < *p_start {
+                last_balance = txns[cursor].balance;
+                cursor += 1;
+            }
+            opening[i] += last_balance;
+            // Then advance past every txn dated on or before this period end;
+            // the last one we touch holds the closing balance.
+            while cursor < txns.len() && txns[cursor].local_date <= *p_end {
+                last_balance = txns[cursor].balance;
+                cursor += 1;
+            }
+            closing[i] += last_balance;
+        }
+        start = end;
+    }
+    (opening, closing)
+}
+
 fn load_shares(conn: &Connection, txn_ids: &[i64]) -> Result<Vec<ShareRow>, String> {
     if txn_ids.is_empty() {
         return Ok(Vec::new());
@@ -508,10 +721,23 @@ pub(crate) fn compute_report_inner(
         n_periods,
     );
 
+    // Balance metrics walk a separate query — they need pre-range history (to
+    // know the running balance entering the first period), and they include
+    // correcting transactions, so they can't ride the existing income/expense
+    // pipeline.
+    let bounds = period_bounds(from, to, gran);
+    let history = load_balance_history(conn, &req.account_ids, to)?;
+    let (opening_minor, closing_minor) = compute_balance_metrics(&history, &bounds);
+    let balances = BalanceMetrics {
+        opening: opening_minor.iter().copied().map(format_minor).collect(),
+        closing: closing_minor.iter().copied().map(format_minor).collect(),
+    };
+
     Ok(ReportResponse {
         periods,
         expense: expense_section,
         income: income_section,
+        balances,
     })
 }
 
@@ -1082,5 +1308,179 @@ mod tests {
             &req(&[], &[], &[], "2026-04-01", "2026-04-30", "decade"),
         );
         assert!(bad.is_err());
+    }
+
+    // ---------- Balance metric tests ----------
+
+    fn insert_txn_with_balance(
+        f: &Fixture,
+        occurred_at: &str,
+        credit: i64,
+        debit: i64,
+        balance: i64,
+        is_correcting: bool,
+    ) -> i64 {
+        f.conn
+            .query_row(
+                "INSERT INTO transactions
+                 (account_id, import_batch_id, occurred_at_utc, credit, debit, balance, is_correcting)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id",
+                params![
+                    f.account_id,
+                    f.batch_id,
+                    occurred_at,
+                    credit,
+                    debit,
+                    balance,
+                    if is_correcting { 1 } else { 0 }
+                ],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn period_bounds_year_quarter_month() {
+        let from = NaiveDate::from_ymd_opt(2026, 2, 15).unwrap();
+        let to = NaiveDate::from_ymd_opt(2026, 5, 10).unwrap();
+        assert_eq!(
+            period_bounds(from, to, Granularity::Month),
+            vec![
+                (NaiveDate::from_ymd_opt(2026, 2, 1).unwrap(), NaiveDate::from_ymd_opt(2026, 2, 28).unwrap()),
+                (NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(), NaiveDate::from_ymd_opt(2026, 3, 31).unwrap()),
+                (NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(), NaiveDate::from_ymd_opt(2026, 4, 30).unwrap()),
+                (NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(), NaiveDate::from_ymd_opt(2026, 5, 31).unwrap()),
+            ]
+        );
+        assert_eq!(
+            period_bounds(from, to, Granularity::Quarter),
+            vec![
+                (NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(), NaiveDate::from_ymd_opt(2026, 3, 31).unwrap()),
+                (NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(), NaiveDate::from_ymd_opt(2026, 6, 30).unwrap()),
+            ]
+        );
+        assert_eq!(
+            period_bounds(from, to, Granularity::Year),
+            vec![(
+                NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 12, 31).unwrap()
+            )]
+        );
+    }
+
+    #[test]
+    fn balance_metrics_running_balance_per_period() {
+        let f = open_fixture("RUB");
+        // Activity: Apr 5 → 1000.00, Apr 20 → 1500.00, May 10 → 1200.00.
+        // Reporting Apr–Jun monthly with no prior history:
+        //   Apr opening = 0, closing = 1500.00
+        //   May opening = 1500.00, closing = 1200.00
+        //   Jun opening = closing = 1200.00 (no activity carries forward)
+        insert_txn_with_balance(&f, "2026-04-05T10:00:00Z", 1000_00, 0, 1000_00, false);
+        insert_txn_with_balance(&f, "2026-04-20T10:00:00Z", 500_00, 0, 1500_00, false);
+        insert_txn_with_balance(&f, "2026-05-10T10:00:00Z", 0, 300_00, 1200_00, false);
+
+        let resp = compute_report_inner(
+            &f.conn,
+            &req(&[f.account_id], &[], &[], "2026-04-01", "2026-06-30", "month"),
+        )
+        .unwrap();
+        assert_eq!(resp.balances.opening, vec!["0.00", "1500.00", "1200.00"]);
+        assert_eq!(resp.balances.closing, vec!["1500.00", "1200.00", "1200.00"]);
+    }
+
+    #[test]
+    fn balance_metrics_carries_forward_from_pre_range_history() {
+        let f = open_fixture("RUB");
+        // A txn before the report range establishes the baseline; the first
+        // period's opening must reflect that balance, not zero.
+        insert_txn_with_balance(&f, "2026-01-15T10:00:00Z", 5000_00, 0, 5000_00, false);
+        insert_txn_with_balance(&f, "2026-04-05T10:00:00Z", 0, 200_00, 4800_00, false);
+
+        let resp = compute_report_inner(
+            &f.conn,
+            &req(&[f.account_id], &[], &[], "2026-04-01", "2026-04-30", "month"),
+        )
+        .unwrap();
+        assert_eq!(resp.balances.opening, vec!["5000.00"]);
+        assert_eq!(resp.balances.closing, vec!["4800.00"]);
+    }
+
+    #[test]
+    fn balance_metrics_sum_across_accounts() {
+        let f = open_fixture("RUB");
+        let other_acc: i64 = f
+            .conn
+            .query_row(
+                "INSERT INTO accounts (bank, currency, account_number, owner_name)
+                 VALUES ('Other', 'RUB', '99', 'A') RETURNING id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let other_batch: i64 = f
+            .conn
+            .query_row(
+                "INSERT INTO import_batches (account_id, imported_at, source_filename, row_count, timezone_offset)
+                 VALUES (?1, '2026-04-01T10:00:00Z', NULL, 0, '+00:00') RETURNING id",
+                [other_acc],
+                |r| r.get(0),
+            )
+            .unwrap();
+        // Account A: 1000 → 1500 in April.
+        insert_txn_with_balance(&f, "2026-04-10T10:00:00Z", 1000_00, 0, 1000_00, false);
+        insert_txn_with_balance(&f, "2026-04-25T10:00:00Z", 500_00, 0, 1500_00, false);
+        // Account B (other_acc): pre-range 200, then April activity.
+        f.conn
+            .execute(
+                "INSERT INTO transactions (account_id, import_batch_id, occurred_at_utc, credit, debit, balance)
+                 VALUES (?1, ?2, '2026-03-15T10:00:00Z', 200_00, 0, 200_00),
+                        (?1, ?2, '2026-04-12T10:00:00Z', 100_00, 0, 300_00)",
+                params![other_acc, other_batch],
+            )
+            .unwrap();
+
+        let resp = compute_report_inner(
+            &f.conn,
+            &req(&[f.account_id, other_acc], &[], &[], "2026-04-01", "2026-04-30", "month"),
+        )
+        .unwrap();
+        // Opening: A=0, B=200 → 200
+        // Closing: A=1500, B=300 → 1800
+        assert_eq!(resp.balances.opening, vec!["200.00"]);
+        assert_eq!(resp.balances.closing, vec!["1800.00"]);
+    }
+
+    #[test]
+    fn balance_metrics_includes_correcting_transactions() {
+        // Correcting txns are skipped by the income/expense aggregation but
+        // they DO move the bank balance, so the metric must include them.
+        let f = open_fixture("RUB");
+        insert_txn_with_balance(&f, "2026-04-10T10:00:00Z", 1000_00, 0, 1000_00, false);
+        // Correcting entry on Apr 20 jumps balance from 1000 to 950.
+        insert_txn_with_balance(&f, "2026-04-20T10:00:00Z", 0, 50_00, 950_00, true);
+
+        let resp = compute_report_inner(
+            &f.conn,
+            &req(&[f.account_id], &[], &[], "2026-04-01", "2026-04-30", "month"),
+        )
+        .unwrap();
+        assert_eq!(resp.balances.closing, vec!["950.00"]);
+    }
+
+    #[test]
+    fn balance_metrics_empty_when_no_accounts_selected() {
+        let f = open_fixture("RUB");
+        insert_txn_with_balance(&f, "2026-04-10T10:00:00Z", 100_00, 0, 100_00, false);
+
+        let resp = compute_report_inner(
+            &f.conn,
+            &req(&[], &[], &[], "2026-04-01", "2026-04-30", "month"),
+        )
+        .unwrap();
+        // Empty account selection produces zero balances, mirroring how the
+        // income/expense pipeline treats it.
+        assert_eq!(resp.balances.opening, vec!["0.00"]);
+        assert_eq!(resp.balances.closing, vec!["0.00"]);
     }
 }

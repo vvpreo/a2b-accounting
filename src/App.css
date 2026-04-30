@@ -2815,6 +2815,60 @@ code {
   background: #ececef;
 }
 
+/* Gear icon next to section title — opens the metrics-visibility modal.
+   Lives inside the section header cell, so we hard-stop click propagation in
+   JS to keep its click from also toggling the section fold. */
+.pivot-section-settings-btn {
+  margin-left: 8px;
+  padding: 0 4px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.6;
+  border-radius: 4px;
+}
+
+.pivot-section-settings-btn:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.06);
+}
+
+/* Metrics-visibility modal — narrower than the categories picker; just a
+   four-row checkbox list. */
+.metrics-settings-modal {
+  width: 360px;
+  max-width: 90vw;
+}
+
+.metrics-settings-modal-body {
+  padding: 12px 16px;
+}
+
+.metrics-settings-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.metrics-settings-row label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.metrics-settings-row label:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
 @media (prefers-color-scheme: dark) {
   .builder-section,
   .builder-defaults,
@@ -2889,6 +2943,14 @@ code {
 
   .pivot-name-cell--section:hover {
     background: #353541;
+  }
+
+  .pivot-section-settings-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .metrics-settings-row label:hover {
+    background: rgba(255, 255, 255, 0.06);
   }
 
   .pivot-row--group td {

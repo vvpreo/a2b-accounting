@@ -1,15 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { useT } from "../i18n";
 import {
   Account,
+  ALL_METRIC_KEYS,
+  BalanceMetrics,
   Category,
   computeReport,
   firstTransactionDate,
   Granularity,
   listAccounts,
   listCategories,
+  MetricKey,
   RangePreset,
   ReportConfig,
   ReportRange,
@@ -36,7 +40,22 @@ const DEFAULT_CONFIG: ReportConfig = {
   defaultGranularity: "month",
   expandedCategoryIds: [],
   showTotalColumn: true,
+  visibleMetrics: ALL_METRIC_KEYS,
 };
+
+// Sanitize the persisted set: drop unknown keys, dedupe, preserve canonical
+// rendering order. Older configs without the field default to all metrics
+// visible — that's the most discoverable behavior for users opening a
+// pre-existing report after this feature ships.
+function normalizeVisibleMetrics(raw: MetricKey[] | undefined): MetricKey[] {
+  if (!raw) return [...ALL_METRIC_KEYS];
+  const allowed = new Set<MetricKey>(ALL_METRIC_KEYS);
+  const seen = new Set<MetricKey>();
+  for (const key of raw) {
+    if (allowed.has(key)) seen.add(key);
+  }
+  return ALL_METRIC_KEYS.filter((k) => seen.has(k));
+}
 
 const PRESETS: RangePreset[] = [
   "current_month",
@@ -154,6 +173,9 @@ export function ReportViewPage({ view, onSaved }: Props) {
   const [range, setRange] = useState<ReportRange>(initialConfig.defaultRange);
   const [granularity, setGranularity] = useState<Granularity>(initialConfig.defaultGranularity);
   const [showTotal, setShowTotal] = useState(initialConfig.showTotalColumn ?? true);
+  const [visibleMetrics, setVisibleMetrics] = useState<MetricKey[]>(() =>
+    normalizeVisibleMetrics(initialConfig.visibleMetrics),
+  );
   const [expenseOrder, setExpenseOrder] = useState<number[]>([]);
   const [expenseSelected, setExpenseSelected] = useState<Set<number>>(new Set());
   const [incomeOrder, setIncomeOrder] = useState<number[]>([]);
@@ -168,6 +190,9 @@ export function ReportViewPage({ view, onSaved }: Props) {
   // Toggles the combined categories picker modal. The modal owns local
   // copies of all four selection pieces — committed back on Save only.
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Toggles the metrics-visibility settings modal opened from the section
+  // header's gear icon.
+  const [metricsSettingsOpen, setMetricsSettingsOpen] = useState(false);
 
   const [response, setResponse] = useState<ReportResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -235,6 +260,7 @@ export function ReportViewPage({ view, onSaved }: Props) {
     setRange(initialConfig.defaultRange);
     setGranularity(initialConfig.defaultGranularity);
     setShowTotal(initialConfig.showTotalColumn ?? true);
+    setVisibleMetrics(normalizeVisibleMetrics(initialConfig.visibleMetrics));
     setExpenseOrder(
       computeInitialOrder(
         expCats,
@@ -320,6 +346,7 @@ export function ReportViewPage({ view, onSaved }: Props) {
         defaultGranularity: granularity,
         expandedCategoryIds: initialConfig.expandedCategoryIds,
         showTotalColumn: showTotal,
+        visibleMetrics,
       };
       lastSavedRef.current = { name, payload: JSON.stringify(config) };
       return;
@@ -375,6 +402,7 @@ export function ReportViewPage({ view, onSaved }: Props) {
     range,
     granularity,
     showTotal,
+    visibleMetrics,
     expenseOrder,
     expenseSelected,
     incomeOrder,
@@ -550,6 +578,19 @@ export function ReportViewPage({ view, onSaved }: Props) {
           response={response}
           initialExpanded={initialConfig.expandedCategoryIds}
           showTotal={showTotal}
+          visibleMetrics={visibleMetrics}
+          onOpenMetricsSettings={() => setMetricsSettingsOpen(true)}
+        />
+      )}
+
+      {metricsSettingsOpen && (
+        <MetricsSettingsModal
+          initial={visibleMetrics}
+          onCancel={() => setMetricsSettingsOpen(false)}
+          onSave={(next) => {
+            setVisibleMetrics(next);
+            setMetricsSettingsOpen(false);
+          }}
         />
       )}
     </section>
@@ -560,11 +601,19 @@ interface PivotProps {
   response: ReportResponse;
   initialExpanded: number[];
   showTotal: boolean;
+  visibleMetrics: MetricKey[];
+  onOpenMetricsSettings: () => void;
 }
 
-function PivotTable({ response, initialExpanded, showTotal }: PivotProps) {
+function PivotTable({
+  response,
+  initialExpanded,
+  showTotal,
+  visibleMetrics,
+  onOpenMetricsSettings,
+}: PivotProps) {
   const t = useT();
-  const { periods, expense, income } = response;
+  const { periods, expense, income, balances } = response;
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
   const [incomeCollapsed, setIncomeCollapsed] = useState(false);
   const [expenseCollapsed, setExpenseCollapsed] = useState(false);
@@ -642,15 +691,25 @@ function PivotTable({ response, initialExpanded, showTotal }: PivotProps) {
     periods,
     income,
     expense,
+    balances,
+    visibleMetrics,
     sectionTitle: t("report.sectionMetrics"),
     netLabel: t("report.metricNet"),
     cumulativeLabel: t("report.metricNetCumulative"),
+    openingLabel: t("report.metricOpeningBalance"),
+    closingLabel: t("report.metricClosingBalance"),
+    settingsLabel: t("report.metricsSettings"),
+    onOpenSettings: onOpenMetricsSettings,
     showTotal,
     sectionCollapsed: metricsCollapsed,
     onToggleSection: () => setMetricsCollapsed((v) => !v),
     foldLabel: t("report.fold"),
     unfoldLabel: t("report.unfold"),
   });
+
+  // Hide the metrics section entirely when the user has unticked every
+  // metric — there's nothing to show, just the empty header would be noise.
+  const showMetrics = visibleMetrics.length > 0;
 
   return (
     <div className="pivot-wrap">
@@ -671,7 +730,7 @@ function PivotTable({ response, initialExpanded, showTotal }: PivotProps) {
         <tbody>
           {income.rows.length > 0 && incomeRows}
           {expense.rows.length > 0 && expenseRows}
-          {metricsRows}
+          {showMetrics && metricsRows}
         </tbody>
       </table>
     </div>
@@ -993,9 +1052,22 @@ interface RenderMetricsArgs {
   periods: ReportResponse["periods"];
   income: SectionData;
   expense: SectionData;
+  // Backend-provided per-period running balances. Already aggregated across
+  // selected accounts and currency-summed 1:1; rendered straight through.
+  balances: BalanceMetrics;
+  // Subset of metric keys (in canonical order) the user wants to see. Order
+  // here is informational — the renderer follows ALL_METRIC_KEYS for stable
+  // visual ordering regardless of selection order.
+  visibleMetrics: MetricKey[];
   sectionTitle: string;
   netLabel: string;
   cumulativeLabel: string;
+  openingLabel: string;
+  closingLabel: string;
+  // Tooltip + aria-label for the gear icon in the section header that opens
+  // the metrics-visibility modal.
+  settingsLabel: string;
+  onOpenSettings: () => void;
   showTotal: boolean;
   sectionCollapsed: boolean;
   onToggleSection: () => void;
@@ -1026,9 +1098,15 @@ function renderMetricsSection({
   periods,
   income,
   expense,
+  balances,
+  visibleMetrics,
   sectionTitle,
   netLabel,
   cumulativeLabel,
+  openingLabel,
+  closingLabel,
+  settingsLabel,
+  onOpenSettings,
   showTotal,
   sectionCollapsed,
   onToggleSection,
@@ -1052,6 +1130,21 @@ function renderMetricsSection({
     cumulativePerPeriod.push(acc);
   }
   const cumulativeTotal = acc;
+
+  // Balances arrive as money strings (formatted server-side); convert back to
+  // minor for the existing sign-class + formatter pipeline. Total column for
+  // these two metrics is "first opening" / "last closing" — the deltas
+  // bracketing the entire range, not a sum.
+  const openingPerPeriod = balances.opening.map(
+    (s) => parseMoneyToMinor(s) ?? 0,
+  );
+  const closingPerPeriod = balances.closing.map(
+    (s) => parseMoneyToMinor(s) ?? 0,
+  );
+  const openingTotal = openingPerPeriod[0] ?? 0;
+  const closingTotal = closingPerPeriod[closingPerPeriod.length - 1] ?? 0;
+
+  const visibleSet = new Set(visibleMetrics);
 
   const renderRow = (
     key: string,
@@ -1080,7 +1173,9 @@ function renderMetricsSection({
   );
 
   // Section header doubles as the fold toggle, mirroring the income/expense
-  // headers so the metric block reads as the same kind of section.
+  // headers so the metric block reads as the same kind of section. The gear
+  // icon sits inside the title cell — clicking it opens the visibility modal
+  // but must not also toggle the section fold (stopPropagation).
   const out: React.ReactElement[] = [
     <tr key="header-metrics" className="pivot-row pivot-row--section">
       <td
@@ -1092,6 +1187,18 @@ function renderMetricsSection({
           {sectionCollapsed ? "▸" : "▾"}
         </span>
         <span className="pivot-name-text">{sectionTitle}</span>
+        <button
+          type="button"
+          className="pivot-section-settings-btn"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenSettings();
+          }}
+          aria-label={settingsLabel}
+          title={settingsLabel}
+        >
+          ⚙
+        </button>
       </td>
       {periods.map((_, idx) => (
         <td key={idx} className="pivot-value-cell" />
@@ -1100,15 +1207,127 @@ function renderMetricsSection({
     </tr>,
   ];
   if (!sectionCollapsed) {
-    out.push(renderRow("metric-net", netLabel, netPerPeriod, netTotal));
-    out.push(
-      renderRow(
-        "metric-cumulative",
-        cumulativeLabel,
-        cumulativePerPeriod,
-        cumulativeTotal,
-      ),
-    );
+    if (visibleSet.has("net")) {
+      out.push(renderRow("metric-net", netLabel, netPerPeriod, netTotal));
+    }
+    if (visibleSet.has("cumulative")) {
+      out.push(
+        renderRow(
+          "metric-cumulative",
+          cumulativeLabel,
+          cumulativePerPeriod,
+          cumulativeTotal,
+        ),
+      );
+    }
+    if (visibleSet.has("opening")) {
+      out.push(
+        renderRow("metric-opening", openingLabel, openingPerPeriod, openingTotal),
+      );
+    }
+    if (visibleSet.has("closing")) {
+      out.push(
+        renderRow("metric-closing", closingLabel, closingPerPeriod, closingTotal),
+      );
+    }
   }
   return out;
+}
+
+// ---------------------------------------------------------------
+// Metrics visibility modal
+// ---------------------------------------------------------------
+
+const METRIC_LABEL_KEYS: Record<MetricKey, string> = {
+  net: "report.metricNet",
+  cumulative: "report.metricNetCumulative",
+  opening: "report.metricOpeningBalance",
+  closing: "report.metricClosingBalance",
+};
+
+interface MetricsSettingsModalProps {
+  initial: MetricKey[];
+  onCancel: () => void;
+  onSave: (next: MetricKey[]) => void;
+}
+
+// Modal hosts a checkbox per metric. Edits live locally — only Save commits
+// upstream, mirroring the categories picker pattern. ESC + backdrop click
+// dismiss without saving.
+function MetricsSettingsModal({
+  initial,
+  onCancel,
+  onSave,
+}: MetricsSettingsModalProps) {
+  const t = useT();
+  const [selected, setSelected] = useState<Set<MetricKey>>(new Set(initial));
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") onCancel();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onCancel]);
+
+  function toggle(key: MetricKey) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  return createPortal(
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div
+        className="modal metrics-settings-modal"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="modal-header">
+          <h3>{t("report.metricsSettingsTitle")}</h3>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={onCancel}
+            aria-label={t("common.close")}
+          >
+            ×
+          </button>
+        </header>
+        <div className="modal-body metrics-settings-modal-body">
+          <ul className="metrics-settings-list">
+            {ALL_METRIC_KEYS.map((key) => (
+              <li key={key} className="metrics-settings-row">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={selected.has(key)}
+                    onChange={() => toggle(key)}
+                  />
+                  <span>{t(METRIC_LABEL_KEYS[key])}</span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <footer className="modal-footer">
+          <button type="button" className="btn-ghost" onClick={onCancel}>
+            {t("common.cancel")}
+          </button>
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={() =>
+              onSave(ALL_METRIC_KEYS.filter((k) => selected.has(k)))
+            }
+          >
+            {t("common.save")}
+          </button>
+        </footer>
+      </div>
+    </div>,
+    document.body,
+  );
 }

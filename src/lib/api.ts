@@ -276,6 +276,18 @@ export type ReportRange =
   | { kind: "preset"; preset: Exclude<RangePreset, "custom"> }
   | { kind: "custom"; from: string; to: string };
 
+// Metric rows the user can toggle on/off in the report's "Метрики" section.
+// Persisted in ReportConfig.visibleMetrics; missing field falls back to all
+// four enabled (matching the default UX for both new and legacy reports).
+export type MetricKey = "net" | "cumulative" | "opening" | "closing";
+
+export const ALL_METRIC_KEYS: MetricKey[] = [
+  "net",
+  "cumulative",
+  "opening",
+  "closing",
+];
+
 export interface ReportConfig {
   version: 1;
   accountIds: number[];
@@ -297,6 +309,9 @@ export interface ReportConfig {
   // Persisted runtime preference: hide/show the trailing "Итого" column.
   // Optional for backwards compatibility with older saved configs.
   showTotalColumn?: boolean;
+  // Subset of MetricKey values to render in the "Метрики" section. When
+  // omitted (older configs), the renderer falls back to ALL_METRIC_KEYS.
+  visibleMetrics?: MetricKey[];
 }
 
 export interface ReportView {
@@ -348,10 +363,18 @@ export interface SectionData {
   total: string[];
 }
 
+export interface BalanceMetrics {
+  // Per-period sum of opening balances across selected accounts. Each value is
+  // a money string (same format as ReportRow.values).
+  opening: string[];
+  closing: string[];
+}
+
 export interface ReportResponse {
   periods: PeriodColumn[];
   expense: SectionData;
   income: SectionData;
+  balances: BalanceMetrics;
 }
 
 export function computeReport(request: ReportRequest): Promise<ReportResponse> {
