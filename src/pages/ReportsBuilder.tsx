@@ -11,18 +11,15 @@ import {
   ReportConfig,
   ReportRange,
   ReportView,
-  createReportView,
-  deleteReportView,
   listAccounts,
   listCategories,
   updateReportView,
 } from "../lib/api";
 
 interface Props {
-  editId: number | null;
-  reportViews: ReportView[];
+  view: ReportView;
   onSaved: (view: ReportView) => void;
-  onDeleted: () => void;
+  onCancel: () => void;
 }
 
 const PRESETS: RangePreset[] = [
@@ -100,13 +97,8 @@ function computeInitialOrder(cats: Category[], savedOrder?: number[]): number[] 
   return out;
 }
 
-export function ReportsBuilderPage({ editId, reportViews, onSaved, onDeleted }: Props) {
+export function ReportsBuilderPage({ view, onSaved, onCancel }: Props) {
   const t = useT();
-
-  const editing = useMemo(
-    () => (editId != null ? reportViews.find((v) => v.id === editId) ?? null : null),
-    [editId, reportViews],
-  );
 
   const [name, setName] = useState("");
   const [accountIds, setAccountIds] = useState<number[]>([]);
@@ -122,12 +114,10 @@ export function ReportsBuilderPage({ editId, reportViews, onSaved, onDeleted }: 
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [deleting, setDeleting] = useState(false);
 
   const initialExpandedIds = useMemo(
-    () => (editing ? safeParseConfig(editing.config).expandedCategoryIds : []),
-    [editing],
+    () => safeParseConfig(view.config).expandedCategoryIds,
+    [view.config],
   );
 
   useEffect(() => {
@@ -140,39 +130,26 @@ export function ReportsBuilderPage({ editId, reportViews, onSaved, onDeleted }: 
       .catch((e) => setError(String(e)));
   }, []);
 
-  // Init/reset form whenever the editing target or the loaded category set changes.
-  // Defaults for a new report: every category checked, alphabetical sibling order.
+  // Reset form whenever the editing target or the loaded category set changes.
   useEffect(() => {
     if (!loaded) return;
     const expCats = categories.filter((c) => c.kind === "expense");
     const incCats = categories.filter((c) => c.kind === "income");
-    if (editing) {
-      const cfg = safeParseConfig(editing.config);
-      setName(editing.name);
-      setAccountIds(cfg.accountIds);
-      setExpenseOrder(
-        computeInitialOrder(expCats, cfg.expenseCategoryOrder ?? cfg.expenseCategoryIds),
-      );
-      setExpenseSelected(new Set(cfg.expenseCategoryIds));
-      setIncomeOrder(
-        computeInitialOrder(incCats, cfg.incomeCategoryOrder ?? cfg.incomeCategoryIds),
-      );
-      setIncomeSelected(new Set(cfg.incomeCategoryIds));
-      setRange(cfg.defaultRange);
-      setGranularity(cfg.defaultGranularity);
-    } else {
-      setName("");
-      setAccountIds([]);
-      setExpenseOrder(computeInitialOrder(expCats));
-      setExpenseSelected(new Set(expCats.map((c) => c.id)));
-      setIncomeOrder(computeInitialOrder(incCats));
-      setIncomeSelected(new Set(incCats.map((c) => c.id)));
-      setRange({ kind: "preset", preset: "current_year" });
-      setGranularity("month");
-    }
+    const cfg = safeParseConfig(view.config);
+    setName(view.name);
+    setAccountIds(cfg.accountIds);
+    setExpenseOrder(
+      computeInitialOrder(expCats, cfg.expenseCategoryOrder ?? cfg.expenseCategoryIds),
+    );
+    setExpenseSelected(new Set(cfg.expenseCategoryIds));
+    setIncomeOrder(
+      computeInitialOrder(incCats, cfg.incomeCategoryOrder ?? cfg.incomeCategoryIds),
+    );
+    setIncomeSelected(new Set(cfg.incomeCategoryIds));
+    setRange(cfg.defaultRange);
+    setGranularity(cfg.defaultGranularity);
     setError(null);
-    setConfirmingDelete(false);
-  }, [editing, loaded, categories]);
+  }, [view, loaded, categories]);
 
   function setRangeKind(next: RangePreset) {
     if (next === "custom") {
@@ -219,10 +196,11 @@ export function ReportsBuilderPage({ editId, reportViews, onSaved, onDeleted }: 
 
     setSubmitting(true);
     try {
-      const saved =
-        editing != null
-          ? await updateReportView({ id: editing.id, name: name.trim(), config: payload })
-          : await createReportView({ name: name.trim(), config: payload });
+      const saved = await updateReportView({
+        id: view.id,
+        name: name.trim(),
+        config: payload,
+      });
       onSaved(saved);
     } catch (err) {
       setError(String(err));
@@ -231,23 +209,10 @@ export function ReportsBuilderPage({ editId, reportViews, onSaved, onDeleted }: 
     }
   }
 
-  async function onDelete() {
-    if (!editing) return;
-    setError(null);
-    setDeleting(true);
-    try {
-      await deleteReportView(editing.id);
-      onDeleted();
-    } catch (err) {
-      setError(String(err));
-      setDeleting(false);
-    }
-  }
-
   return (
     <section className="page builder-page">
       <header className="builder-header">
-        <h2>{editing ? t("builder.titleEdit") : t("builder.titleCreate")}</h2>
+        <h2>{t("builder.titleEdit")}</h2>
       </header>
 
       {error && <div className="error">{error}</div>}
@@ -355,45 +320,16 @@ export function ReportsBuilderPage({ editId, reportViews, onSaved, onDeleted }: 
 
         <div className="builder-actions">
           <button type="submit" className="btn-primary" disabled={submitting}>
-            {submitting
-              ? t("builder.saving")
-              : editing
-              ? t("builder.save")
-              : t("builder.create")}
+            {submitting ? t("builder.saving") : t("builder.save")}
           </button>
-          {editing && !confirmingDelete && (
-            <button
-              type="button"
-              className="btn-danger-ghost"
-              onClick={() => setConfirmingDelete(true)}
-              disabled={submitting || deleting}
-            >
-              {t("builder.delete")}
-            </button>
-          )}
-          {editing && confirmingDelete && (
-            <span className="confirm-inline confirm-inline--actions">
-              <span className="confirm-inline-text">
-                {t("builder.deleteConfirm", { name: editing.name })}
-              </span>
-              <button
-                type="button"
-                className="btn-danger btn-sm"
-                onClick={onDelete}
-                disabled={deleting}
-              >
-                {t("builder.deleteConfirmYes")}
-              </button>
-              <button
-                type="button"
-                className="btn-ghost btn-sm"
-                onClick={() => setConfirmingDelete(false)}
-                disabled={deleting}
-              >
-                {t("common.cancel")}
-              </button>
-            </span>
-          )}
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={onCancel}
+            disabled={submitting}
+          >
+            {t("common.cancel")}
+          </button>
         </div>
       </form>
     </section>

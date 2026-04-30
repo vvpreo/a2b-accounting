@@ -23,7 +23,7 @@ const DEMO_ACCOUNT_NUMBER: &str = "DEMO-0001";
 const DEMO_ACCOUNT_OWNER: &str = "Демо";
 const DEMO_ACCOUNT_CURRENCY: &str = "USD";
 const DEMO_ACCOUNT_TIMEZONE: &str = "+03:00";
-const DEMO_REPORT_NAME: &str = "Доходы - Расходы";
+const DEMO_REPORT_NAME: &str = "Отчёт учёта";
 
 // ---- Categories ----
 
@@ -866,6 +866,53 @@ fn insert_report_view(
     Ok(())
 }
 
+/// Idempotent: ensures the single accounting report exists. Used after every
+/// path that may leave the DB without any reports — auto-launch when the user
+/// already had data (so the demo seed was skipped) and the manual "clear all
+/// data" wipe. Picks up whatever accounts and categories currently live in the
+/// DB; if there are none yet, inserts empty arrays so the report tab still
+/// shows up and the user can populate it later via the editor.
+pub fn ensure_default_report_view(conn: &Connection) -> rusqlite::Result<()> {
+    let n: i64 = conn.query_row("SELECT COUNT(*) FROM report_views", [], |r| r.get(0))?;
+    if n > 0 {
+        return Ok(());
+    }
+
+    let account_ids: Vec<i64> = conn
+        .prepare("SELECT id FROM accounts ORDER BY id")?
+        .query_map([], |r| r.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<_>>()?;
+
+    let mut income_ids: Vec<i64> = Vec::new();
+    let mut expense_ids: Vec<i64> = Vec::new();
+    let mut stmt = conn.prepare("SELECT id, kind FROM categories ORDER BY id")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+    for row in rows {
+        let (id, kind) = row?;
+        match kind.as_str() {
+            "income" => income_ids.push(id),
+            "expense" => expense_ids.push(id),
+            _ => {}
+        }
+    }
+
+    let config = serde_json::json!({
+        "version": 1,
+        "accountIds": account_ids,
+        "expenseCategoryIds": expense_ids,
+        "incomeCategoryIds": income_ids,
+        "defaultRange": { "kind": "preset", "preset": "last_12_months", "from": null, "to": null },
+        "defaultGranularity": "month",
+        "expandedCategoryIds": []
+    });
+
+    conn.execute(
+        "INSERT INTO report_views (name, config, sort_order) VALUES (?1, ?2, 0)",
+        params![DEMO_REPORT_NAME, config.to_string()],
+    )?;
+    Ok(())
+}
+
 // ---- Public seed/wipe pipeline ----
 
 fn has_user_data(conn: &Connection) -> rusqlite::Result<bool> {
@@ -971,6 +1018,9 @@ pub fn clear_all_data(state: State<'_, DbState>) -> Result<(), String> {
     wipe(&tx).map_err(|e| e.to_string())?;
     // Keep the flag set so we don't auto-reseed next launch.
     set_flag(&tx).map_err(|e| e.to_string())?;
+    // The accounting report is the sole entry point to the report tab; recreate
+    // it (empty) so the user isn't stranded on a missing tab after a wipe.
+    ensure_default_report_view(&tx).map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }

@@ -23,7 +23,8 @@ function App() {
 
   const [reportViews, setReportViews] = useState<ReportView[]>([]);
   const [reportViewsVersion, setReportViewsVersion] = useState(0);
-  const [builderEditId, setBuilderEditId] = useState<number | null>(null);
+  // The editor lives inside the active report tab. Switching tabs discards it.
+  const [editingReport, setEditingReport] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -46,17 +47,17 @@ function App() {
   }, [reportViewsVersion]);
 
   // If the active tab points at a report view that no longer exists, fall back
-  // to the builder so the UI never shows a dangling page.
+  // to Accounts so the UI never shows a dangling page.
   useEffect(() => {
     if (tab && typeof tab !== "string" && tab.kind === "report") {
       const stillExists = reportViews.some((v) => v.id === tab.id);
-      if (!stillExists) setTab("reports_builder");
+      if (!stillExists) setTab("accounts");
     }
   }, [tab, reportViews]);
 
   function changeTab(next: Tab) {
-    // Leaving the builder discards any "edit this saved view" intent.
-    if (next !== "reports_builder") setBuilderEditId(null);
+    // Switching tabs always exits the report editor.
+    setEditingReport(false);
     setTab(next);
   }
 
@@ -67,16 +68,6 @@ function App() {
   function goToTransactions(accountIds: number[]) {
     setTxnFilterAccountIds(accountIds);
     setTab("transactions");
-  }
-
-  function openBuilderForEdit(viewId: number) {
-    setBuilderEditId(viewId);
-    setTab("reports_builder");
-  }
-
-  function openReportTab(viewId: number) {
-    setBuilderEditId(null);
-    setTab({ kind: "report", id: viewId });
   }
 
   if (tab === null) {
@@ -108,25 +99,20 @@ function App() {
         />
       )}
       {tab === "settings" && <SettingsPage />}
-      {tab === "reports_builder" && (
+      {activeReportView && editingReport && (
         <ReportsBuilderPage
-          editId={builderEditId}
-          reportViews={reportViews}
-          onSaved={(view) => {
+          view={activeReportView}
+          onSaved={() => {
             refreshReportViews();
-            openReportTab(view.id);
+            setEditingReport(false);
           }}
-          onDeleted={() => {
-            refreshReportViews();
-            setBuilderEditId(null);
-            setTab("reports_builder");
-          }}
+          onCancel={() => setEditingReport(false)}
         />
       )}
-      {activeReportView && (
+      {activeReportView && !editingReport && (
         <ReportViewPage
           view={activeReportView}
-          onEdit={() => openBuilderForEdit(activeReportView.id)}
+          onEdit={() => setEditingReport(true)}
         />
       )}
 

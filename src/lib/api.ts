@@ -301,27 +301,12 @@ export function listReportViews(): Promise<ReportView[]> {
   return invoke<ReportView[]>("list_report_views");
 }
 
-export function createReportView(args: {
-  name: string;
-  config: string;
-}): Promise<ReportView> {
-  return invoke<ReportView>("create_report_view", args);
-}
-
 export function updateReportView(args: {
   id: number;
   name: string;
   config: string;
 }): Promise<ReportView> {
   return invoke<ReportView>("update_report_view", args);
-}
-
-export function deleteReportView(id: number): Promise<void> {
-  return invoke<void>("delete_report_view", { id });
-}
-
-export function reorderReportViews(ids: number[]): Promise<void> {
-  return invoke<void>("reorder_report_views", { ids });
 }
 
 export interface ReportRequest {

@@ -54,6 +54,9 @@ pub fn run() {
             seed::seed_if_first_launch(&conn).unwrap_or_else(|e| {
                 panic!("failed to seed demo data: {e}");
             });
+            seed::ensure_default_report_view(&conn).unwrap_or_else(|e| {
+                panic!("failed to ensure accounting report: {e}");
+            });
             app.manage::<db::DbState>(Mutex::new(conn));
             DATA_DIR.set(dir).expect("data dir already initialized");
             Ok(())
