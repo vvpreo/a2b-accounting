@@ -3,7 +3,8 @@
     "categories": "Категории",
     "accounts": "Счета",
     "transactions": "Транзакции",
-    "settings": "Настройки"
+    "settings": "Настройки",
+    "reports_builder": "Конструктор отчётов"
   },
   "toolbar": {
     "createAccount": "Создать счёт",
@@ -224,7 +225,92 @@
   },
   "settings": {
     "title": "Настройки",
-    "language": "Язык интерфейса"
+    "language": "Язык интерфейса",
+    "demo": {
+      "title": "Демо-данные",
+      "hint": "Перезапишет все текущие данные демо-набором: один счёт в USD, набор категорий семейного бюджета, ~800 транзакций за 3 года и сохранённый отчёт «Бюджет за год».",
+      "button": "Загрузить демо-данные",
+      "confirm": "Все текущие счета, категории, транзакции и отчёты будут удалены безвозвратно и заменены демо-набором. Продолжить?",
+      "confirmYes": "Да, загрузить демо",
+      "loading": "Загружаю демо-данные...",
+      "errorLoading": "Не удалось загрузить демо: {message}"
+    },
+    "dangerZone": {
+      "title": "Опасная зона",
+      "hint": "Удалит все ваши счета, категории, транзакции и отчёты — навсегда. После очистки демо-данные больше не появятся автоматически.",
+      "button": "Очистить все данные",
+      "confirm": "Все ваши счета, категории, транзакции и отчёты будут удалены безвозвратно. Продолжить?",
+      "confirmYes": "Да, удалить всё",
+      "clearing": "Удаляю...",
+      "errorClearing": "Не удалось очистить данные: {message}"
+    }
+  },
+  "builder": {
+    "titleCreate": "Новый отчёт",
+    "titleEdit": "Редактирование отчёта",
+    "fieldName": "Название",
+    "fieldNamePlaceholder": "Например, «Бюджет 2026»",
+    "accountsLabel": "Счета",
+    "accountsAll": "Все счета",
+    "accountsNone": "Не выбрано",
+    "accountsEmpty": "Нет счетов",
+    "accountsMany": "Выбрано: {count}",
+    "accountsApply": "Применить",
+    "sectionExpense": "Расходы",
+    "sectionIncome": "Доходы",
+    "sectionEmpty": "Не выбрано ни одной категории.",
+    "moveUp": "Выше",
+    "moveDown": "Ниже",
+    "remove": "Убрать из отчёта",
+    "addCategory": "+ Добавить категорию",
+    "pickCategoryEmpty": "Все категории уже добавлены.",
+    "defaults": "Значения по умолчанию",
+    "defaultsHint": "Эти параметры подставляются при открытии отчёта; на самом отчёте их можно поменять.",
+    "defaultRange": "Период",
+    "defaultGranularity": "Дискретность",
+    "fromDate": "С",
+    "toDate": "По",
+    "preset": {
+      "current_month": "Текущий месяц",
+      "current_quarter": "Текущий квартал",
+      "current_year": "Текущий год",
+      "last_12_months": "Последние 12 месяцев",
+      "all_time": "За всё время",
+      "custom": "Кастомный диапазон"
+    },
+    "granularity": {
+      "year": "Год",
+      "quarter": "Квартал",
+      "month": "Месяц"
+    },
+    "save": "Сохранить",
+    "saving": "Сохраняю...",
+    "create": "Создать отчёт",
+    "delete": "Удалить отчёт",
+    "deleteConfirm": "Удалить отчёт «{name}»?",
+    "deleteConfirmYes": "Да, удалить",
+    "errorEmptyName": "Введите название отчёта.",
+    "errorNoAccounts": "Выберите хотя бы один счёт.",
+    "errorNoCategories": "Добавьте хотя бы одну категорию.",
+    "errorBadDates": "Дата «По» должна быть не раньше «С»."
+  },
+  "report": {
+    "edit": "Редактировать",
+    "rangeLabel": "Период",
+    "granularityLabel": "Дискретность",
+    "fromDate": "С",
+    "toDate": "По",
+    "sectionIncome": "Доходы",
+    "sectionExpense": "Расходы",
+    "totalIncome": "Итого доходов",
+    "totalExpense": "Итого расходов",
+    "totalColumn": "Итого",
+    "uncategorized": "Без категории",
+    "fold": "Свернуть",
+    "unfold": "Развернуть",
+    "loading": "Считаю...",
+    "errorLoading": "Не удалось построить отчёт: {message}",
+    "empty": "Нет данных за выбранный период."
   },
   "errors": {
     "missingOccurredAt": "Строка {row}: отсутствует occurred_at",

@@ -1,0 +1,1109 @@
+use std::collections::{HashMap, HashSet};
+
+use chrono::{DateTime, Datelike, FixedOffset, NaiveDate};
+use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
+use tauri::State;
+
+use crate::db::DbState;
+use crate::money::format_minor;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Granularity {
+    Year,
+    Quarter,
+    Month,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportRequest {
+    pub account_ids: Vec<i64>,
+    pub expense_category_ids: Vec<i64>,
+    pub income_category_ids: Vec<i64>,
+    pub expense_show_uncategorized: bool,
+    pub income_show_uncategorized: bool,
+    pub from: String,
+    pub to: String,
+    pub granularity: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeriodColumn {
+    pub key: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportRow {
+    pub category_id: Option<i64>,
+    pub name: String,
+    pub color: String,
+    pub depth: i32,
+    pub values: Vec<String>,
+    pub total: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SectionData {
+    pub rows: Vec<ReportRow>,
+    pub total: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportResponse {
+    pub periods: Vec<PeriodColumn>,
+    pub expense: SectionData,
+    pub income: SectionData,
+}
+
+// ---------- Pure helpers (covered by unit tests) ----------
+
+fn parse_granularity(s: &str) -> Result<Granularity, String> {
+    match s {
+        "year" => Ok(Granularity::Year),
+        "quarter" => Ok(Granularity::Quarter),
+        "month" => Ok(Granularity::Month),
+        _ => Err(format!("invalid granularity '{s}'")),
+    }
+}
+
+fn parse_iso_date(s: &str) -> Result<NaiveDate, String> {
+    NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d")
+        .map_err(|e| format!("invalid date '{s}': {e}"))
+}
+
+fn parse_offset(s: &str) -> Result<FixedOffset, String> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Ok(FixedOffset::east_opt(0).unwrap());
+    }
+    let probe = format!("2000-01-01T00:00:00{trimmed}");
+    DateTime::parse_from_rfc3339(&probe)
+        .map(|dt| *dt.offset())
+        .map_err(|e| format!("invalid timezone offset '{s}': {e}"))
+}
+
+fn local_date(occurred_at_utc: &str, tz_offset: &str) -> Result<NaiveDate, String> {
+    let dt = DateTime::parse_from_rfc3339(occurred_at_utc.trim())
+        .map_err(|e| format!("invalid timestamp '{occurred_at_utc}': {e}"))?;
+    let offset = parse_offset(tz_offset)?;
+    Ok(dt.with_timezone(&offset).date_naive())
+}
+
+fn period_key(date: NaiveDate, gran: Granularity) -> String {
+    match gran {
+        Granularity::Year => format!("{}", date.year()),
+        Granularity::Quarter => {
+            let q = (date.month() - 1) / 3 + 1;
+            format!("{}-Q{}", date.year(), q)
+        }
+        Granularity::Month => format!("{}-{:02}", date.year(), date.month()),
+    }
+}
+
+fn enumerate_periods(from: NaiveDate, to: NaiveDate, gran: Granularity) -> Vec<String> {
+    if to < from {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    match gran {
+        Granularity::Year => {
+            for y in from.year()..=to.year() {
+                out.push(format!("{}", y));
+            }
+        }
+        Granularity::Quarter => {
+            let mut y = from.year();
+            let mut q = (from.month() - 1) / 3 + 1;
+            let to_y = to.year();
+            let to_q = (to.month() - 1) / 3 + 1;
+            loop {
+                out.push(format!("{}-Q{}", y, q));
+                if y == to_y && q == to_q {
+                    break;
+                }
+                q += 1;
+                if q > 4 {
+                    q = 1;
+                    y += 1;
+                }
+            }
+        }
+        Granularity::Month => {
+            let mut y = from.year();
+            let mut m = from.month();
+            let to_y = to.year();
+            let to_m = to.month();
+            loop {
+                out.push(format!("{}-{:02}", y, m));
+                if y == to_y && m == to_m {
+                    break;
+                }
+                m += 1;
+                if m > 12 {
+                    m = 1;
+                    y += 1;
+                }
+            }
+        }
+    }
+    out
+}
+
+#[derive(Debug, Clone)]
+struct CatNode {
+    parent_id: Option<i64>,
+    name: String,
+    color: String,
+    kind: String,
+}
+
+/// Walk parent links and return the closest ancestor (or self) that is in `selected`.
+fn nearest_selected_ancestor(
+    start: i64,
+    selected: &HashSet<i64>,
+    cats: &HashMap<i64, CatNode>,
+) -> Option<i64> {
+    let mut current = Some(start);
+    while let Some(id) = current {
+        if selected.contains(&id) {
+            return Some(id);
+        }
+        current = cats.get(&id).and_then(|c| c.parent_id);
+    }
+    None
+}
+
+/// For an *unselected* category, return the closest *strict* ancestor that *is* selected.
+/// Used when deciding the displayed parent of a selected node — that parent must not be the node itself.
+fn strict_nearest_selected_ancestor(
+    start: i64,
+    selected: &HashSet<i64>,
+    cats: &HashMap<i64, CatNode>,
+) -> Option<i64> {
+    let mut current = cats.get(&start).and_then(|c| c.parent_id);
+    while let Some(id) = current {
+        if selected.contains(&id) {
+            return Some(id);
+        }
+        current = cats.get(&id).and_then(|c| c.parent_id);
+    }
+    None
+}
+
+/// Produce the ordered list of (category_id, depth) rows for a section,
+/// preserving the user-supplied order at each level.
+fn section_layout(
+    selected_ids: &[i64],
+    cats: &HashMap<i64, CatNode>,
+) -> Vec<(i64, i32)> {
+    let selected: HashSet<i64> = selected_ids.iter().copied().collect();
+    let mut children_of: HashMap<Option<i64>, Vec<i64>> = HashMap::new();
+    let mut seen: HashSet<i64> = HashSet::new();
+    for &id in selected_ids {
+        if !seen.insert(id) {
+            continue;
+        }
+        let dp = strict_nearest_selected_ancestor(id, &selected, cats);
+        children_of.entry(dp).or_default().push(id);
+    }
+
+    let mut out = Vec::new();
+    let roots = children_of.get(&None).cloned().unwrap_or_default();
+    for root in roots {
+        push_subtree(root, 0, &children_of, &mut out);
+    }
+    out
+}
+
+fn push_subtree(
+    id: i64,
+    depth: i32,
+    children_of: &HashMap<Option<i64>, Vec<i64>>,
+    out: &mut Vec<(i64, i32)>,
+) {
+    out.push((id, depth));
+    if let Some(children) = children_of.get(&Some(id)) {
+        for &child in children {
+            push_subtree(child, depth + 1, children_of, out);
+        }
+    }
+}
+
+// ---------- DB-backed pipeline ----------
+
+#[derive(Debug, Clone)]
+struct TxnRow {
+    id: i64,
+    occurred_at_utc: String,
+    timezone_offset: String,
+    credit: i64,
+    debit: i64,
+}
+
+#[derive(Debug, Clone)]
+struct ShareRow {
+    transaction_id: i64,
+    category_id: i64,
+    share_minor: i64,
+}
+
+fn load_categories(conn: &Connection) -> Result<HashMap<i64, CatNode>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id, parent_id, name, color, kind FROM categories")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                CatNode {
+                    parent_id: r.get(1)?,
+                    name: r.get(2)?,
+                    color: r.get(3)?,
+                    kind: r.get(4)?,
+                },
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    let mut out = HashMap::new();
+    for r in rows {
+        let (id, node) = r.map_err(|e| e.to_string())?;
+        out.insert(id, node);
+    }
+    Ok(out)
+}
+
+fn load_transactions(
+    conn: &Connection,
+    account_ids: &[i64],
+    from_local: NaiveDate,
+    to_local: NaiveDate,
+) -> Result<Vec<TxnRow>, String> {
+    if account_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Coarse SQL filter by UTC date string. We over-fetch by ±1 day to absorb any
+    // timezone shift, then filter precisely in Rust by local date.
+    let utc_lo = format!(
+        "{}T00:00:00.000Z",
+        from_local.pred_opt().unwrap_or(from_local)
+    );
+    let utc_hi = format!(
+        "{}T23:59:59.999Z",
+        to_local.succ_opt().unwrap_or(to_local)
+    );
+
+    let placeholders: Vec<String> = (1..=account_ids.len())
+        .map(|i| format!("?{}", i + 2))
+        .collect();
+    let sql = format!(
+        "SELECT t.id, t.occurred_at_utc, ib.timezone_offset, t.credit, t.debit
+         FROM transactions t
+         JOIN import_batches ib ON ib.id = t.import_batch_id
+         WHERE t.is_correcting = 0
+           AND t.occurred_at_utc >= ?1
+           AND t.occurred_at_utc <= ?2
+           AND t.account_id IN ({})",
+        placeholders.join(",")
+    );
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> =
+        vec![Box::new(utc_lo), Box::new(utc_hi)];
+    for id in account_ids {
+        params_vec.push(Box::new(*id));
+    }
+    let params_refs: Vec<&dyn rusqlite::ToSql> =
+        params_vec.iter().map(|b| b.as_ref()).collect();
+    let rows = stmt
+        .query_map(params_refs.as_slice(), |r| {
+            Ok(TxnRow {
+                id: r.get(0)?,
+                occurred_at_utc: r.get(1)?,
+                timezone_offset: r.get(2)?,
+                credit: r.get(3)?,
+                debit: r.get(4)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())
+}
+
+fn load_shares(conn: &Connection, txn_ids: &[i64]) -> Result<Vec<ShareRow>, String> {
+    if txn_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders: Vec<String> = (1..=txn_ids.len()).map(|i| format!("?{i}")).collect();
+    let sql = format!(
+        "SELECT transaction_id, category_id, share_minor
+         FROM transaction_categories
+         WHERE transaction_id IN ({})",
+        placeholders.join(",")
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let params_vec: Vec<Box<dyn rusqlite::ToSql>> =
+        txn_ids.iter().map(|id| Box::new(*id) as Box<dyn rusqlite::ToSql>).collect();
+    let params_refs: Vec<&dyn rusqlite::ToSql> =
+        params_vec.iter().map(|b| b.as_ref()).collect();
+    let rows = stmt
+        .query_map(params_refs.as_slice(), |r| {
+            Ok(ShareRow {
+                transaction_id: r.get(0)?,
+                category_id: r.get(1)?,
+                share_minor: r.get(2)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn compute_report(
+    state: State<'_, DbState>,
+    request: ReportRequest,
+) -> Result<ReportResponse, String> {
+    let conn = state.lock().map_err(|e| e.to_string())?;
+    compute_report_inner(&conn, &request)
+}
+
+pub(crate) fn compute_report_inner(
+    conn: &Connection,
+    req: &ReportRequest,
+) -> Result<ReportResponse, String> {
+    let from = parse_iso_date(&req.from)?;
+    let to = parse_iso_date(&req.to)?;
+    if to < from {
+        return Err("`to` must be on or after `from`".to_string());
+    }
+    let gran = parse_granularity(&req.granularity)?;
+
+    let period_keys = enumerate_periods(from, to, gran);
+    let period_index: HashMap<String, usize> = period_keys
+        .iter()
+        .enumerate()
+        .map(|(i, k)| (k.clone(), i))
+        .collect();
+    let periods: Vec<PeriodColumn> = period_keys
+        .iter()
+        .map(|k| PeriodColumn {
+            key: k.clone(),
+            label: k.clone(),
+        })
+        .collect();
+
+    let cats = load_categories(conn)?;
+
+    let expense_layout = section_layout(&req.expense_category_ids, &cats);
+    let income_layout = section_layout(&req.income_category_ids, &cats);
+    let expense_selected: HashSet<i64> =
+        req.expense_category_ids.iter().copied().collect();
+    let income_selected: HashSet<i64> =
+        req.income_category_ids.iter().copied().collect();
+
+    let expense_index: HashMap<i64, usize> = expense_layout
+        .iter()
+        .enumerate()
+        .map(|(i, (id, _))| (*id, i))
+        .collect();
+    let income_index: HashMap<i64, usize> = income_layout
+        .iter()
+        .enumerate()
+        .map(|(i, (id, _))| (*id, i))
+        .collect();
+
+    let n_periods = periods.len();
+    // Matrix layout: an extra trailing row reserved for "uncategorized".
+    let mut expense_values: Vec<Vec<i64>> =
+        vec![vec![0_i64; n_periods]; expense_layout.len() + 1];
+    let mut income_values: Vec<Vec<i64>> =
+        vec![vec![0_i64; n_periods]; income_layout.len() + 1];
+    let expense_uncat = expense_layout.len();
+    let income_uncat = income_layout.len();
+
+    let txns = load_transactions(conn, &req.account_ids, from, to)?;
+    let txn_ids: Vec<i64> = txns.iter().map(|t| t.id).collect();
+    let shares = load_shares(conn, &txn_ids)?;
+
+    // Group shares by transaction once for fast residual computation.
+    let mut shares_by_txn: HashMap<i64, Vec<&ShareRow>> = HashMap::new();
+    for s in &shares {
+        shares_by_txn.entry(s.transaction_id).or_default().push(s);
+    }
+
+    for txn in &txns {
+        let local = local_date(&txn.occurred_at_utc, &txn.timezone_offset)?;
+        if local < from || local > to {
+            continue;
+        }
+        let key = period_key(local, gran);
+        let p_idx = match period_index.get(&key) {
+            Some(i) => *i,
+            None => continue,
+        };
+
+        let direction_is_income = txn.credit > 0;
+        let total_minor = txn.credit + txn.debit;
+        if total_minor == 0 {
+            continue;
+        }
+
+        let txn_shares = shares_by_txn.get(&txn.id).cloned().unwrap_or_default();
+        let mut allocated = 0_i64;
+
+        let (selected_set, layout_index, values, uncat_idx) = if direction_is_income {
+            (
+                &income_selected,
+                &income_index,
+                &mut income_values,
+                income_uncat,
+            )
+        } else {
+            (
+                &expense_selected,
+                &expense_index,
+                &mut expense_values,
+                expense_uncat,
+            )
+        };
+
+        for s in &txn_shares {
+            allocated += s.share_minor;
+            // Defensive: if a share points at a category whose kind disagrees with the
+            // transaction direction, just skip it. The set-categories command already
+            // enforces this invariant on write, but the report should not crash.
+            let cat = match cats.get(&s.category_id) {
+                Some(c) => c,
+                None => continue,
+            };
+            let expected_kind = if direction_is_income { "income" } else { "expense" };
+            if cat.kind != expected_kind {
+                continue;
+            }
+            let target = match nearest_selected_ancestor(s.category_id, selected_set, &cats) {
+                Some(id) => id,
+                None => continue,
+            };
+            let row_idx = match layout_index.get(&target) {
+                Some(i) => *i,
+                None => continue,
+            };
+            values[row_idx][p_idx] += s.share_minor;
+        }
+
+        let show_for_section = if direction_is_income {
+            req.income_show_uncategorized
+        } else {
+            req.expense_show_uncategorized
+        };
+        if show_for_section {
+            let residual = total_minor - allocated;
+            if residual > 0 {
+                values[uncat_idx][p_idx] += residual;
+            }
+        }
+    }
+
+    let expense_section = build_section(
+        &expense_layout,
+        &cats,
+        &expense_values,
+        expense_uncat,
+        n_periods,
+        req.expense_show_uncategorized,
+    );
+    let income_section = build_section(
+        &income_layout,
+        &cats,
+        &income_values,
+        income_uncat,
+        n_periods,
+        req.income_show_uncategorized,
+    );
+
+    Ok(ReportResponse {
+        periods,
+        expense: expense_section,
+        income: income_section,
+    })
+}
+
+fn build_section(
+    layout: &[(i64, i32)],
+    cats: &HashMap<i64, CatNode>,
+    values: &[Vec<i64>],
+    uncat_idx: usize,
+    n_periods: usize,
+    show_uncategorized: bool,
+) -> SectionData {
+    let mut rows: Vec<ReportRow> = Vec::with_capacity(layout.len() + 1);
+    let mut section_totals = vec![0_i64; n_periods];
+
+    for (row_idx, (cat_id, depth)) in layout.iter().enumerate() {
+        let cat = cats.get(cat_id);
+        let row_values = &values[row_idx];
+        let total: i64 = row_values.iter().sum();
+        for (i, v) in row_values.iter().enumerate() {
+            section_totals[i] += *v;
+        }
+        rows.push(ReportRow {
+            category_id: Some(*cat_id),
+            name: cat.map(|c| c.name.clone()).unwrap_or_else(|| format!("#{cat_id}")),
+            color: cat.map(|c| c.color.clone()).unwrap_or_else(|| "#999999".to_string()),
+            depth: *depth,
+            values: row_values.iter().copied().map(format_minor).collect(),
+            total: format_minor(total),
+        });
+    }
+
+    if show_uncategorized {
+        let row_values = &values[uncat_idx];
+        let total: i64 = row_values.iter().sum();
+        if total != 0 {
+            for (i, v) in row_values.iter().enumerate() {
+                section_totals[i] += *v;
+            }
+            rows.push(ReportRow {
+                category_id: None,
+                name: String::new(),
+                color: String::new(),
+                depth: 0,
+                values: row_values.iter().copied().map(format_minor).collect(),
+                total: format_minor(total),
+            });
+        }
+    }
+
+    let grand_total: i64 = section_totals.iter().sum();
+    let mut total_strings: Vec<String> =
+        section_totals.iter().copied().map(format_minor).collect();
+    total_strings.push(format_minor(grand_total));
+
+    SectionData {
+        rows,
+        total: total_strings,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+    use rusqlite::params;
+    use tempfile::TempDir;
+
+    // ---------- Pure-helper tests ----------
+
+    #[test]
+    fn enumerate_periods_year() {
+        let from = NaiveDate::from_ymd_opt(2025, 6, 1).unwrap();
+        let to = NaiveDate::from_ymd_opt(2027, 2, 1).unwrap();
+        assert_eq!(
+            enumerate_periods(from, to, Granularity::Year),
+            vec!["2025", "2026", "2027"]
+        );
+    }
+
+    #[test]
+    fn enumerate_periods_quarter_wraps_year() {
+        let from = NaiveDate::from_ymd_opt(2025, 11, 1).unwrap();
+        let to = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
+        assert_eq!(
+            enumerate_periods(from, to, Granularity::Quarter),
+            vec!["2025-Q4", "2026-Q1", "2026-Q2"]
+        );
+    }
+
+    #[test]
+    fn enumerate_periods_month_wraps_year() {
+        let from = NaiveDate::from_ymd_opt(2025, 12, 1).unwrap();
+        let to = NaiveDate::from_ymd_opt(2026, 2, 1).unwrap();
+        assert_eq!(
+            enumerate_periods(from, to, Granularity::Month),
+            vec!["2025-12", "2026-01", "2026-02"]
+        );
+    }
+
+    #[test]
+    fn period_key_quarters() {
+        assert_eq!(
+            period_key(NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(), Granularity::Quarter),
+            "2026-Q1"
+        );
+        assert_eq!(
+            period_key(NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(), Granularity::Quarter),
+            "2026-Q2"
+        );
+        assert_eq!(
+            period_key(NaiveDate::from_ymd_opt(2026, 12, 31).unwrap(), Granularity::Quarter),
+            "2026-Q4"
+        );
+    }
+
+    #[test]
+    fn local_date_respects_timezone_offset() {
+        // 22:30 UTC on Apr 30 with +03:00 offset → Apr 31? -> May 1 local.
+        let local = local_date("2026-04-30T22:30:00.000Z", "+03:00").unwrap();
+        assert_eq!(local, NaiveDate::from_ymd_opt(2026, 5, 1).unwrap());
+    }
+
+    #[test]
+    fn section_layout_preserves_order_and_nests_children() {
+        // Tree: Food (1) → Cafe (2) → Coffee (3); Transport (4); Salary (5, expense, sibling root).
+        let cats = sample_cats();
+        // User selects Food then Coffee then Transport — Cafe is *not* selected.
+        let order = vec![1, 3, 4];
+        let layout = section_layout(&order, &cats);
+        // Coffee's strict ancestor in selected = Food (1). Transport is a separate root.
+        assert_eq!(layout, vec![(1, 0), (3, 1), (4, 0)]);
+    }
+
+    #[test]
+    fn section_layout_skips_duplicates() {
+        let cats = sample_cats();
+        let order = vec![1, 1, 4];
+        let layout = section_layout(&order, &cats);
+        assert_eq!(layout, vec![(1, 0), (4, 0)]);
+    }
+
+    #[test]
+    fn nearest_ancestor_handles_self_in_selected() {
+        let cats = sample_cats();
+        let mut sel = HashSet::new();
+        sel.insert(2);
+        // 3 → not selected → closest selected ancestor is 2.
+        assert_eq!(nearest_selected_ancestor(3, &sel, &cats), Some(2));
+        // 2 itself is selected → return itself.
+        assert_eq!(nearest_selected_ancestor(2, &sel, &cats), Some(2));
+        // 1 has no selected ancestor or self.
+        assert_eq!(nearest_selected_ancestor(1, &sel, &cats), None);
+    }
+
+    fn sample_cats() -> HashMap<i64, CatNode> {
+        let mut m = HashMap::new();
+        m.insert(1, CatNode { parent_id: None, name: "Food".into(), color: "#a".into(), kind: "expense".into() });
+        m.insert(2, CatNode { parent_id: Some(1), name: "Cafe".into(), color: "#b".into(), kind: "expense".into() });
+        m.insert(3, CatNode { parent_id: Some(2), name: "Coffee".into(), color: "#c".into(), kind: "expense".into() });
+        m.insert(4, CatNode { parent_id: None, name: "Transport".into(), color: "#d".into(), kind: "expense".into() });
+        m.insert(5, CatNode { parent_id: None, name: "Salary".into(), color: "#e".into(), kind: "income".into() });
+        m
+    }
+
+    // ---------- End-to-end pipeline tests (with real DB) ----------
+
+    struct Fixture {
+        _dir: TempDir,
+        conn: Connection,
+        account_id: i64,
+        batch_id: i64,
+    }
+
+    fn open_fixture(currency: &str) -> Fixture {
+        let dir = TempDir::new().unwrap();
+        let conn = db::open(dir.path()).unwrap();
+        let account_id: i64 = conn
+            .query_row(
+                "INSERT INTO accounts (bank, currency, account_number, owner_name)
+                 VALUES ('TestBank', ?1, '0001', 'Alice') RETURNING id",
+                [currency],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let batch_id: i64 = conn
+            .query_row(
+                "INSERT INTO import_batches (account_id, imported_at, source_filename, row_count, timezone_offset)
+                 VALUES (?1, '2026-04-01T10:00:00Z', NULL, 0, '+00:00') RETURNING id",
+                [account_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        Fixture { _dir: dir, conn, account_id, batch_id }
+    }
+
+    fn insert_txn(
+        f: &Fixture,
+        occurred_at: &str,
+        credit: i64,
+        debit: i64,
+        is_correcting: bool,
+    ) -> i64 {
+        f.conn
+            .query_row(
+                "INSERT INTO transactions
+                 (account_id, import_batch_id, occurred_at_utc, credit, debit, balance, is_correcting)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6) RETURNING id",
+                params![
+                    f.account_id,
+                    f.batch_id,
+                    occurred_at,
+                    credit,
+                    debit,
+                    if is_correcting { 1 } else { 0 }
+                ],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    fn insert_root_cat(f: &Fixture, name: &str, kind: &str) -> i64 {
+        f.conn
+            .query_row(
+                "INSERT INTO categories (name, color, kind) VALUES (?1, '#abcdef', ?2) RETURNING id",
+                params![name, kind],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    fn insert_child_cat(f: &Fixture, name: &str, parent_id: i64, kind: &str) -> i64 {
+        f.conn
+            .query_row(
+                "INSERT INTO categories (name, color, kind, parent_id)
+                 VALUES (?1, '#abcdef', ?2, ?3) RETURNING id",
+                params![name, kind, parent_id],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    fn link(f: &Fixture, txn_id: i64, cat_id: i64, share_minor: i64, position: i64) {
+        f.conn
+            .execute(
+                "INSERT INTO transaction_categories (transaction_id, category_id, share_minor, position)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![txn_id, cat_id, share_minor, position],
+            )
+            .unwrap();
+    }
+
+    fn req(
+        accounts: &[i64],
+        expense: &[i64],
+        income: &[i64],
+        from: &str,
+        to: &str,
+        gran: &str,
+        show_uncat: bool,
+    ) -> ReportRequest {
+        ReportRequest {
+            account_ids: accounts.to_vec(),
+            expense_category_ids: expense.to_vec(),
+            income_category_ids: income.to_vec(),
+            expense_show_uncategorized: show_uncat,
+            income_show_uncategorized: show_uncat,
+            from: from.to_string(),
+            to: to.to_string(),
+            granularity: gran.to_string(),
+        }
+    }
+
+    #[test]
+    fn aggregates_one_category_over_two_months() {
+        let f = open_fixture("RUB");
+        let salary = insert_root_cat(&f, "Salary", "income");
+        let t1 = insert_txn(&f, "2026-04-15T09:00:00Z", 50000_00, 0, false);
+        let t2 = insert_txn(&f, "2026-05-15T09:00:00Z", 60000_00, 0, false);
+        link(&f, t1, salary, 50000_00, 0);
+        link(&f, t2, salary, 60000_00, 0);
+
+        let resp = compute_report_inner(
+            &f.conn,
+            &req(&[f.account_id], &[], &[salary], "2026-04-01", "2026-05-31", "month", false),
+        )
+        .unwrap();
+
+        assert_eq!(resp.periods.iter().map(|p| &p.key).collect::<Vec<_>>(), vec!["2026-04", "2026-05"]);
+        assert_eq!(resp.income.rows.len(), 1);
+        assert_eq!(resp.income.rows[0].values, vec!["50000.00", "60000.00"]);
+        assert_eq!(resp.income.rows[0].total, "110000.00");
+        assert_eq!(resp.income.total, vec!["50000.00", "60000.00", "110000.00"]);
+        assert!(resp.expense.rows.is_empty());
+    }
+
+    #[test]
+    fn parent_and_child_both_selected_get_separate_rows() {
+        let f = open_fixture("RUB");
+        let food = insert_root_cat(&f, "Food", "expense");
+        let cafe = insert_child_cat(&f, "Cafe", food, "expense");
+
+        let t_food = insert_txn(&f, "2026-04-10T10:00:00Z", 0, 1000_00, false);
+        let t_cafe = insert_txn(&f, "2026-04-12T10:00:00Z", 0, 500_00, false);
+        link(&f, t_food, food, 1000_00, 0);
+        link(&f, t_cafe, cafe, 500_00, 0);
+
+        let resp = compute_report_inner(
+            &f.conn,
+            &req(&[f.account_id], &[food, cafe], &[], "2026-04-01", "2026-04-30", "month", false),
+        )
+        .unwrap();
+
+        let food_row = resp.expense.rows.iter().find(|r| r.category_id == Some(food)).unwrap();
+        let cafe_row = resp.expense.rows.iter().find(|r| r.category_id == Some(cafe)).unwrap();
+        assert_eq!(food_row.depth, 0);
+        assert_eq!(cafe_row.depth, 1);
+        assert_eq!(food_row.total, "1000.00");
+        assert_eq!(cafe_row.total, "500.00");
+        // Section total = both rows combined.
+        assert_eq!(resp.expense.total.last().unwrap(), "1500.00");
+    }
+
+    #[test]
+    fn unselected_child_collapses_into_selected_ancestor() {
+        let f = open_fixture("RUB");
+        let food = insert_root_cat(&f, "Food", "expense");
+        let cafe = insert_child_cat(&f, "Cafe", food, "expense");
+
+        let t_food = insert_txn(&f, "2026-04-10T10:00:00Z", 0, 800_00, false);
+        let t_cafe = insert_txn(&f, "2026-04-12T10:00:00Z", 0, 200_00, false);
+        link(&f, t_food, food, 800_00, 0);
+        link(&f, t_cafe, cafe, 200_00, 0);
+
+        // User selects only Food.
+        let resp = compute_report_inner(
+            &f.conn,
+            &req(&[f.account_id], &[food], &[], "2026-04-01", "2026-04-30", "month", false),
+        )
+        .unwrap();
+
+        assert_eq!(resp.expense.rows.len(), 1);
+        let row = &resp.expense.rows[0];
+        assert_eq!(row.category_id, Some(food));
+        // 800 (own) + 200 (cafe collapsed up) = 1000.
+        assert_eq!(row.total, "1000.00");
+    }
+
+    #[test]
+    fn show_uncategorized_picks_up_residuals() {
+        let f = open_fixture("RUB");
+        let food = insert_root_cat(&f, "Food", "expense");
+        let t = insert_txn(&f, "2026-04-15T10:00:00Z", 0, 1000_00, false);
+        link(&f, t, food, 600_00, 0);
+
+        let resp = compute_report_inner(
+            &f.conn,
+            &req(&[f.account_id], &[food], &[], "2026-04-01", "2026-04-30", "month", true),
+        )
+        .unwrap();
+
+        assert_eq!(resp.expense.rows.len(), 2, "row for Food + uncategorized row");
+        let food_row = &resp.expense.rows[0];
+        let uncat_row = &resp.expense.rows[1];
+        assert_eq!(food_row.total, "600.00");
+        assert_eq!(uncat_row.category_id, None);
+        assert_eq!(uncat_row.total, "400.00");
+    }
+
+    #[test]
+    fn correcting_transactions_are_skipped() {
+        let f = open_fixture("RUB");
+        let food = insert_root_cat(&f, "Food", "expense");
+        // A correcting transaction tied to Food, plus a regular one — we should only see
+        // the regular one in the report.
+        let correcting = insert_txn(&f, "2026-04-15T10:00:00Z", 0, 999_00, true);
+        let regular = insert_txn(&f, "2026-04-16T10:00:00Z", 0, 50_00, false);
+        link(&f, correcting, food, 999_00, 0);
+        link(&f, regular, food, 50_00, 0);
+
+        let resp = compute_report_inner(
+            &f.conn,
+            &req(&[f.account_id], &[food], &[], "2026-04-01", "2026-04-30", "month", true),
+        )
+        .unwrap();
+        assert_eq!(resp.expense.rows.len(), 1, "Food row only — uncategorized is empty");
+        assert_eq!(resp.expense.rows[0].total, "50.00");
+        assert_eq!(resp.expense.total.last().unwrap(), "50.00");
+    }
+
+    #[test]
+    fn out_of_range_transactions_are_filtered() {
+        let f = open_fixture("RUB");
+        let salary = insert_root_cat(&f, "Salary", "income");
+        let inside = insert_txn(&f, "2026-04-15T09:00:00Z", 100_00, 0, false);
+        let before = insert_txn(&f, "2026-03-31T09:00:00Z", 999_00, 0, false);
+        let after = insert_txn(&f, "2026-05-01T09:00:00Z", 999_00, 0, false);
+        link(&f, inside, salary, 100_00, 0);
+        link(&f, before, salary, 999_00, 0);
+        link(&f, after, salary, 999_00, 0);
+
+        let resp = compute_report_inner(
+            &f.conn,
+            &req(&[f.account_id], &[], &[salary], "2026-04-01", "2026-04-30", "month", false),
+        )
+        .unwrap();
+        assert_eq!(resp.income.rows.len(), 1);
+        assert_eq!(resp.income.rows[0].total, "100.00");
+    }
+
+    #[test]
+    fn mixed_currency_accounts_sum_one_to_one() {
+        // MVP behaviour: USD and RUB accounts are summed as if 1 USD == 1 RUB.
+        // The report does not perform conversion yet.
+        let dir = TempDir::new().unwrap();
+        let conn = db::open(dir.path()).unwrap();
+        let usd_acc: i64 = conn
+            .query_row(
+                "INSERT INTO accounts (bank, currency, account_number, owner_name)
+                 VALUES ('B', 'USD', '1', 'A') RETURNING id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let rub_acc: i64 = conn
+            .query_row(
+                "INSERT INTO accounts (bank, currency, account_number, owner_name)
+                 VALUES ('B', 'RUB', '2', 'A') RETURNING id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let usd_batch: i64 = conn
+            .query_row(
+                "INSERT INTO import_batches (account_id, imported_at, source_filename, row_count, timezone_offset)
+                 VALUES (?1, '2026-04-01T10:00:00Z', NULL, 0, '+00:00') RETURNING id",
+                [usd_acc],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let rub_batch: i64 = conn
+            .query_row(
+                "INSERT INTO import_batches (account_id, imported_at, source_filename, row_count, timezone_offset)
+                 VALUES (?1, '2026-04-01T10:00:00Z', NULL, 0, '+00:00') RETURNING id",
+                [rub_acc],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let salary: i64 = conn
+            .query_row(
+                "INSERT INTO categories (name, color, kind) VALUES ('Salary', '#000', 'income') RETURNING id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let usd_t: i64 = conn
+            .query_row(
+                "INSERT INTO transactions (account_id, import_batch_id, occurred_at_utc, credit, debit, balance)
+                 VALUES (?1, ?2, '2026-04-15T09:00:00Z', 50_00, 0, 0) RETURNING id",
+                params![usd_acc, usd_batch],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let rub_t: i64 = conn
+            .query_row(
+                "INSERT INTO transactions (account_id, import_batch_id, occurred_at_utc, credit, debit, balance)
+                 VALUES (?1, ?2, '2026-04-20T09:00:00Z', 30_00, 0, 0) RETURNING id",
+                params![rub_acc, rub_batch],
+                |r| r.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO transaction_categories (transaction_id, category_id, share_minor, position)
+             VALUES (?1, ?2, 50_00, 0), (?3, ?2, 30_00, 0)",
+            params![usd_t, salary, rub_t],
+        )
+        .unwrap();
+
+        let resp = compute_report_inner(
+            &conn,
+            &ReportRequest {
+                account_ids: vec![usd_acc, rub_acc],
+                expense_category_ids: vec![],
+                income_category_ids: vec![salary],
+                expense_show_uncategorized: false,
+                income_show_uncategorized: false,
+                from: "2026-04-01".to_string(),
+                to: "2026-04-30".to_string(),
+                granularity: "month".to_string(),
+            },
+        )
+        .unwrap();
+        assert_eq!(resp.income.rows[0].total, "80.00");
+    }
+
+    #[test]
+    fn filter_by_accounts_excludes_others() {
+        let f = open_fixture("RUB");
+        // Add a second account that should be excluded.
+        let other_acc: i64 = f
+            .conn
+            .query_row(
+                "INSERT INTO accounts (bank, currency, account_number, owner_name)
+                 VALUES ('Other', 'RUB', '99', 'A') RETURNING id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let other_batch: i64 = f
+            .conn
+            .query_row(
+                "INSERT INTO import_batches (account_id, imported_at, source_filename, row_count, timezone_offset)
+                 VALUES (?1, '2026-04-01T10:00:00Z', NULL, 0, '+00:00') RETURNING id",
+                [other_acc],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let salary = insert_root_cat(&f, "Salary", "income");
+
+        let kept = insert_txn(&f, "2026-04-15T09:00:00Z", 100_00, 0, false);
+        link(&f, kept, salary, 100_00, 0);
+        let dropped: i64 = f
+            .conn
+            .query_row(
+                "INSERT INTO transactions (account_id, import_batch_id, occurred_at_utc, credit, debit, balance)
+                 VALUES (?1, ?2, '2026-04-15T10:00:00Z', 999_00, 0, 0) RETURNING id",
+                params![other_acc, other_batch],
+                |r| r.get(0),
+            )
+            .unwrap();
+        f.conn
+            .execute(
+                "INSERT INTO transaction_categories (transaction_id, category_id, share_minor, position)
+                 VALUES (?1, ?2, 999_00, 0)",
+                params![dropped, salary],
+            )
+            .unwrap();
+
+        let resp = compute_report_inner(
+            &f.conn,
+            &req(&[f.account_id], &[], &[salary], "2026-04-01", "2026-04-30", "month", false),
+        )
+        .unwrap();
+        assert_eq!(resp.income.rows[0].total, "100.00");
+    }
+
+    #[test]
+    fn empty_report_when_no_categories_selected() {
+        let f = open_fixture("RUB");
+        let _ = insert_txn(&f, "2026-04-15T09:00:00Z", 100_00, 0, false);
+        let resp = compute_report_inner(
+            &f.conn,
+            &req(&[f.account_id], &[], &[], "2026-04-01", "2026-04-30", "month", false),
+        )
+        .unwrap();
+        assert!(resp.expense.rows.is_empty());
+        assert!(resp.income.rows.is_empty());
+        // Period totals still present, just zero.
+        assert_eq!(resp.expense.total, vec!["0.00", "0.00"]);
+    }
+
+    #[test]
+    fn invalid_request_returns_error() {
+        let f = open_fixture("RUB");
+        let bad = compute_report_inner(
+            &f.conn,
+            &req(&[], &[], &[], "2026-04-30", "2026-04-01", "month", false),
+        );
+        assert!(bad.is_err());
+
+        let bad = compute_report_inner(
+            &f.conn,
+            &req(&[], &[], &[], "2026-04-01", "2026-04-30", "decade", false),
+        );
+        assert!(bad.is_err());
+    }
+}

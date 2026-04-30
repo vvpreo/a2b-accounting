@@ -47,6 +47,16 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "009_add_transaction_categories",
         include_str!("../migrations/009_add_transaction_categories.sql"),
     ),
+    (
+        10,
+        "010_add_exchange_rates",
+        include_str!("../migrations/010_add_exchange_rates.sql"),
+    ),
+    (
+        11,
+        "011_add_report_views",
+        include_str!("../migrations/011_add_report_views.sql"),
+    ),
 ];
 
 pub fn open(data_dir: &Path) -> rusqlite::Result<Connection> {
@@ -56,6 +66,11 @@ pub fn open(data_dir: &Path) -> rusqlite::Result<Connection> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     apply_migrations(&conn)?;
     Ok(conn)
+}
+
+#[cfg(test)]
+pub(crate) fn apply_migrations_for_tests(conn: &Connection) -> rusqlite::Result<()> {
+    apply_migrations(conn)
 }
 
 fn apply_migrations(conn: &Connection) -> rusqlite::Result<()> {

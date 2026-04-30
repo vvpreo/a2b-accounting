@@ -1,5 +1,6 @@
 {
   "tabs": {
+    "reports_builder": "Report builder",
     "categories": "Categories",
     "accounts": "Accounts",
     "transactions": "Transactions",
@@ -214,7 +215,92 @@
   },
   "settings": {
     "title": "Settings",
-    "language": "Interface language"
+    "language": "Interface language",
+    "demo": {
+      "title": "Demo data",
+      "hint": "Replaces all current data with a demo set: a single USD account, a family budget category tree, ~800 transactions over 3 years, and a saved \"Yearly budget\" report.",
+      "button": "Load demo data",
+      "confirm": "All your accounts, categories, transactions, and reports will be deleted permanently and replaced with the demo set. Continue?",
+      "confirmYes": "Yes, load demo",
+      "loading": "Loading demo data...",
+      "errorLoading": "Failed to load demo: {message}"
+    },
+    "dangerZone": {
+      "title": "Danger zone",
+      "hint": "Deletes all your accounts, categories, transactions, and reports — permanently. After clearing, demo data will no longer appear automatically.",
+      "button": "Clear all data",
+      "confirm": "All your accounts, categories, transactions, and reports will be deleted permanently. Continue?",
+      "confirmYes": "Yes, delete everything",
+      "clearing": "Clearing...",
+      "errorClearing": "Failed to clear data: {message}"
+    }
+  },
+  "builder": {
+    "titleCreate": "New report",
+    "titleEdit": "Edit report",
+    "fieldName": "Name",
+    "fieldNamePlaceholder": "e.g. \"Budget 2026\"",
+    "accountsLabel": "Accounts",
+    "accountsAll": "All accounts",
+    "accountsNone": "Nothing selected",
+    "accountsEmpty": "No accounts",
+    "accountsMany": "Selected: {count}",
+    "accountsApply": "Apply",
+    "sectionExpense": "Expense",
+    "sectionIncome": "Income",
+    "sectionEmpty": "No categories selected.",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "remove": "Remove from report",
+    "addCategory": "+ Add category",
+    "pickCategoryEmpty": "All categories already added.",
+    "defaults": "Default values",
+    "defaultsHint": "Used when opening the report; can be changed on the report screen itself.",
+    "defaultRange": "Range",
+    "defaultGranularity": "Granularity",
+    "fromDate": "From",
+    "toDate": "To",
+    "preset": {
+      "current_month": "Current month",
+      "current_quarter": "Current quarter",
+      "current_year": "Current year",
+      "last_12_months": "Last 12 months",
+      "all_time": "All time",
+      "custom": "Custom range"
+    },
+    "granularity": {
+      "year": "Year",
+      "quarter": "Quarter",
+      "month": "Month"
+    },
+    "save": "Save",
+    "saving": "Saving...",
+    "create": "Create report",
+    "delete": "Delete report",
+    "deleteConfirm": "Delete report \"{name}\"?",
+    "deleteConfirmYes": "Yes, delete",
+    "errorEmptyName": "Enter a report name.",
+    "errorNoAccounts": "Select at least one account.",
+    "errorNoCategories": "Add at least one category.",
+    "errorBadDates": "\"To\" must be on or after \"From\"."
+  },
+  "report": {
+    "edit": "Edit",
+    "rangeLabel": "Range",
+    "granularityLabel": "Granularity",
+    "fromDate": "From",
+    "toDate": "To",
+    "sectionIncome": "Income",
+    "sectionExpense": "Expense",
+    "totalIncome": "Total income",
+    "totalExpense": "Total expense",
+    "totalColumn": "Total",
+    "uncategorized": "Uncategorized",
+    "fold": "Collapse",
+    "unfold": "Expand",
+    "loading": "Computing...",
+    "errorLoading": "Failed to build the report: {message}",
+    "empty": "No data for the selected range."
   },
   "errors": {
     "missingOccurredAt": "Row {row}: missing occurred_at",

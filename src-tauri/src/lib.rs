@@ -1,7 +1,11 @@
 mod accounts;
 mod categories;
 mod db;
+mod exchange_rates;
 mod money;
+mod report_views;
+mod reports;
+mod seed;
 mod settings;
 mod transaction_categories;
 mod transactions;
@@ -47,6 +51,9 @@ pub fn run() {
             let conn = db::open(&dir).unwrap_or_else(|e| {
                 panic!("failed to open database in {}: {e}", dir.display());
             });
+            seed::seed_if_first_launch(&conn).unwrap_or_else(|e| {
+                panic!("failed to seed demo data: {e}");
+            });
             app.manage::<db::DbState>(Mutex::new(conn));
             DATA_DIR.set(dir).expect("data dir already initialized");
             Ok(())
@@ -72,6 +79,17 @@ pub fn run() {
             transactions::update_transaction_comment,
             settings::get_setting,
             settings::set_setting,
+            exchange_rates::list_exchange_rates,
+            exchange_rates::upsert_exchange_rate,
+            exchange_rates::delete_exchange_rate,
+            report_views::list_report_views,
+            report_views::create_report_view,
+            report_views::update_report_view,
+            report_views::delete_report_view,
+            report_views::reorder_report_views,
+            reports::compute_report,
+            seed::seed_demo_data,
+            seed::clear_all_data,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

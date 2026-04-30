@@ -39,6 +39,70 @@ body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* Reserve a fixed-width gutter for the scrollbar so the layout never
+     "jumps" when content shrinks below the viewport (or when an extra
+     row is added). Standard, supported across modern WebKit. */
+  scrollbar-gutter: stable;
+}
+
+/* Thin, always-visible WebKit scrollbar (matches the reserved gutter above).
+   Required to override macOS "Always show scroll bars" with a consistent
+   thumb size and to make sure the user actually sees a scrollbar when one is
+   needed. */
+.page::-webkit-scrollbar,
+.pivot-wrap::-webkit-scrollbar,
+.txns-wrap::-webkit-scrollbar,
+.builder-tree::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.page::-webkit-scrollbar-track,
+.pivot-wrap::-webkit-scrollbar-track,
+.txns-wrap::-webkit-scrollbar-track,
+.builder-tree::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.page::-webkit-scrollbar-thumb,
+.pivot-wrap::-webkit-scrollbar-thumb,
+.txns-wrap::-webkit-scrollbar-thumb,
+.builder-tree::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.25);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  transition: background-color 0.15s ease;
+}
+
+.page::-webkit-scrollbar-thumb:hover,
+.pivot-wrap::-webkit-scrollbar-thumb:hover,
+.txns-wrap::-webkit-scrollbar-thumb:hover,
+.builder-tree::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(0, 0, 0, 0.45);
+}
+
+.page::-webkit-scrollbar-corner,
+.pivot-wrap::-webkit-scrollbar-corner,
+.txns-wrap::-webkit-scrollbar-corner,
+.builder-tree::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+@media (prefers-color-scheme: dark) {
+  .page::-webkit-scrollbar-thumb,
+  .pivot-wrap::-webkit-scrollbar-thumb,
+  .txns-wrap::-webkit-scrollbar-thumb,
+  .builder-tree::-webkit-scrollbar-thumb {
+    background-color: rgba(255, 255, 255, 0.25);
+  }
+
+  .page::-webkit-scrollbar-thumb:hover,
+  .pivot-wrap::-webkit-scrollbar-thumb:hover,
+  .txns-wrap::-webkit-scrollbar-thumb:hover,
+  .builder-tree::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(255, 255, 255, 0.45);
+  }
 }
 
 .page--transactions {
@@ -55,6 +119,7 @@ body {
 
 .page--transactions table {
   table-layout: auto;
+  width: 100%;
   overflow: visible;
   border-collapse: separate;
   border-spacing: 0;
@@ -206,6 +271,11 @@ body {
 
 .icon-btn:hover {
   color: #18181b;
+}
+
+.icon-btn:disabled {
+  color: #d4d4d8;
+  cursor: not-allowed;
 }
 
 /* Account form */
@@ -875,6 +945,13 @@ code {
   background: #1f2937;
 }
 
+.tab-button--report {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Per-tab toolbar (controls under the tab bar, scoped to the active tab) */
 
 .tab-toolbar {
@@ -1196,6 +1273,67 @@ code {
   font: inherit;
   color: inherit;
   cursor: pointer;
+}
+
+.settings-section {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #e4e4e7;
+  max-width: 720px;
+}
+
+.settings-section--danger {
+  border-top-color: #fecaca;
+}
+
+.settings-section-title {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.settings-section--danger .settings-section-title {
+  color: #b91c1c;
+}
+
+.danger-confirm {
+  margin-top: 8px;
+  padding: 12px 14px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  color: #7f1d1d;
+}
+
+.danger-confirm p {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.danger-confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .settings-section {
+    border-top-color: #3f3f46;
+  }
+
+  .settings-section--danger {
+    border-top-color: #7f1d1d;
+  }
+
+  .settings-section--danger .settings-section-title {
+    color: #fca5a5;
+  }
+
+  .danger-confirm {
+    background: #3f1f1f;
+    border-color: #7f1d1d;
+    color: #fca5a5;
+  }
 }
 
 /* Account detail batches panel — full-width inside detail view */
@@ -2065,5 +2203,587 @@ code {
         #52525b 3px,
         #52525b 6px
       );
+  }
+}
+
+/* ===== Report builder ===== */
+
+.builder-page {
+  max-width: 1100px;
+}
+
+.builder-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.builder-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.builder-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.builder-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.builder-row > label {
+  min-width: 140px;
+  font-weight: 500;
+}
+
+.builder-row input[type="text"] {
+  flex: 1;
+  max-width: 420px;
+  padding: 6px 10px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  font: inherit;
+  color: inherit;
+  background: #fff;
+}
+
+.builder-row--checkbox {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.builder-row--checkbox label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-weight: 500;
+}
+
+.builder-sections {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+
+.builder-section {
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+  padding: 12px 14px;
+  background: #fafafa;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.builder-section-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #52525b;
+}
+
+.builder-section-empty {
+  margin: 0;
+  color: #71717a;
+  font-size: 12px;
+  font-style: italic;
+}
+
+.builder-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid #e4e4e7;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.builder-tree-row {
+  padding: 4px 8px;
+  font-size: 13px;
+  border-bottom: 1px solid #f4f4f5;
+}
+
+.builder-tree-row:last-child {
+  border-bottom: 0;
+}
+
+.builder-tree-row label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.builder-tree-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.builder-tree-swatch--uncat {
+  background:
+    repeating-linear-gradient(
+      45deg,
+      #d4d4d8,
+      #d4d4d8 2px,
+      #f4f4f5 2px,
+      #f4f4f5 4px
+    );
+  border: 1px solid #d4d4d8;
+}
+
+.builder-tree-row--uncat {
+  margin-top: 4px;
+  border-top: 1px dashed #d4d4d8;
+  padding-top: 6px;
+  font-style: italic;
+  color: #71717a;
+}
+
+.builder-order-row--uncat {
+  font-style: italic;
+}
+
+.builder-order-name--uncat {
+  color: #71717a;
+}
+
+.builder-tree-name {
+  flex: 1;
+}
+
+.builder-order {
+  border-top: 1px dashed #d4d4d8;
+  padding-top: 10px;
+}
+
+.builder-order-list {
+  list-style: none;
+  counter-reset: item;
+  margin: 0;
+  padding: 0;
+}
+
+.builder-order-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  font-size: 13px;
+  background: #fff;
+  border: 1px solid #e4e4e7;
+  border-radius: 4px;
+  margin-bottom: 4px;
+}
+
+.builder-order-row::before {
+  counter-increment: item;
+  content: counter(item) ".";
+  color: #71717a;
+  font-size: 12px;
+  width: 24px;
+  text-align: right;
+}
+
+.builder-order-name {
+  flex: 1;
+}
+
+.builder-order-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+}
+
+.builder-order-actions .icon-btn {
+  font-size: 16px;
+  padding: 0 6px;
+}
+
+.builder-defaults {
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+  padding: 12px 14px;
+  background: #fafafa;
+}
+
+.builder-defaults h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #52525b;
+}
+
+.builder-defaults-grid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.builder-defaults-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #52525b;
+}
+
+.builder-defaults-grid select,
+.builder-defaults-grid input {
+  padding: 6px 10px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background: #fff;
+  font: inherit;
+  color: inherit;
+}
+
+.builder-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.confirm-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.confirm-inline-text {
+  color: #7f1d1d;
+  font-size: 12px;
+}
+
+.confirm-inline--actions {
+  margin-left: 8px;
+}
+
+.settings-hint {
+  margin: 0;
+  color: #71717a;
+  font-size: 12px;
+  line-height: 1.45;
+  max-width: 720px;
+}
+
+/* ===== Report view (pivot) ===== */
+
+.report-page {
+  /* Stretch to full window width — pivot tables are wide by nature. */
+  max-width: none;
+  width: 100%;
+  /* Page itself does not scroll — the pivot owns its own scroll so that the
+     table header (and first column) can be sticky relative to it. */
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
+.report-page > .pivot-wrap {
+  /* Hard-bounded height so the inner scroll always activates and the sticky
+     thead has a real scroll container to anchor to. The 200px reserve covers
+     the tab bar (~50), controls block (~70), container padding (24), bottom
+     margins (~12) and the wrap's own border (~2). `height` (not max-height)
+     is intentional: it forces the element size regardless of content. */
+  height: calc(100vh - 200px);
+  overflow: auto;
+  position: relative;
+}
+
+.report-edit-btn {
+  margin-left: auto;
+  align-self: center;
+  font-size: 18px;
+}
+
+.report-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: #fafafa;
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+}
+
+.report-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #52525b;
+}
+
+.report-controls select,
+.report-controls input {
+  padding: 6px 10px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background: #fff;
+  font: inherit;
+  color: inherit;
+}
+
+.report-loading,
+.report-empty {
+  padding: 24px;
+  text-align: center;
+  color: #71717a;
+  font-size: 13px;
+}
+
+.pivot-wrap {
+  overflow: auto;
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.pivot-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+}
+
+.pivot-table th {
+  /* A touch darker than the section header so the column legend reads as the
+     "outermost" frame of the table. */
+  background: #e4e4e7;
+  padding: 8px 12px;
+  text-align: right;
+  font-weight: 600;
+  font-size: 16px;
+  color: #18181b;
+  border-bottom: 1px solid #d4d4d8;
+  white-space: nowrap;
+  /* Sticky header — pinned to the top edge of .pivot-wrap. WebKit only
+     supports position:sticky on table cells (not on <thead>/<tr>), and
+     requires border-collapse:separate (set on .pivot-table). */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.pivot-table th.pivot-name-col {
+  text-align: left;
+  width: 1%;
+  min-width: 240px;
+  /* Top-left corner: pinned both vertically (inherits from th rule above)
+     and horizontally. */
+  left: 0;
+  z-index: 3;
+}
+
+.pivot-table th.pivot-total-col {
+  background: #d4d4d8;
+}
+
+.pivot-row td {
+  padding: 6px 12px;
+  border-bottom: 1px solid #f4f4f5;
+  background: #fff;
+}
+
+/* Highlight the whole row (incl. sticky cells) on hover so it's obvious which
+   category the cursor is over. Section headers have their own treatment, so
+   we exclude them. */
+.pivot-row:not(.pivot-row--section):hover td {
+  background-color: #f4f4f5;
+}
+
+/* First column stays visible during horizontal scroll. */
+.pivot-table tbody td.pivot-name-cell {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+
+.pivot-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.pivot-fold-btn {
+  background: transparent;
+  border: 0;
+  color: #52525b;
+  cursor: pointer;
+  font-size: 11px;
+  width: 18px;
+  text-align: center;
+  padding: 0;
+}
+
+.pivot-fold-btn--section {
+  color: inherit;
+  font-size: 12px;
+}
+
+.pivot-fold-spacer {
+  display: inline-block;
+  width: 18px;
+}
+
+.pivot-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.pivot-name-text {
+  flex: 1;
+}
+
+.pivot-value-cell {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pivot-value-cell--total {
+  background: #f8fafc;
+  font-weight: 500;
+}
+
+.pivot-row--uncat .pivot-name-text {
+  color: #71717a;
+  font-style: italic;
+}
+
+/* Child rows already roll up into their parent's value, so they're rendered
+   in a muted tone to signal "this is detail of the row above, not an
+   additional contribution to the section total". */
+.pivot-row--child .pivot-name-text,
+.pivot-row--child .pivot-value-cell {
+  color: #71717a;
+}
+
+/* Section header row — bold, slightly highlighted, clickable to fold.
+   Larger than the rest of the table so the hierarchy reads at a glance. */
+.pivot-row--section td {
+  background: #f4f4f5;
+  font-weight: 600;
+  font-size: 16px;
+  color: #18181b;
+  border-bottom: 1px solid #e4e4e7;
+}
+
+.pivot-row--section .pivot-value-cell--total {
+  background: #e8edf3;
+}
+
+.pivot-name-cell--section {
+  cursor: pointer;
+  user-select: none;
+}
+
+.pivot-name-cell--section:hover {
+  background: #ececef;
+}
+
+@media (prefers-color-scheme: dark) {
+  .builder-section,
+  .builder-defaults,
+  .report-controls {
+    background: #1f1f23;
+    border-color: #3f3f46;
+  }
+
+  .builder-tree,
+  .builder-order-row,
+  .builder-row input[type="text"],
+  .builder-defaults-grid select,
+  .builder-defaults-grid input,
+  .report-controls select,
+  .report-controls input,
+  .pivot-wrap {
+    background: #27272a;
+    border-color: #3f3f46;
+    color: #e4e4e7;
+  }
+
+  .builder-section-title,
+  .builder-defaults h3,
+  .builder-defaults-grid label,
+  .report-controls label,
+  .builder-section-empty,
+  .settings-hint,
+  .report-loading,
+  .report-empty {
+    color: #a1a1aa;
+  }
+
+  .builder-tree-row {
+    border-bottom-color: #3f3f46;
+  }
+
+  .builder-order {
+    border-top-color: #3f3f46;
+  }
+
+  .pivot-table th {
+    background: #1f1f24;
+    color: #fafafa;
+    border-bottom-color: #3f3f46;
+  }
+
+  .pivot-table th.pivot-total-col {
+    background: #18181d;
+  }
+
+  .pivot-row td {
+    background: #18181b;
+    border-bottom-color: #3f3f46;
+  }
+
+  .pivot-row:not(.pivot-row--section):hover td {
+    background-color: #2d2d33;
+  }
+
+  .pivot-value-cell--total {
+    background: #2d2d33;
+  }
+
+  .pivot-row--section td {
+    background: #2d2d33;
+    color: #fafafa;
+    border-bottom-color: #3f3f46;
+  }
+
+  .pivot-row--section .pivot-value-cell--total {
+    background: #353541;
+  }
+
+  .pivot-name-cell--section:hover {
+    background: #353541;
+  }
+
+  .pivot-row--child .pivot-name-text,
+  .pivot-row--child .pivot-value-cell {
+    color: #71717a;
+  }
+
+  .confirm-inline-text {
+    color: #fca5a5;
   }
 }

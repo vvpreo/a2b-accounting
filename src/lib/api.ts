@@ -229,3 +229,137 @@ export function getSetting(key: string): Promise<string | null> {
 export function setSetting(key: string, value: string): Promise<void> {
   return invoke<void>("set_setting", { key, value });
 }
+
+export interface ExchangeRate {
+  id: number;
+  currency: string;
+  rateDate: string;
+  rateToBase: string;
+  createdAt: string;
+}
+
+export function listExchangeRates(): Promise<ExchangeRate[]> {
+  return invoke<ExchangeRate[]>("list_exchange_rates");
+}
+
+export function upsertExchangeRate(args: {
+  currency: string;
+  rateDate: string;
+  rateToBase: string;
+}): Promise<ExchangeRate> {
+  return invoke<ExchangeRate>("upsert_exchange_rate", args);
+}
+
+export function deleteExchangeRate(id: number): Promise<void> {
+  return invoke<void>("delete_exchange_rate", { id });
+}
+
+export type Granularity = "year" | "quarter" | "month";
+
+export type RangePreset =
+  | "current_month"
+  | "current_quarter"
+  | "current_year"
+  | "last_12_months"
+  | "all_time"
+  | "custom";
+
+export type ReportRange =
+  | { kind: "preset"; preset: Exclude<RangePreset, "custom"> }
+  | { kind: "custom"; from: string; to: string };
+
+export interface ReportConfig {
+  version: 1;
+  accountIds: number[];
+  expenseCategoryIds: number[];
+  incomeCategoryIds: number[];
+  expenseShowUncategorized: boolean;
+  incomeShowUncategorized: boolean;
+  defaultRange: ReportRange;
+  defaultGranularity: Granularity;
+  expandedCategoryIds: number[];
+}
+
+export interface ReportView {
+  id: number;
+  name: string;
+  config: string;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export function listReportViews(): Promise<ReportView[]> {
+  return invoke<ReportView[]>("list_report_views");
+}
+
+export function createReportView(args: {
+  name: string;
+  config: string;
+}): Promise<ReportView> {
+  return invoke<ReportView>("create_report_view", args);
+}
+
+export function updateReportView(args: {
+  id: number;
+  name: string;
+  config: string;
+}): Promise<ReportView> {
+  return invoke<ReportView>("update_report_view", args);
+}
+
+export function deleteReportView(id: number): Promise<void> {
+  return invoke<void>("delete_report_view", { id });
+}
+
+export function reorderReportViews(ids: number[]): Promise<void> {
+  return invoke<void>("reorder_report_views", { ids });
+}
+
+export interface ReportRequest {
+  accountIds: number[];
+  expenseCategoryIds: number[];
+  incomeCategoryIds: number[];
+  expenseShowUncategorized: boolean;
+  incomeShowUncategorized: boolean;
+  from: string;
+  to: string;
+  granularity: Granularity;
+}
+
+export interface PeriodColumn {
+  key: string;
+  label: string;
+}
+
+export interface ReportRow {
+  categoryId: number | null;
+  name: string;
+  color: string;
+  depth: number;
+  values: string[];
+  total: string;
+}
+
+export interface SectionData {
+  rows: ReportRow[];
+  total: string[];
+}
+
+export interface ReportResponse {
+  periods: PeriodColumn[];
+  expense: SectionData;
+  income: SectionData;
+}
+
+export function computeReport(request: ReportRequest): Promise<ReportResponse> {
+  return invoke<ReportResponse>("compute_report", { request });
+}
+
+export function seedDemoData(): Promise<void> {
+  return invoke<void>("seed_demo_data");
+}
+
+export function clearAllData(): Promise<void> {
+  return invoke<void>("clear_all_data");
+}

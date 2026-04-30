@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 
 import "./App.css";
 import { Tab, Tabs } from "./components/Tabs";
-import { listTransactions } from "./lib/api";
+import { listReportViews, listTransactions, ReportView } from "./lib/api";
 import { AccountsPage, CreateAccountModal } from "./pages/Accounts";
 import { CategoriesPage } from "./pages/Categories";
 import { ImportDialog } from "./pages/ImportDialog";
+import { ReportsBuilderPage } from "./pages/ReportsBuilder";
+import { ReportViewPage } from "./pages/ReportView";
 import { SettingsPage } from "./pages/Settings";
 import { TransactionsPage } from "./pages/Transactions";
 
@@ -18,6 +20,10 @@ function App() {
   const [creatingAccount, setCreatingAccount] = useState(false);
   const [importingTxns, setImportingTxns] = useState(false);
   const [accountsVersion, setAccountsVersion] = useState(0);
+
+  const [reportViews, setReportViews] = useState<ReportView[]>([]);
+  const [reportViewsVersion, setReportViewsVersion] = useState(0);
+  const [builderEditId, setBuilderEditId] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -33,18 +39,58 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    listReportViews()
+      .then(setReportViews)
+      .catch(() => setReportViews([]));
+  }, [reportViewsVersion]);
+
+  // If the active tab points at a report view that no longer exists, fall back
+  // to the builder so the UI never shows a dangling page.
+  useEffect(() => {
+    if (tab && typeof tab !== "string" && tab.kind === "report") {
+      const stillExists = reportViews.some((v) => v.id === tab.id);
+      if (!stillExists) setTab("reports_builder");
+    }
+  }, [tab, reportViews]);
+
+  function changeTab(next: Tab) {
+    // Leaving the builder discards any "edit this saved view" intent.
+    if (next !== "reports_builder") setBuilderEditId(null);
+    setTab(next);
+  }
+
+  function refreshReportViews() {
+    setReportViewsVersion((v) => v + 1);
+  }
+
   function goToTransactions(accountIds: number[]) {
     setTxnFilterAccountIds(accountIds);
     setTab("transactions");
+  }
+
+  function openBuilderForEdit(viewId: number) {
+    setBuilderEditId(viewId);
+    setTab("reports_builder");
+  }
+
+  function openReportTab(viewId: number) {
+    setBuilderEditId(null);
+    setTab({ kind: "report", id: viewId });
   }
 
   if (tab === null) {
     return <main className="container" />;
   }
 
+  const activeReportView =
+    tab && typeof tab !== "string" && tab.kind === "report"
+      ? reportViews.find((v) => v.id === tab.id) ?? null
+      : null;
+
   return (
     <main className="container">
-      <Tabs active={tab} onChange={setTab} />
+      <Tabs active={tab} reportViews={reportViews} onChange={changeTab} />
       {tab === "categories" && <CategoriesPage />}
       {tab === "accounts" && (
         <AccountsPage
@@ -62,6 +108,27 @@ function App() {
         />
       )}
       {tab === "settings" && <SettingsPage />}
+      {tab === "reports_builder" && (
+        <ReportsBuilderPage
+          editId={builderEditId}
+          reportViews={reportViews}
+          onSaved={(view) => {
+            refreshReportViews();
+            openReportTab(view.id);
+          }}
+          onDeleted={() => {
+            refreshReportViews();
+            setBuilderEditId(null);
+            setTab("reports_builder");
+          }}
+        />
+      )}
+      {activeReportView && (
+        <ReportViewPage
+          view={activeReportView}
+          onEdit={() => openBuilderForEdit(activeReportView.id)}
+        />
+      )}
 
       {creatingAccount && (
         <CreateAccountModal
