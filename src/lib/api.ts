@@ -193,6 +193,14 @@ export function listTransactions(
   });
 }
 
+export function firstTransactionDate(
+  accountIds?: number[],
+): Promise<string | null> {
+  return invoke<string | null>("first_transaction_date", {
+    accountIds: accountIds && accountIds.length > 0 ? accountIds : null,
+  });
+}
+
 export function listImportBatches(accountId: number): Promise<ImportBatch[]> {
   return invoke<ImportBatch[]>("list_import_batches", { accountId });
 }
@@ -286,6 +294,9 @@ export interface ReportConfig {
   defaultRange: ReportRange;
   defaultGranularity: Granularity;
   expandedCategoryIds: number[];
+  // Persisted runtime preference: hide/show the trailing "Итого" column.
+  // Optional for backwards compatibility with older saved configs.
+  showTotalColumn?: boolean;
 }
 
 export interface ReportView {

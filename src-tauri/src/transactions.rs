@@ -491,6 +491,60 @@ pub fn list_transactions(
         .map_err(|e| e.to_string())
 }
 
+/// Earliest *local* transaction date among the given accounts (or all
+/// accounts when `account_ids` is None/empty), formatted as `YYYY-MM-DD`.
+/// "Local" means converted using each transaction's batch timezone offset,
+/// matching how the report aggregator places transactions into period
+/// columns — so the returned date is the exact lower bound that contains
+/// every transaction without leading empty periods.
+///
+/// Used by the report screen to resolve the "all_time" preset to "earliest
+/// real data" rather than 1970, which would generate thousands of empty
+/// periods.
+#[tauri::command]
+pub fn first_transaction_date(
+    state: State<'_, DbState>,
+    account_ids: Option<Vec<i64>>,
+) -> Result<Option<String>, String> {
+    let conn = state.lock().map_err(|e| e.to_string())?;
+    let ids = account_ids.unwrap_or_default();
+    let where_clause = if ids.is_empty() {
+        String::new()
+    } else {
+        let placeholders = std::iter::repeat("?")
+            .take(ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("WHERE t.account_id IN ({placeholders})")
+    };
+    // We can't pre-filter by MIN(occurred_at_utc) and convert just that one,
+    // because earliest UTC ≠ earliest local across timezones. Pull every
+    // (utc, tz) pair, convert each, and reduce to the minimum NaiveDate.
+    let sql = format!(
+        "SELECT t.occurred_at_utc, b.timezone_offset
+         FROM transactions t
+         JOIN import_batches b ON t.import_batch_id = b.id
+         {where_clause}"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(ids.iter()), |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut earliest: Option<chrono::NaiveDate> = None;
+    for row in rows {
+        let (utc, tz) = row.map_err(|e| e.to_string())?;
+        let local = crate::reports::local_date(&utc, &tz)?;
+        earliest = Some(match earliest {
+            Some(prev) if prev <= local => prev,
+            _ => local,
+        });
+    }
+    Ok(earliest.map(|d| d.format("%Y-%m-%d").to_string()))
+}
+
 #[tauri::command]
 pub fn list_import_batches(
     state: State<'_, DbState>,

@@ -1,34 +1,33 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
+import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { useT } from "../i18n";
 import {
+  Account,
+  Category,
   computeReport,
+  firstTransactionDate,
   Granularity,
+  listAccounts,
+  listCategories,
   RangePreset,
+  ReportConfig,
   ReportRange,
   ReportResponse,
   ReportRow,
   ReportView,
   SectionData,
+  updateReportView,
 } from "../lib/api";
 import { formatMinorAsMoney, formatMoney, parseMoneyToMinor } from "../lib/money";
+import { CategoriesPickerModal, computeInitialOrder } from "./report/CategoryPicker";
 
 interface Props {
   view: ReportView;
-  onEdit: () => void;
+  onSaved: (view: ReportView) => void;
 }
 
-interface ReportConfigShape {
-  version: 1;
-  accountIds: number[];
-  expenseCategoryIds: number[];
-  incomeCategoryIds: number[];
-  defaultRange: ReportRange;
-  defaultGranularity: Granularity;
-  expandedCategoryIds: number[];
-}
-
-const DEFAULT_CONFIG: ReportConfigShape = {
+const DEFAULT_CONFIG: ReportConfig = {
   version: 1,
   accountIds: [],
   expenseCategoryIds: [],
@@ -36,6 +35,7 @@ const DEFAULT_CONFIG: ReportConfigShape = {
   defaultRange: { kind: "preset", preset: "current_year" },
   defaultGranularity: "month",
   expandedCategoryIds: [],
+  showTotalColumn: true,
 };
 
 const PRESETS: RangePreset[] = [
@@ -52,6 +52,11 @@ const GRANULARITIES: Granularity[] = ["year", "quarter", "month"];
 // Font sizes per row depth in the pivot. Section header is styled separately
 // (see .pivot-row--section in App.css).
 const ROW_FONT_SIZES = [15, 13, 12, 11];
+
+// Debounce window for the auto-save: long enough that typing the report name
+// produces one save instead of one-per-keystroke; short enough that toggles
+// feel persistent within a beat.
+const AUTOSAVE_DELAY_MS = 500;
 
 function pad(n: number): string {
   return String(n).padStart(2, "0");
@@ -75,74 +80,192 @@ function firstOfMonthIso(): string {
   return isoDate(d.getFullYear(), d.getMonth() + 1, 1);
 }
 
-function resolveRange(range: ReportRange): { from: string; to: string } {
+function resolveRange(
+  range: ReportRange,
+  // Earliest transaction date for the active account selection. When the
+  // "all_time" preset is chosen we anchor `from` here so the report doesn't
+  // start at 1970 and pad with thousands of empty periods. `null` while still
+  // loading or when there are no transactions — fallback to a small window
+  // around today instead of 1970.
+  earliestTxnDate: string | null,
+): { from: string; to: string } | null {
   if (range.kind === "custom") return { from: range.from, to: range.to };
   const today = new Date();
   const y = today.getFullYear();
   const m = today.getMonth() + 1;
+  const todayStr = isoDate(y, m, today.getDate());
+  // Cap any built-in preset's upper bound at today — there's no point
+  // padding the report with empty future periods (May–Dec when we're in
+  // April), and the user can always switch to "custom" to look ahead.
+  const capToToday = (to: string): string => (to > todayStr ? todayStr : to);
   switch (range.preset) {
     case "current_month":
-      return { from: isoDate(y, m, 1), to: isoDate(y, m, lastDayOfMonth(y, m)) };
+      return {
+        from: isoDate(y, m, 1),
+        to: capToToday(isoDate(y, m, lastDayOfMonth(y, m))),
+      };
     case "current_quarter": {
       const qStart = Math.floor((m - 1) / 3) * 3 + 1;
       const qEnd = qStart + 2;
       return {
         from: isoDate(y, qStart, 1),
-        to: isoDate(y, qEnd, lastDayOfMonth(y, qEnd)),
+        to: capToToday(isoDate(y, qEnd, lastDayOfMonth(y, qEnd))),
       };
     }
     case "current_year":
-      return { from: isoDate(y, 1, 1), to: isoDate(y, 12, 31) };
+      return { from: isoDate(y, 1, 1), to: capToToday(isoDate(y, 12, 31)) };
     case "last_12_months": {
       const start = new Date(y, m - 12, 1);
       return {
         from: isoDate(start.getFullYear(), start.getMonth() + 1, 1),
-        to: isoDate(y, m, lastDayOfMonth(y, m)),
+        to: capToToday(isoDate(y, m, lastDayOfMonth(y, m))),
       };
     }
-    case "all_time":
-      return { from: "1970-01-01", to: isoDate(y, 12, 31) };
+    case "all_time": {
+      if (earliestTxnDate === null) {
+        // Hold off computing the report until we know where the data starts.
+        // Returning null here means the effect skips the computeReport call;
+        // it'll re-run when earliestTxnDate arrives.
+        return null;
+      }
+      return { from: earliestTxnDate, to: todayStr };
+    }
   }
 }
 
-function safeParseConfig(raw: string): ReportConfigShape {
+function safeParseConfig(raw: string): ReportConfig {
   try {
-    const parsed = JSON.parse(raw) as Partial<ReportConfigShape>;
+    const parsed = JSON.parse(raw) as Partial<ReportConfig>;
     return { ...DEFAULT_CONFIG, ...parsed };
   } catch {
     return DEFAULT_CONFIG;
   }
 }
 
-export function ReportViewPage({ view, onEdit }: Props) {
+export function ReportViewPage({ view, onSaved }: Props) {
   const t = useT();
-  const config = useMemo(() => safeParseConfig(view.config), [view.config]);
+  const initialConfig = useMemo(() => safeParseConfig(view.config), [view.config]);
 
-  const [range, setRange] = useState<ReportRange>(config.defaultRange);
-  const [granularity, setGranularity] = useState<Granularity>(config.defaultGranularity);
-  const [showTotal, setShowTotal] = useState(true);
+  // Every panel field is editable AND auto-persisted. The pivot below renders
+  // off the *current* state, not the saved one — so changes apply immediately
+  // and a debounced background save commits them to the backend.
+  const [name, setName] = useState(view.name);
+  const [accountIds, setAccountIds] = useState<number[]>(initialConfig.accountIds);
+  const [range, setRange] = useState<ReportRange>(initialConfig.defaultRange);
+  const [granularity, setGranularity] = useState<Granularity>(initialConfig.defaultGranularity);
+  const [showTotal, setShowTotal] = useState(initialConfig.showTotalColumn ?? true);
+  const [expenseOrder, setExpenseOrder] = useState<number[]>([]);
+  const [expenseSelected, setExpenseSelected] = useState<Set<number>>(new Set());
+  const [incomeOrder, setIncomeOrder] = useState<number[]>([]);
+  const [incomeSelected, setIncomeSelected] = useState<Set<number>>(new Set());
 
-  // Reset runtime controls when switching between saved views.
-  useEffect(() => {
-    setRange(config.defaultRange);
-    setGranularity(config.defaultGranularity);
-    setShowTotal(true);
-  }, [view.id, config.defaultRange, config.defaultGranularity]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [accountsLoaded, setAccountsLoaded] = useState(false);
+  const [categoriesLoaded, setCategoriesLoaded] = useState(false);
+
+  const [filtersExpanded, setFiltersExpanded] = useState(true);
+  // Toggles the combined categories picker modal. The modal owns local
+  // copies of all four selection pieces — committed back on Save only.
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const [response, setResponse] = useState<ReportResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Earliest transaction date among the currently selected accounts. Used to
+  // anchor the "all_time" preset's `from`. Re-queried whenever the account
+  // selection changes so swapping accounts in/out updates the boundary.
+  const [earliestTxnDate, setEarliestTxnDate] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    const { from, to } = resolveRange(range);
+    setEarliestTxnDate(null);
+    firstTransactionDate(accountIds.length > 0 ? accountIds : undefined)
+      .then((d) => {
+        if (!cancelled) setEarliestTxnDate(d);
+      })
+      .catch(() => {
+        if (!cancelled) setEarliestTxnDate(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountIds]);
+
+  // Load accounts + categories once.
+  useEffect(() => {
+    let cancelled = false;
+    listAccounts()
+      .then((a) => {
+        if (!cancelled) {
+          setAccounts(a);
+          setAccountsLoaded(true);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
+    listCategories()
+      .then((c) => {
+        if (!cancelled) {
+          setCategories(c);
+          setCategoriesLoaded(true);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Whenever we land on a different saved view, or once categories arrive,
+  // hydrate the form state from the persisted config. We deliberately read
+  // `initialConfig` here instead of view.config so the deep equality of the
+  // memoised config drives this reset.
+  useEffect(() => {
+    if (!categoriesLoaded) return;
+    const expCats = categories.filter((c) => c.kind === "expense");
+    const incCats = categories.filter((c) => c.kind === "income");
+    setName(view.name);
+    setAccountIds(initialConfig.accountIds);
+    setRange(initialConfig.defaultRange);
+    setGranularity(initialConfig.defaultGranularity);
+    setShowTotal(initialConfig.showTotalColumn ?? true);
+    setExpenseOrder(
+      computeInitialOrder(
+        expCats,
+        initialConfig.expenseCategoryOrder ?? initialConfig.expenseCategoryIds,
+      ),
+    );
+    setExpenseSelected(new Set(initialConfig.expenseCategoryIds));
+    setIncomeOrder(
+      computeInitialOrder(
+        incCats,
+        initialConfig.incomeCategoryOrder ?? initialConfig.incomeCategoryIds,
+      ),
+    );
+    setIncomeSelected(new Set(initialConfig.incomeCategoryIds));
+  }, [view.id, view.name, initialConfig, categoriesLoaded, categories]);
+
+  // Recompute the report whenever any input that affects the data changes.
+  useEffect(() => {
+    let cancelled = false;
+    const resolved = resolveRange(range, earliestTxnDate);
+    if (!resolved) return;
+    const { from, to } = resolved;
     if (!from || !to || to < from) return;
     setLoading(true);
     setError(null);
+    const expenseSelOrdered = expenseOrder.filter((id) => expenseSelected.has(id));
+    const incomeSelOrdered = incomeOrder.filter((id) => incomeSelected.has(id));
     computeReport({
-      accountIds: config.accountIds,
-      expenseCategoryIds: config.expenseCategoryIds,
-      incomeCategoryIds: config.incomeCategoryIds,
+      accountIds,
+      expenseCategoryIds: expenseSelOrdered,
+      incomeCategoryIds: incomeSelOrdered,
       from,
       to,
       granularity,
@@ -160,12 +283,106 @@ export function ReportViewPage({ view, onEdit }: Props) {
       cancelled = true;
     };
   }, [
-    view.id,
     range,
     granularity,
-    config.accountIds,
-    config.expenseCategoryIds,
-    config.incomeCategoryIds,
+    accountIds,
+    earliestTxnDate,
+    expenseOrder,
+    expenseSelected,
+    incomeOrder,
+    incomeSelected,
+  ]);
+
+  // ---- auto-save ----
+  // We persist the active form state to the backend on a short debounce. The
+  // initial hydrate (above) flips `hydrated` true, so the very first effect
+  // pass after hydration doesn't trigger a no-op save.
+  const hydratedRef = useRef(false);
+  const lastSavedRef = useRef<{ name: string; payload: string } | null>(null);
+  const saveTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    // Wait until both accounts and categories are loaded so the form has
+    // valid baseline state before we start emitting saves.
+    if (!accountsLoaded || !categoriesLoaded) return;
+    if (!hydratedRef.current) {
+      hydratedRef.current = true;
+      const expenseSelOrdered = expenseOrder.filter((id) => expenseSelected.has(id));
+      const incomeSelOrdered = incomeOrder.filter((id) => incomeSelected.has(id));
+      const config: ReportConfig = {
+        version: 1,
+        accountIds,
+        expenseCategoryIds: expenseSelOrdered,
+        incomeCategoryIds: incomeSelOrdered,
+        expenseCategoryOrder: expenseOrder,
+        incomeCategoryOrder: incomeOrder,
+        defaultRange: range,
+        defaultGranularity: granularity,
+        expandedCategoryIds: initialConfig.expandedCategoryIds,
+        showTotalColumn: showTotal,
+      };
+      lastSavedRef.current = { name, payload: JSON.stringify(config) };
+      return;
+    }
+
+    const expenseSelOrdered = expenseOrder.filter((id) => expenseSelected.has(id));
+    const incomeSelOrdered = incomeOrder.filter((id) => incomeSelected.has(id));
+    const config: ReportConfig = {
+      version: 1,
+      accountIds,
+      expenseCategoryIds: expenseSelOrdered,
+      incomeCategoryIds: incomeSelOrdered,
+      expenseCategoryOrder: expenseOrder,
+      incomeCategoryOrder: incomeOrder,
+      defaultRange: range,
+      defaultGranularity: granularity,
+      expandedCategoryIds: initialConfig.expandedCategoryIds,
+      showTotalColumn: showTotal,
+    };
+    const payload = JSON.stringify(config);
+    const trimmedName = name.trim() || view.name;
+
+    const last = lastSavedRef.current;
+    if (last && last.name === trimmedName && last.payload === payload) {
+      return;
+    }
+
+    if (saveTimerRef.current != null) {
+      window.clearTimeout(saveTimerRef.current);
+    }
+    saveTimerRef.current = window.setTimeout(() => {
+      saveTimerRef.current = null;
+      updateReportView({ id: view.id, name: trimmedName, config: payload })
+        .then((saved) => {
+          lastSavedRef.current = { name: trimmedName, payload };
+          setSaveError(null);
+          onSaved(saved);
+        })
+        .catch((e) => setSaveError(String(e)));
+    }, AUTOSAVE_DELAY_MS);
+
+    return () => {
+      if (saveTimerRef.current != null) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+    };
+  }, [
+    accountsLoaded,
+    categoriesLoaded,
+    name,
+    accountIds,
+    range,
+    granularity,
+    showTotal,
+    expenseOrder,
+    expenseSelected,
+    incomeOrder,
+    incomeSelected,
+    view.id,
+    view.name,
+    initialConfig.expandedCategoryIds,
+    onSaved,
   ]);
 
   function setRangeKind(next: RangePreset) {
@@ -178,74 +395,151 @@ export function ReportViewPage({ view, onEdit }: Props) {
     }
   }
 
+  const accountItems = accounts.map((a) => ({
+    id: a.id,
+    label: `${a.name || a.accountNumber || `#${a.id}`} · ${a.currency}`,
+  }));
+
   return (
     <section className="page report-page">
-      <div className="report-controls">
-        <label>
-          <span>{t("report.rangeLabel")}</span>
-          <select
-            value={range.kind === "preset" ? range.preset : "custom"}
-            onChange={(e) => setRangeKind(e.target.value as RangePreset)}
-          >
-            {PRESETS.map((p) => (
-              <option key={p} value={p}>
-                {t(`builder.preset.${p}`)}
-              </option>
-            ))}
-          </select>
-        </label>
-        {range.kind === "custom" && (
-          <>
-            <label>
-              <span>{t("report.fromDate")}</span>
-              <input
-                type="date"
-                value={range.from}
-                onChange={(e) => setRange({ ...range, from: e.target.value })}
-              />
-            </label>
-            <label>
-              <span>{t("report.toDate")}</span>
-              <input
-                type="date"
-                value={range.to}
-                onChange={(e) => setRange({ ...range, to: e.target.value })}
-              />
-            </label>
-          </>
-        )}
-        <label>
-          <span>{t("report.granularityLabel")}</span>
-          <select
-            value={granularity}
-            onChange={(e) => setGranularity(e.target.value as Granularity)}
-          >
-            {GRANULARITIES.map((g) => (
-              <option key={g} value={g}>
-                {t(`builder.granularity.${g}`)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="report-controls-toggle">
-          <input
-            type="checkbox"
-            checked={showTotal}
-            onChange={(e) => setShowTotal(e.target.checked)}
-          />
-          <span>{t("report.showTotalColumn")}</span>
-        </label>
+      <section
+        className={`filter-bar${filtersExpanded ? "" : " filter-bar--collapsed"}`}
+      >
         <button
           type="button"
-          className="icon-btn report-edit-btn"
-          onClick={onEdit}
-          title={t("report.edit")}
-          aria-label={t("report.edit")}
+          className="filter-bar-handle"
+          onClick={() => setFiltersExpanded((v) => !v)}
+          aria-label={
+            filtersExpanded ? t("toolbar.collapse") : t("toolbar.expand")
+          }
+          title={
+            filtersExpanded ? t("toolbar.collapse") : t("toolbar.expand")
+          }
         >
-          ✎
+          <span className="filter-bar-handle-grip" />
         </button>
-      </div>
+        {filtersExpanded && (
+          <div className="filter-bar-row report-filter-bar-row">
+            <label className="filter-field">
+              <span>{t("builder.fieldName")}</span>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={t("builder.fieldNamePlaceholder")}
+                autoComplete="off"
+              />
+            </label>
+            <label className="filter-field">
+              <span>{t("builder.accountsLabel")}</span>
+              <MultiSelectDropdown<number>
+                items={accountItems}
+                selected={accountIds}
+                onApply={setAccountIds}
+                allLabel={t("builder.accountsAll")}
+                noneLabel={t("builder.accountsNone")}
+                emptyItemsLabel={t("builder.accountsEmpty")}
+                multiSelectedLabel={(count) => t("builder.accountsMany", { count })}
+                applyLabel={t("builder.accountsApply")}
+              />
+            </label>
+            <label className="filter-field">
+              <span>{t("report.rangeLabel")}</span>
+              <select
+                value={range.kind === "preset" ? range.preset : "custom"}
+                onChange={(e) => setRangeKind(e.target.value as RangePreset)}
+              >
+                {PRESETS.map((p) => (
+                  <option key={p} value={p}>
+                    {t(`builder.preset.${p}`)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {range.kind === "custom" && (
+              <>
+                <label className="filter-field">
+                  <span>{t("report.fromDate")}</span>
+                  <input
+                    type="date"
+                    value={range.from}
+                    onChange={(e) => setRange({ ...range, from: e.target.value })}
+                  />
+                </label>
+                <label className="filter-field">
+                  <span>{t("report.toDate")}</span>
+                  <input
+                    type="date"
+                    value={range.to}
+                    onChange={(e) => setRange({ ...range, to: e.target.value })}
+                  />
+                </label>
+              </>
+            )}
+            <label className="filter-field">
+              <span>{t("report.granularityLabel")}</span>
+              <select
+                value={granularity}
+                onChange={(e) => setGranularity(e.target.value as Granularity)}
+              >
+                {GRANULARITIES.map((g) => (
+                  <option key={g} value={g}>
+                    {t(`builder.granularity.${g}`)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="filter-field filter-field--checkbox">
+              <input
+                type="checkbox"
+                checked={showTotal}
+                onChange={(e) => setShowTotal(e.target.checked)}
+              />
+              <span>{t("report.showTotalColumn")}</span>
+            </label>
 
+            <label className="filter-field">
+              <span>{t("report.categoriesLabel")}</span>
+              <button
+                type="button"
+                className="dropdown-button report-pick-categories-btn"
+                onClick={() => setPickerOpen(true)}
+              >
+                {t("report.pickCategoriesValue", {
+                  count: expenseSelected.size + incomeSelected.size,
+                })}
+              </button>
+            </label>
+          </div>
+        )}
+      </section>
+
+      {pickerOpen && (
+        <CategoriesPickerModal
+          title={t("report.categoriesLabel")}
+          expenseTitle={t("builder.sectionExpense")}
+          incomeTitle={t("builder.sectionIncome")}
+          categories={categories}
+          initial={{
+            expenseOrder,
+            expenseSelected,
+            incomeOrder,
+            incomeSelected,
+          }}
+          onCancel={() => setPickerOpen(false)}
+          onSave={(next) => {
+            setExpenseOrder(next.expenseOrder);
+            setExpenseSelected(next.expenseSelected);
+            setIncomeOrder(next.incomeOrder);
+            setIncomeSelected(next.incomeSelected);
+            setPickerOpen(false);
+          }}
+        />
+      )}
+
+      {saveError && (
+        <div className="error">{saveError}</div>
+      )}
       {error && (
         <div className="error">{t("report.errorLoading", { message: error })}</div>
       )}
@@ -254,7 +548,7 @@ export function ReportViewPage({ view, onEdit }: Props) {
       {response && (
         <PivotTable
           response={response}
-          initialExpanded={config.expandedCategoryIds}
+          initialExpanded={initialConfig.expandedCategoryIds}
           showTotal={showTotal}
         />
       )}
@@ -274,6 +568,7 @@ function PivotTable({ response, initialExpanded, showTotal }: PivotProps) {
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
   const [incomeCollapsed, setIncomeCollapsed] = useState(false);
   const [expenseCollapsed, setExpenseCollapsed] = useState(false);
+  const [metricsCollapsed, setMetricsCollapsed] = useState(false);
 
   // Switching to a different view (or recomputing) resets collapse state.
   // Default: collapse every group row (any category that has descendants in
@@ -293,6 +588,7 @@ function PivotTable({ response, initialExpanded, showTotal }: PivotProps) {
     setCollapsed(groupIds);
     setIncomeCollapsed(false);
     setExpenseCollapsed(false);
+    setMetricsCollapsed(false);
   }, [response, initialExpanded, income, expense]);
 
   function toggleRow(catId: number) {
@@ -350,6 +646,10 @@ function PivotTable({ response, initialExpanded, showTotal }: PivotProps) {
     netLabel: t("report.metricNet"),
     cumulativeLabel: t("report.metricNetCumulative"),
     showTotal,
+    sectionCollapsed: metricsCollapsed,
+    onToggleSection: () => setMetricsCollapsed((v) => !v),
+    foldLabel: t("report.fold"),
+    unfoldLabel: t("report.unfold"),
   });
 
   return (
@@ -697,6 +997,10 @@ interface RenderMetricsArgs {
   netLabel: string;
   cumulativeLabel: string;
   showTotal: boolean;
+  sectionCollapsed: boolean;
+  onToggleSection: () => void;
+  foldLabel: string;
+  unfoldLabel: string;
 }
 
 // Sums every row's per-period values. Backend allocates each transaction share
@@ -726,6 +1030,10 @@ function renderMetricsSection({
   netLabel,
   cumulativeLabel,
   showTotal,
+  sectionCollapsed,
+  onToggleSection,
+  foldLabel,
+  unfoldLabel,
 }: RenderMetricsArgs): React.ReactElement[] {
   const nPeriods = periods.length;
   const incomePerPeriod = sumSectionPerPeriodMinor(income.rows, nPeriods);
@@ -771,10 +1079,18 @@ function renderMetricsSection({
     </tr>
   );
 
-  return [
+  // Section header doubles as the fold toggle, mirroring the income/expense
+  // headers so the metric block reads as the same kind of section.
+  const out: React.ReactElement[] = [
     <tr key="header-metrics" className="pivot-row pivot-row--section">
-      <td className="pivot-name-cell pivot-name-cell--section">
-        <span className="pivot-fold-spacer" aria-hidden />
+      <td
+        className="pivot-name-cell pivot-name-cell--section"
+        onClick={onToggleSection}
+        title={sectionCollapsed ? unfoldLabel : foldLabel}
+      >
+        <span className="pivot-fold-btn pivot-fold-btn--section" aria-hidden>
+          {sectionCollapsed ? "▸" : "▾"}
+        </span>
         <span className="pivot-name-text">{sectionTitle}</span>
       </td>
       {periods.map((_, idx) => (
@@ -782,7 +1098,17 @@ function renderMetricsSection({
       ))}
       {showTotal && <td className="pivot-value-cell pivot-value-cell--total" />}
     </tr>,
-    renderRow("metric-net", netLabel, netPerPeriod, netTotal),
-    renderRow("metric-cumulative", cumulativeLabel, cumulativePerPeriod, cumulativeTotal),
   ];
+  if (!sectionCollapsed) {
+    out.push(renderRow("metric-net", netLabel, netPerPeriod, netTotal));
+    out.push(
+      renderRow(
+        "metric-cumulative",
+        cumulativeLabel,
+        cumulativePerPeriod,
+        cumulativeTotal,
+      ),
+    );
+  }
+  return out;
 }

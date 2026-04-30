@@ -6,7 +6,6 @@ import { listReportViews, listTransactions, ReportView } from "./lib/api";
 import { AccountsPage, CreateAccountModal } from "./pages/Accounts";
 import { CategoriesPage } from "./pages/Categories";
 import { ImportDialog } from "./pages/ImportDialog";
-import { ReportsBuilderPage } from "./pages/ReportsBuilder";
 import { ReportViewPage } from "./pages/ReportView";
 import { SettingsPage } from "./pages/Settings";
 import { TransactionsPage } from "./pages/Transactions";
@@ -23,8 +22,6 @@ function App() {
 
   const [reportViews, setReportViews] = useState<ReportView[]>([]);
   const [reportViewsVersion, setReportViewsVersion] = useState(0);
-  // The editor lives inside the active report tab. Switching tabs discards it.
-  const [editingReport, setEditingReport] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -55,12 +52,6 @@ function App() {
     }
   }, [tab, reportViews]);
 
-  function changeTab(next: Tab) {
-    // Switching tabs always exits the report editor.
-    setEditingReport(false);
-    setTab(next);
-  }
-
   function refreshReportViews() {
     setReportViewsVersion((v) => v + 1);
   }
@@ -81,7 +72,7 @@ function App() {
 
   return (
     <main className="container">
-      <Tabs active={tab} reportViews={reportViews} onChange={changeTab} />
+      <Tabs active={tab} reportViews={reportViews} onChange={setTab} />
       {tab === "categories" && <CategoriesPage />}
       {tab === "accounts" && (
         <AccountsPage
@@ -99,20 +90,11 @@ function App() {
         />
       )}
       {tab === "settings" && <SettingsPage />}
-      {activeReportView && editingReport && (
-        <ReportsBuilderPage
-          view={activeReportView}
-          onSaved={() => {
-            refreshReportViews();
-            setEditingReport(false);
-          }}
-          onCancel={() => setEditingReport(false)}
-        />
-      )}
-      {activeReportView && !editingReport && (
+      {activeReportView && (
         <ReportViewPage
+          key={activeReportView.id}
           view={activeReportView}
-          onEdit={() => setEditingReport(true)}
+          onSaved={refreshReportViews}
         />
       )}
 

@@ -1,73 +1,13 @@
-import React, { FormEvent, useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 
-import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
-import { useT } from "../i18n";
-import {
-  Account,
-  Category,
-  CategoryKind,
-  Granularity,
-  RangePreset,
-  ReportConfig,
-  ReportRange,
-  ReportView,
-  listAccounts,
-  listCategories,
-  updateReportView,
-} from "../lib/api";
-
-interface Props {
-  view: ReportView;
-  onSaved: (view: ReportView) => void;
-  onCancel: () => void;
-}
-
-const PRESETS: RangePreset[] = [
-  "current_month",
-  "current_quarter",
-  "current_year",
-  "last_12_months",
-  "all_time",
-  "custom",
-];
-
-const GRANULARITIES: Granularity[] = ["year", "quarter", "month"];
-
-function todayIso(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function firstOfMonthIso(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
-}
-
-function defaultConfig(): ReportConfig {
-  return {
-    version: 1,
-    accountIds: [],
-    expenseCategoryIds: [],
-    incomeCategoryIds: [],
-    defaultRange: { kind: "preset", preset: "current_year" },
-    defaultGranularity: "month",
-    expandedCategoryIds: [],
-  };
-}
-
-function safeParseConfig(raw: string): ReportConfig {
-  try {
-    const parsed = JSON.parse(raw) as Partial<ReportConfig>;
-    return { ...defaultConfig(), ...parsed };
-  } catch {
-    return defaultConfig();
-  }
-}
+import { useT } from "../../i18n";
+import { Category, CategoryKind } from "../../lib/api";
 
 // Produce a flat DFS order of category ids for a single section.
 // `savedOrder` (when present) provides priority ordering for siblings; any
 // siblings not in `savedOrder` are appended after them in alphabetical order.
-function computeInitialOrder(cats: Category[], savedOrder?: number[]): number[] {
+export function computeInitialOrder(cats: Category[], savedOrder?: number[]): number[] {
   const byParent = new Map<number | null, Category[]>();
   for (const c of cats) {
     const key = c.parentId ?? null;
@@ -97,245 +37,6 @@ function computeInitialOrder(cats: Category[], savedOrder?: number[]): number[] 
   return out;
 }
 
-export function ReportsBuilderPage({ view, onSaved, onCancel }: Props) {
-  const t = useT();
-
-  const [name, setName] = useState("");
-  const [accountIds, setAccountIds] = useState<number[]>([]);
-  const [expenseOrder, setExpenseOrder] = useState<number[]>([]);
-  const [expenseSelected, setExpenseSelected] = useState<Set<number>>(new Set());
-  const [incomeOrder, setIncomeOrder] = useState<number[]>([]);
-  const [incomeSelected, setIncomeSelected] = useState<Set<number>>(new Set());
-  const [range, setRange] = useState<ReportRange>({ kind: "preset", preset: "current_year" });
-  const [granularity, setGranularity] = useState<Granularity>("month");
-
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-
-  const initialExpandedIds = useMemo(
-    () => safeParseConfig(view.config).expandedCategoryIds,
-    [view.config],
-  );
-
-  useEffect(() => {
-    Promise.all([listAccounts(), listCategories()])
-      .then(([accs, cats]) => {
-        setAccounts(accs);
-        setCategories(cats);
-        setLoaded(true);
-      })
-      .catch((e) => setError(String(e)));
-  }, []);
-
-  // Reset form whenever the editing target or the loaded category set changes.
-  useEffect(() => {
-    if (!loaded) return;
-    const expCats = categories.filter((c) => c.kind === "expense");
-    const incCats = categories.filter((c) => c.kind === "income");
-    const cfg = safeParseConfig(view.config);
-    setName(view.name);
-    setAccountIds(cfg.accountIds);
-    setExpenseOrder(
-      computeInitialOrder(expCats, cfg.expenseCategoryOrder ?? cfg.expenseCategoryIds),
-    );
-    setExpenseSelected(new Set(cfg.expenseCategoryIds));
-    setIncomeOrder(
-      computeInitialOrder(incCats, cfg.incomeCategoryOrder ?? cfg.incomeCategoryIds),
-    );
-    setIncomeSelected(new Set(cfg.incomeCategoryIds));
-    setRange(cfg.defaultRange);
-    setGranularity(cfg.defaultGranularity);
-    setError(null);
-  }, [view, loaded, categories]);
-
-  function setRangeKind(next: RangePreset) {
-    if (next === "custom") {
-      const from = range.kind === "custom" ? range.from : firstOfMonthIso();
-      const to = range.kind === "custom" ? range.to : todayIso();
-      setRange({ kind: "custom", from, to });
-    } else {
-      setRange({ kind: "preset", preset: next });
-    }
-  }
-
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    setError(null);
-    if (!name.trim()) {
-      setError(t("builder.errorEmptyName"));
-      return;
-    }
-    if (accountIds.length === 0) {
-      setError(t("builder.errorNoAccounts"));
-      return;
-    }
-
-    const expenseSelOrdered = expenseOrder.filter((id) => expenseSelected.has(id));
-    const incomeSelOrdered = incomeOrder.filter((id) => incomeSelected.has(id));
-
-    if (range.kind === "custom" && range.from && range.to && range.to < range.from) {
-      setError(t("builder.errorBadDates"));
-      return;
-    }
-
-    const config: ReportConfig = {
-      version: 1,
-      accountIds,
-      expenseCategoryIds: expenseSelOrdered,
-      incomeCategoryIds: incomeSelOrdered,
-      expenseCategoryOrder: expenseOrder,
-      incomeCategoryOrder: incomeOrder,
-      defaultRange: range,
-      defaultGranularity: granularity,
-      expandedCategoryIds: initialExpandedIds,
-    };
-    const payload = JSON.stringify(config);
-
-    setSubmitting(true);
-    try {
-      const saved = await updateReportView({
-        id: view.id,
-        name: name.trim(),
-        config: payload,
-      });
-      onSaved(saved);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <section className="page builder-page">
-      <header className="builder-header">
-        <h2>{t("builder.titleEdit")}</h2>
-      </header>
-
-      {error && <div className="error">{error}</div>}
-
-      <form className="builder-form" onSubmit={onSubmit}>
-        <div className="builder-row">
-          <label htmlFor="builder-name">{t("builder.fieldName")}</label>
-          <input
-            id="builder-name"
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder={t("builder.fieldNamePlaceholder")}
-            autoComplete="off"
-          />
-        </div>
-
-        <div className="builder-row">
-          <label>{t("builder.accountsLabel")}</label>
-          <MultiSelectDropdown<number>
-            items={accounts.map((a) => ({ id: a.id, label: a.name }))}
-            selected={accountIds}
-            onApply={setAccountIds}
-            allLabel={t("builder.accountsAll")}
-            noneLabel={t("builder.accountsNone")}
-            emptyItemsLabel={t("builder.accountsEmpty")}
-            multiSelectedLabel={(count) => t("builder.accountsMany", { count })}
-            applyLabel={t("builder.accountsApply")}
-          />
-        </div>
-
-        <div className="builder-defaults">
-          <h3>{t("builder.defaults")}</h3>
-          <p className="settings-hint">{t("builder.defaultsHint")}</p>
-          <div className="builder-defaults-grid">
-            <label>
-              <span>{t("builder.defaultRange")}</span>
-              <select
-                value={range.kind === "preset" ? range.preset : "custom"}
-                onChange={(e) => setRangeKind(e.target.value as RangePreset)}
-              >
-                {PRESETS.map((p) => (
-                  <option key={p} value={p}>
-                    {t(`builder.preset.${p}`)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {range.kind === "custom" && (
-              <>
-                <label>
-                  <span>{t("builder.fromDate")}</span>
-                  <input
-                    type="date"
-                    value={range.from}
-                    onChange={(e) => setRange({ ...range, from: e.target.value })}
-                  />
-                </label>
-                <label>
-                  <span>{t("builder.toDate")}</span>
-                  <input
-                    type="date"
-                    value={range.to}
-                    onChange={(e) => setRange({ ...range, to: e.target.value })}
-                  />
-                </label>
-              </>
-            )}
-            <label>
-              <span>{t("builder.defaultGranularity")}</span>
-              <select
-                value={granularity}
-                onChange={(e) => setGranularity(e.target.value as Granularity)}
-              >
-                {GRANULARITIES.map((g) => (
-                  <option key={g} value={g}>
-                    {t(`builder.granularity.${g}`)}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-        </div>
-
-        <div className="builder-sections">
-          <CategorySection
-            title={t("builder.sectionExpense")}
-            kind="expense"
-            categories={categories}
-            order={expenseOrder}
-            setOrder={setExpenseOrder}
-            selected={expenseSelected}
-            setSelected={setExpenseSelected}
-          />
-          <CategorySection
-            title={t("builder.sectionIncome")}
-            kind="income"
-            categories={categories}
-            order={incomeOrder}
-            setOrder={setIncomeOrder}
-            selected={incomeSelected}
-            setSelected={setIncomeSelected}
-          />
-        </div>
-
-        <div className="builder-actions">
-          <button type="submit" className="btn-primary" disabled={submitting}>
-            {submitting ? t("builder.saving") : t("builder.save")}
-          </button>
-          <button
-            type="button"
-            className="btn-ghost"
-            onClick={onCancel}
-            disabled={submitting}
-          >
-            {t("common.cancel")}
-          </button>
-        </div>
-      </form>
-    </section>
-  );
-}
-
 interface CategorySectionProps {
   title: string;
   kind: CategoryKind;
@@ -357,7 +58,7 @@ interface MovePreview {
   sourceDepth: number;
 }
 
-function CategorySection({
+export function CategorySection({
   title,
   kind,
   categories,
@@ -607,4 +308,117 @@ function moveSubtree(
   }
 
   return [...without.slice(0, insertAt), ...subtree, ...without.slice(insertAt)];
+}
+
+export interface CategoriesPickerSelection {
+  expenseOrder: number[];
+  expenseSelected: Set<number>;
+  incomeOrder: number[];
+  incomeSelected: Set<number>;
+}
+
+interface CategoriesPickerModalProps {
+  title: string;
+  expenseTitle: string;
+  incomeTitle: string;
+  categories: Category[];
+  initial: CategoriesPickerSelection;
+  onCancel: () => void;
+  onSave: (next: CategoriesPickerSelection) => void;
+}
+
+// Single modal that hosts both the expense and income pickers side-by-side.
+// All four pieces of state (orders + selected sets for each kind) live
+// locally so edits are discardable — only "Save" propagates them upstream,
+// which triggers the parent's autosave path.
+export function CategoriesPickerModal({
+  title,
+  expenseTitle,
+  incomeTitle,
+  categories,
+  initial,
+  onCancel,
+  onSave,
+}: CategoriesPickerModalProps) {
+  const t = useT();
+  const [expenseOrder, setExpenseOrder] = useState<number[]>(initial.expenseOrder);
+  const [expenseSelected, setExpenseSelected] = useState<Set<number>>(
+    new Set(initial.expenseSelected),
+  );
+  const [incomeOrder, setIncomeOrder] = useState<number[]>(initial.incomeOrder);
+  const [incomeSelected, setIncomeSelected] = useState<Set<number>>(
+    new Set(initial.incomeSelected),
+  );
+
+  // ESC closes the modal as a no-op (same as Cancel).
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") onCancel();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onCancel]);
+
+  return createPortal(
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div
+        className="modal categories-picker-modal"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="modal-header">
+          <h3>{title}</h3>
+          <button
+            className="icon-btn"
+            onClick={onCancel}
+            aria-label={t("common.close")}
+            type="button"
+          >
+            ×
+          </button>
+        </header>
+        <div className="modal-body categories-picker-modal-body">
+          <div className="categories-picker-grid">
+            <CategorySection
+              title={expenseTitle}
+              kind="expense"
+              categories={categories}
+              order={expenseOrder}
+              setOrder={setExpenseOrder}
+              selected={expenseSelected}
+              setSelected={setExpenseSelected}
+            />
+            <CategorySection
+              title={incomeTitle}
+              kind="income"
+              categories={categories}
+              order={incomeOrder}
+              setOrder={setIncomeOrder}
+              selected={incomeSelected}
+              setSelected={setIncomeSelected}
+            />
+          </div>
+        </div>
+        <footer className="modal-footer">
+          <button type="button" className="btn-ghost" onClick={onCancel}>
+            {t("common.cancel")}
+          </button>
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={() =>
+              onSave({
+                expenseOrder,
+                expenseSelected,
+                incomeOrder,
+                incomeSelected,
+              })
+            }
+          >
+            {t("common.save")}
+          </button>
+        </footer>
+      </div>
+    </div>,
+    document.body,
+  );
 }

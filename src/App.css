@@ -2503,45 +2503,32 @@ code {
   position: relative;
 }
 
-.report-edit-btn {
-  margin-left: auto;
-  align-self: center;
-  font-size: 18px;
-}
-
-.report-controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: end;
-  gap: 12px;
-  padding: 10px 12px;
-  margin-bottom: 12px;
-  background: #fafafa;
-  border: 1px solid #e4e4e7;
-  border-radius: 6px;
-}
-
-.report-controls label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-  color: #52525b;
-}
-
-.report-controls select,
-.report-controls input {
-  padding: 6px 10px;
+/* The auto-save panel hosts a free-text "name" input that needs to render
+   itself as a regular input, not the date/select look used by the rest of
+   the filter-bar. */
+.report-filter-bar-row input[type="text"] {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 32px;
+  padding: 0 10px;
   border: 1px solid #d4d4d8;
   border-radius: 4px;
-  background: #fff;
+  background-color: #ffffff;
   font: inherit;
+  font-size: 13px;
   color: inherit;
+  min-width: 220px;
+  box-sizing: border-box;
 }
 
-/* Inline checkbox toggles in the report controls bar — sit on the baseline of
-   the selects rather than stacking the label on top of the input. */
-.report-controls-toggle {
+.report-filter-bar-row input[type="text"]:focus {
+  outline: none;
+  border-color: #6366f1;
+}
+
+/* Inline checkbox field inside the filter-bar row — pairs the checkbox and
+   label horizontally and lines them up with the bottom edge of the selects. */
+.filter-field--checkbox {
   flex-direction: row !important;
   align-items: center;
   gap: 6px;
@@ -2551,15 +2538,96 @@ code {
   color: #18181b;
 }
 
-.report-controls-toggle input {
+.filter-field--checkbox input {
   padding: 0;
   margin: 0;
   width: auto;
 }
 
 @media (prefers-color-scheme: dark) {
-  .report-controls-toggle {
+  .filter-field--checkbox {
     color: #e4e4e7;
+  }
+  .report-filter-bar-row input[type="text"] {
+    background: #18181b;
+    border-color: #3f3f46;
+    color: inherit;
+  }
+}
+
+/* "Pick categories" buttons in the report filter-bar. They look like a
+   dropdown trigger (consistent with the multi-select fields next to them)
+   but open a modal instead. */
+.report-pick-categories-btn {
+  text-align: left;
+}
+
+/* The categories picker modal hosts both expense and income trees side-by
+   side, so it's wider than the default modal. Its body delegates scroll to
+   each inner column so the modal frame stays put. */
+.categories-picker-modal {
+  width: min(1100px, 96vw);
+}
+
+.categories-picker-modal-body {
+  padding: 0;
+  overflow: hidden;
+}
+
+/* Two columns inside the modal body — expense on the left, income on the
+   right. They share height with the body and each scrolls independently. */
+.categories-picker-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+}
+
+.categories-picker-grid > .builder-section {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 12px 16px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Vertical divider between expense and income columns. */
+.categories-picker-grid > .builder-section + .builder-section {
+  border-left: 1px solid #e4e4e7;
+}
+
+/* Inside-the-modal section title shrinks to a column header (the modal
+   header already shows the umbrella title). */
+.categories-picker-grid .builder-section-title {
+  margin: 0 0 4px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #71717a;
+}
+
+/* The category list scrolls within its column. */
+.categories-picker-grid .builder-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+@media (prefers-color-scheme: dark) {
+  .categories-picker-grid > .builder-section + .builder-section {
+    border-left-color: #3f3f46;
+  }
+}
+
+@media (max-width: 640px) {
+  .categories-picker-grid {
+    grid-template-columns: 1fr;
+  }
+  .categories-picker-grid > .builder-section + .builder-section {
+    border-left: 0;
+    border-top: 1px solid #e4e4e7;
   }
 }
 

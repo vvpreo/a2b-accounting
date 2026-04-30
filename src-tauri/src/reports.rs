@@ -75,7 +75,7 @@ fn parse_iso_date(s: &str) -> Result<NaiveDate, String> {
         .map_err(|e| format!("invalid date '{s}': {e}"))
 }
 
-fn parse_offset(s: &str) -> Result<FixedOffset, String> {
+pub(crate) fn parse_offset(s: &str) -> Result<FixedOffset, String> {
     let trimmed = s.trim();
     if trimmed.is_empty() {
         return Ok(FixedOffset::east_opt(0).unwrap());
@@ -86,7 +86,7 @@ fn parse_offset(s: &str) -> Result<FixedOffset, String> {
         .map_err(|e| format!("invalid timezone offset '{s}': {e}"))
 }
 
-fn local_date(occurred_at_utc: &str, tz_offset: &str) -> Result<NaiveDate, String> {
+pub(crate) fn local_date(occurred_at_utc: &str, tz_offset: &str) -> Result<NaiveDate, String> {
     let dt = DateTime::parse_from_rfc3339(occurred_at_utc.trim())
         .map_err(|e| format!("invalid timestamp '{occurred_at_utc}': {e}"))?;
     let offset = parse_offset(tz_offset)?;
