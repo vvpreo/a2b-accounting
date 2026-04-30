@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import React, { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { useT } from "../i18n";
@@ -17,7 +17,6 @@ import {
   listCategories,
   updateReportView,
 } from "../lib/api";
-import { buildTree, flattenTree } from "../lib/category-tree";
 
 interface Props {
   editId: number | null;
@@ -53,8 +52,6 @@ function defaultConfig(): ReportConfig {
     accountIds: [],
     expenseCategoryIds: [],
     incomeCategoryIds: [],
-    expenseShowUncategorized: false,
-    incomeShowUncategorized: false,
     defaultRange: { kind: "preset", preset: "current_year" },
     defaultGranularity: "month",
     expandedCategoryIds: [],
@@ -63,72 +60,119 @@ function defaultConfig(): ReportConfig {
 
 function safeParseConfig(raw: string): ReportConfig {
   try {
-    const parsed = JSON.parse(raw) as Partial<ReportConfig> & { showUncategorized?: boolean };
-    const base = defaultConfig();
-    // Backwards compat: an older saved view used a single `showUncategorized`
-    // flag for both sections — propagate it to both new fields if present.
-    const legacyFallback = parsed.showUncategorized;
-    return {
-      ...base,
-      ...parsed,
-      expenseShowUncategorized:
-        parsed.expenseShowUncategorized ?? legacyFallback ?? base.expenseShowUncategorized,
-      incomeShowUncategorized:
-        parsed.incomeShowUncategorized ?? legacyFallback ?? base.incomeShowUncategorized,
-    };
+    const parsed = JSON.parse(raw) as Partial<ReportConfig>;
+    return { ...defaultConfig(), ...parsed };
   } catch {
     return defaultConfig();
   }
 }
 
+// Produce a flat DFS order of category ids for a single section.
+// `savedOrder` (when present) provides priority ordering for siblings; any
+// siblings not in `savedOrder` are appended after them in alphabetical order.
+function computeInitialOrder(cats: Category[], savedOrder?: number[]): number[] {
+  const byParent = new Map<number | null, Category[]>();
+  for (const c of cats) {
+    const key = c.parentId ?? null;
+    const arr = byParent.get(key);
+    if (arr) arr.push(c);
+    else byParent.set(key, [c]);
+  }
+  const savedIdx = new Map<number, number>();
+  if (savedOrder) savedOrder.forEach((id, i) => savedIdx.set(id, i));
+  for (const arr of byParent.values()) {
+    arr.sort((a, b) => {
+      const ai = savedIdx.has(a.id) ? savedIdx.get(a.id)! : Number.POSITIVE_INFINITY;
+      const bi = savedIdx.has(b.id) ? savedIdx.get(b.id)! : Number.POSITIVE_INFINITY;
+      if (ai !== bi) return ai - bi;
+      return a.name.localeCompare(b.name);
+    });
+  }
+  const out: number[] = [];
+  function dfs(parent: number | null) {
+    const kids = byParent.get(parent) ?? [];
+    for (const c of kids) {
+      out.push(c.id);
+      dfs(c.id);
+    }
+  }
+  dfs(null);
+  return out;
+}
+
 export function ReportsBuilderPage({ editId, reportViews, onSaved, onDeleted }: Props) {
   const t = useT();
 
-  const editing = editId != null ? reportViews.find((v) => v.id === editId) ?? null : null;
-  const initialConfig = useMemo(
-    () => (editing ? safeParseConfig(editing.config) : defaultConfig()),
-    [editing],
+  const editing = useMemo(
+    () => (editId != null ? reportViews.find((v) => v.id === editId) ?? null : null),
+    [editId, reportViews],
   );
 
-  const [name, setName] = useState(editing?.name ?? "");
-  const [accountIds, setAccountIds] = useState<number[]>(initialConfig.accountIds);
-  const [expenseIds, setExpenseIds] = useState<number[]>(initialConfig.expenseCategoryIds);
-  const [incomeIds, setIncomeIds] = useState<number[]>(initialConfig.incomeCategoryIds);
-  const [expenseShowUncat, setExpenseShowUncat] = useState(initialConfig.expenseShowUncategorized);
-  const [incomeShowUncat, setIncomeShowUncat] = useState(initialConfig.incomeShowUncategorized);
-  const [range, setRange] = useState<ReportRange>(initialConfig.defaultRange);
-  const [granularity, setGranularity] = useState<Granularity>(initialConfig.defaultGranularity);
+  const [name, setName] = useState("");
+  const [accountIds, setAccountIds] = useState<number[]>([]);
+  const [expenseOrder, setExpenseOrder] = useState<number[]>([]);
+  const [expenseSelected, setExpenseSelected] = useState<Set<number>>(new Set());
+  const [incomeOrder, setIncomeOrder] = useState<number[]>([]);
+  const [incomeSelected, setIncomeSelected] = useState<Set<number>>(new Set());
+  const [range, setRange] = useState<ReportRange>({ kind: "preset", preset: "current_year" });
+  const [granularity, setGranularity] = useState<Granularity>("month");
 
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  // Reset form when switching between create/edit modes (or between different views).
-  useEffect(() => {
-    setName(editing?.name ?? "");
-    const cfg = editing ? safeParseConfig(editing.config) : defaultConfig();
-    setAccountIds(cfg.accountIds);
-    setExpenseIds(cfg.expenseCategoryIds);
-    setIncomeIds(cfg.incomeCategoryIds);
-    setExpenseShowUncat(cfg.expenseShowUncategorized);
-    setIncomeShowUncat(cfg.incomeShowUncategorized);
-    setRange(cfg.defaultRange);
-    setGranularity(cfg.defaultGranularity);
-    setError(null);
-    setConfirmingDelete(false);
-  }, [editId, editing]);
+  const initialExpandedIds = useMemo(
+    () => (editing ? safeParseConfig(editing.config).expandedCategoryIds : []),
+    [editing],
+  );
 
   useEffect(() => {
     Promise.all([listAccounts(), listCategories()])
       .then(([accs, cats]) => {
         setAccounts(accs);
         setCategories(cats);
+        setLoaded(true);
       })
       .catch((e) => setError(String(e)));
   }, []);
+
+  // Init/reset form whenever the editing target or the loaded category set changes.
+  // Defaults for a new report: every category checked, alphabetical sibling order.
+  useEffect(() => {
+    if (!loaded) return;
+    const expCats = categories.filter((c) => c.kind === "expense");
+    const incCats = categories.filter((c) => c.kind === "income");
+    if (editing) {
+      const cfg = safeParseConfig(editing.config);
+      setName(editing.name);
+      setAccountIds(cfg.accountIds);
+      setExpenseOrder(
+        computeInitialOrder(expCats, cfg.expenseCategoryOrder ?? cfg.expenseCategoryIds),
+      );
+      setExpenseSelected(new Set(cfg.expenseCategoryIds));
+      setIncomeOrder(
+        computeInitialOrder(incCats, cfg.incomeCategoryOrder ?? cfg.incomeCategoryIds),
+      );
+      setIncomeSelected(new Set(cfg.incomeCategoryIds));
+      setRange(cfg.defaultRange);
+      setGranularity(cfg.defaultGranularity);
+    } else {
+      setName("");
+      setAccountIds([]);
+      setExpenseOrder(computeInitialOrder(expCats));
+      setExpenseSelected(new Set(expCats.map((c) => c.id)));
+      setIncomeOrder(computeInitialOrder(incCats));
+      setIncomeSelected(new Set(incCats.map((c) => c.id)));
+      setRange({ kind: "preset", preset: "current_year" });
+      setGranularity("month");
+    }
+    setError(null);
+    setConfirmingDelete(false);
+  }, [editing, loaded, categories]);
 
   function setRangeKind(next: RangePreset) {
     if (next === "custom") {
@@ -151,12 +195,10 @@ export function ReportsBuilderPage({ editId, reportViews, onSaved, onDeleted }: 
       setError(t("builder.errorNoAccounts"));
       return;
     }
-    const expenseHasContent = expenseIds.length > 0 || expenseShowUncat;
-    const incomeHasContent = incomeIds.length > 0 || incomeShowUncat;
-    if (!expenseHasContent && !incomeHasContent) {
-      setError(t("builder.errorNoCategories"));
-      return;
-    }
+
+    const expenseSelOrdered = expenseOrder.filter((id) => expenseSelected.has(id));
+    const incomeSelOrdered = incomeOrder.filter((id) => incomeSelected.has(id));
+
     if (range.kind === "custom" && range.from && range.to && range.to < range.from) {
       setError(t("builder.errorBadDates"));
       return;
@@ -165,13 +207,13 @@ export function ReportsBuilderPage({ editId, reportViews, onSaved, onDeleted }: 
     const config: ReportConfig = {
       version: 1,
       accountIds,
-      expenseCategoryIds: expenseIds,
-      incomeCategoryIds: incomeIds,
-      expenseShowUncategorized: expenseShowUncat,
-      incomeShowUncategorized: incomeShowUncat,
+      expenseCategoryIds: expenseSelOrdered,
+      incomeCategoryIds: incomeSelOrdered,
+      expenseCategoryOrder: expenseOrder,
+      incomeCategoryOrder: incomeOrder,
       defaultRange: range,
       defaultGranularity: granularity,
-      expandedCategoryIds: initialConfig.expandedCategoryIds,
+      expandedCategoryIds: initialExpandedIds,
     };
     const payload = JSON.stringify(config);
 
@@ -237,27 +279,6 @@ export function ReportsBuilderPage({ editId, reportViews, onSaved, onDeleted }: 
           />
         </div>
 
-        <div className="builder-sections">
-          <CategorySection
-            title={t("builder.sectionExpense")}
-            kind="expense"
-            categories={categories}
-            selected={expenseIds}
-            onChange={setExpenseIds}
-            showUncategorized={expenseShowUncat}
-            onChangeShowUncategorized={setExpenseShowUncat}
-          />
-          <CategorySection
-            title={t("builder.sectionIncome")}
-            kind="income"
-            categories={categories}
-            selected={incomeIds}
-            onChange={setIncomeIds}
-            showUncategorized={incomeShowUncat}
-            onChangeShowUncategorized={setIncomeShowUncat}
-          />
-        </div>
-
         <div className="builder-defaults">
           <h3>{t("builder.defaults")}</h3>
           <p className="settings-hint">{t("builder.defaultsHint")}</p>
@@ -311,6 +332,27 @@ export function ReportsBuilderPage({ editId, reportViews, onSaved, onDeleted }: 
           </div>
         </div>
 
+        <div className="builder-sections">
+          <CategorySection
+            title={t("builder.sectionExpense")}
+            kind="expense"
+            categories={categories}
+            order={expenseOrder}
+            setOrder={setExpenseOrder}
+            selected={expenseSelected}
+            setSelected={setExpenseSelected}
+          />
+          <CategorySection
+            title={t("builder.sectionIncome")}
+            kind="income"
+            categories={categories}
+            order={incomeOrder}
+            setOrder={setIncomeOrder}
+            selected={incomeSelected}
+            setSelected={setIncomeSelected}
+          />
+        </div>
+
         <div className="builder-actions">
           <button type="submit" className="btn-primary" disabled={submitting}>
             {submitting
@@ -362,165 +404,271 @@ interface CategorySectionProps {
   title: string;
   kind: CategoryKind;
   categories: Category[];
-  selected: number[];
-  onChange: (next: number[]) => void;
-  showUncategorized: boolean;
-  onChangeShowUncategorized: (next: boolean) => void;
+  order: number[];
+  setOrder: (next: number[]) => void;
+  selected: Set<number>;
+  setSelected: (next: Set<number>) => void;
+}
+
+interface MovePreview {
+  // Row that will end up adjacent to the moved category. The green band is
+  // rendered on this row's edge so the user can see where it will land.
+  targetId: number;
+  kind: "before" | "after";
+  // Depth of the *moved* category — drives the indicator's left indent so it
+  // visually starts at the level where the item will actually land (matters
+  // when target sits at a different depth than the source).
+  sourceDepth: number;
 }
 
 function CategorySection({
   title,
   kind,
   categories,
+  order,
+  setOrder,
   selected,
-  onChange,
-  showUncategorized,
-  onChangeShowUncategorized,
+  setSelected,
 }: CategorySectionProps) {
   const t = useT();
-  const tree = useMemo(() => buildTree(categories, kind), [categories, kind]);
-  const flat = useMemo(() => flattenTree(tree), [tree]);
-  const selectedSet = useMemo(() => new Set(selected), [selected]);
+
   const byId = useMemo(() => {
     const m = new Map<number, Category>();
-    for (const c of categories) m.set(c.id, c);
+    for (const c of categories) {
+      if (c.kind === kind) m.set(c.id, c);
+    }
     return m;
-  }, [categories]);
+  }, [categories, kind]);
+
+  // Defensive filter: drop ids that no longer exist (e.g. category deleted
+  // since the view was saved).
+  const renderedIds = useMemo(() => order.filter((id) => byId.has(id)), [order, byId]);
+
+  function depthOf(id: number): number {
+    let depth = 0;
+    let cur: number | null | undefined = byId.get(id)?.parentId;
+    while (cur != null) {
+      depth++;
+      cur = byId.get(cur)?.parentId;
+    }
+    return depth;
+  }
 
   function toggle(id: number) {
-    if (selectedSet.has(id)) {
-      onChange(selected.filter((x) => x !== id));
+    const next = new Set(selected);
+    if (next.has(id)) {
+      // Cascade uncheck: when a parent is unchecked, all its descendants must
+      // also drop out — keeping a child selected without its parent in the
+      // section would be confusing now that section totals are invariant.
+      next.delete(id);
+      for (const otherId of renderedIds) {
+        if (otherId !== id && isDescendantOf(otherId, id)) {
+          next.delete(otherId);
+        }
+      }
     } else {
-      onChange([...selected, id]);
+      // No cascade on check — the user picks subcategories explicitly so the
+      // visible distribution stays under their direct control.
+      next.add(id);
     }
+    setSelected(next);
   }
 
-  function move(idx: number, delta: number) {
-    const next = [...selected];
-    const target = idx + delta;
-    if (target < 0 || target >= next.length) return;
-    [next[idx], next[target]] = [next[target], next[idx]];
-    onChange(next);
+  // ---- reordering via per-row up/down arrows ----
+  // Cache the rendered ids' parent ids so move boundaries can be checked in O(1).
+  const siblingIndex = useMemo(() => {
+    const groups = new Map<number | null, number[]>();
+    for (const id of renderedIds) {
+      const parent = byId.get(id)?.parentId ?? null;
+      const arr = groups.get(parent);
+      if (arr) arr.push(id);
+      else groups.set(parent, [id]);
+    }
+    return groups;
+  }, [renderedIds, byId]);
+
+  function siblingNeighbour(id: number, dir: "up" | "down"): number | null {
+    const parent = byId.get(id)?.parentId ?? null;
+    const sibs = siblingIndex.get(parent);
+    if (!sibs) return null;
+    const idx = sibs.indexOf(id);
+    if (idx === -1) return null;
+    if (dir === "up") return idx > 0 ? sibs[idx - 1] : null;
+    return idx < sibs.length - 1 ? sibs[idx + 1] : null;
   }
 
-  function remove(id: number) {
-    onChange(selected.filter((x) => x !== id));
+  function isDescendantOf(id: number, ancestor: number): boolean {
+    let cur: number | null | undefined = byId.get(id)?.parentId;
+    while (cur != null) {
+      if (cur === ancestor) return true;
+      cur = byId.get(cur)?.parentId;
+    }
+    return false;
   }
 
-  const nothingSelected = selected.length === 0 && !showUncategorized;
+  // Hovered arrow → which gap to highlight green.
+  const [preview, setPreview] = useState<MovePreview | null>(null);
+
+  function previewFor(id: number, dir: "up" | "down"): MovePreview | null {
+    const neighbour = siblingNeighbour(id, dir);
+    if (neighbour == null) return null;
+    const sourceDepth = depthOf(id);
+    if (dir === "up") {
+      // Lands BEFORE the previous sibling — visual goes above its row, which
+      // is also the top of that sibling's subtree.
+      return { targetId: neighbour, kind: "before", sourceDepth };
+    }
+    // Down: lands AFTER the next sibling's *whole subtree*, so the indicator
+    // sits below the last descendant of that subtree (not the sibling row
+    // itself).
+    let last = neighbour;
+    const nIdx = renderedIds.indexOf(neighbour);
+    for (let i = nIdx + 1; i < renderedIds.length; i++) {
+      if (isDescendantOf(renderedIds[i], neighbour)) last = renderedIds[i];
+      else break;
+    }
+    return { targetId: last, kind: "after", sourceDepth };
+  }
+
+  function move(id: number, dir: "up" | "down") {
+    const target = previewFor(id, dir);
+    if (!target) return;
+    const next = moveSubtree(order, byId, id, target.targetId, target.kind);
+    if (next !== order) setOrder(next);
+    setPreview(null);
+  }
 
   return (
     <div className="builder-section">
       <h3 className="builder-section-title">{title}</h3>
-      {flat.length === 0 ? (
+      {renderedIds.length === 0 ? (
         <p className="builder-section-empty">{t("categories.empty")}</p>
       ) : (
         <ul className="builder-tree">
-          {flat.map((node) => (
-            <li
-              key={node.category.id}
-              className="builder-tree-row"
-              style={{ paddingLeft: `${node.depth * 18}px` }}
-            >
-              <label>
-                <input
-                  type="checkbox"
-                  checked={selectedSet.has(node.category.id)}
-                  onChange={() => toggle(node.category.id)}
-                />
-                <span
-                  className="builder-tree-swatch"
-                  style={{ background: node.category.color }}
-                  aria-hidden
-                />
-                <span className="builder-tree-name">{node.category.name}</span>
-              </label>
-            </li>
-          ))}
-          <li className="builder-tree-row builder-tree-row--uncat">
-            <label>
-              <input
-                type="checkbox"
-                checked={showUncategorized}
-                onChange={(e) => onChangeShowUncategorized(e.target.checked)}
-              />
-              <span className="builder-tree-swatch builder-tree-swatch--uncat" aria-hidden />
-              <span className="builder-tree-name">{t("report.uncategorized")}</span>
-            </label>
-          </li>
-        </ul>
-      )}
-
-      <div className="builder-order">
-        {nothingSelected ? (
-          <p className="builder-section-empty">{t("builder.sectionEmpty")}</p>
-        ) : (
-          <ol className="builder-order-list">
-            {selected.map((id, idx) => {
-              const cat = byId.get(id);
-              return (
-                <li key={id} className="builder-order-row">
+          {renderedIds.map((id) => {
+            const cat = byId.get(id)!;
+            const depth = depthOf(id);
+            const isChecked = selected.has(id);
+            const canUp = siblingNeighbour(id, "up") != null;
+            const canDown = siblingNeighbour(id, "down") != null;
+            const isPreviewTarget = preview?.targetId === id;
+            const previewClass = isPreviewTarget
+              ? preview!.kind === "before"
+                ? " builder-tree-row--preview-before"
+                : " builder-tree-row--preview-after"
+              : "";
+            const indicatorIndent = isPreviewTarget
+              ? 8 + preview!.sourceDepth * 18
+              : 8 + depth * 18;
+            return (
+              <li
+                key={id}
+                className={`builder-tree-row${previewClass}`}
+                style={
+                  {
+                    paddingLeft: `${8 + depth * 18}px`,
+                    "--row-indent": `${indicatorIndent}px`,
+                  } as React.CSSProperties
+                }
+              >
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={isChecked}
+                    onChange={() => toggle(id)}
+                  />
                   <span
                     className="builder-tree-swatch"
-                    style={{ background: cat?.color ?? "#999" }}
+                    style={{ background: cat.color }}
                     aria-hidden
                   />
-                  <span className="builder-order-name">{cat?.name ?? `#${id}`}</span>
-                  <span className="builder-order-actions">
+                  <span className="builder-tree-name">{cat.name}</span>
+                </label>
+                <span className="builder-tree-actions">
+                  {canUp && (
                     <button
                       type="button"
-                      className="icon-btn"
-                      onClick={() => move(idx, -1)}
-                      disabled={idx === 0}
+                      className="icon-btn builder-tree-arrow"
                       title={t("builder.moveUp")}
+                      aria-label={t("builder.moveUp")}
+                      onMouseEnter={() => setPreview(previewFor(id, "up"))}
+                      onMouseLeave={() => setPreview(null)}
+                      onFocus={() => setPreview(previewFor(id, "up"))}
+                      onBlur={() => setPreview(null)}
+                      onClick={() => move(id, "up")}
                     >
-                      ↑
+                      ▲
                     </button>
+                  )}
+                  {canDown && (
                     <button
                       type="button"
-                      className="icon-btn"
-                      onClick={() => move(idx, 1)}
-                      disabled={idx === selected.length - 1}
+                      className="icon-btn builder-tree-arrow"
                       title={t("builder.moveDown")}
+                      aria-label={t("builder.moveDown")}
+                      onMouseEnter={() => setPreview(previewFor(id, "down"))}
+                      onMouseLeave={() => setPreview(null)}
+                      onFocus={() => setPreview(previewFor(id, "down"))}
+                      onBlur={() => setPreview(null)}
+                      onClick={() => move(id, "down")}
                     >
-                      ↓
+                      ▼
                     </button>
-                    <button
-                      type="button"
-                      className="icon-btn"
-                      onClick={() => remove(id)}
-                      title={t("builder.remove")}
-                    >
-                      ×
-                    </button>
-                  </span>
-                </li>
-              );
-            })}
-            {showUncategorized && (
-              <li className="builder-order-row builder-order-row--uncat">
-                <span
-                  className="builder-tree-swatch builder-tree-swatch--uncat"
-                  aria-hidden
-                />
-                <span className="builder-order-name builder-order-name--uncat">
-                  {t("report.uncategorized")}
-                </span>
-                <span className="builder-order-actions">
-                  <button
-                    type="button"
-                    className="icon-btn"
-                    onClick={() => onChangeShowUncategorized(false)}
-                    title={t("builder.remove")}
-                  >
-                    ×
-                  </button>
+                  )}
                 </span>
               </li>
-            )}
-          </ol>
-        )}
-      </div>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
+}
+
+// Move a category (and its subtree) within its sibling group, before/after a
+// target sibling. Returns a new flat-DFS order array.
+function moveSubtree(
+  order: number[],
+  byId: Map<number, Category>,
+  draggedId: number,
+  targetId: number,
+  position: "before" | "after",
+): number[] {
+  const draggedStart = order.indexOf(draggedId);
+  if (draggedStart === -1) return order;
+
+  function isDescendantOf(id: number, ancestor: number): boolean {
+    let cur: number | null | undefined = byId.get(id)?.parentId;
+    while (cur != null) {
+      if (cur === ancestor) return true;
+      cur = byId.get(cur)?.parentId;
+    }
+    return false;
+  }
+
+  let draggedEnd = draggedStart + 1;
+  while (draggedEnd < order.length && isDescendantOf(order[draggedEnd], draggedId)) {
+    draggedEnd++;
+  }
+  const subtree = order.slice(draggedStart, draggedEnd);
+  const without = [...order.slice(0, draggedStart), ...order.slice(draggedEnd)];
+
+  const targetIdx = without.indexOf(targetId);
+  if (targetIdx === -1) return order;
+
+  let insertAt: number;
+  if (position === "before") {
+    insertAt = targetIdx;
+  } else {
+    let targetEnd = targetIdx + 1;
+    while (
+      targetEnd < without.length &&
+      isDescendantOf(without[targetEnd], targetId)
+    ) {
+      targetEnd++;
+    }
+    insertAt = targetEnd;
+  }
+
+  return [...without.slice(0, insertAt), ...subtree, ...without.slice(insertAt)];
 }

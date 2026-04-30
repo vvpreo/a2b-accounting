@@ -162,7 +162,36 @@ enum Categorization {
     /// Half goes to a category, half stays unallocated. Used to demo the
     /// partial-categorization workflow on the report.
     Half(&'static str),
+    /// Explicit list of (category_name, share_minor). Sum of shares equals
+    /// the transaction total — used to demo splits inside one transaction,
+    /// in particular group + leaf combinations like ("Магазины", 40) +
+    /// ("Супермаркеты", 90), which highlight the "tagged-on-group" amount
+    /// alongside its child rows in the report.
+    Multi(&'static [(&'static str, i64)]),
 }
+
+fn multi_total(parts: &[(&'static str, i64)]) -> i64 {
+    parts.iter().map(|(_, s)| *s).sum()
+}
+
+// Splits used by Categorization::Multi. Amounts are in minor units (cents).
+// Each tuple is (category_name, share_minor); sum equals the txn debit.
+const MULTI_HYPERMARKET: &[(&str, i64)] = &[
+    ("Магазины", 40_00),       // group: stuff that didn't fit a leaf
+    ("Супермаркеты", 90_00),   // leaf: groceries
+];
+const MULTI_DOCTOR_VISIT: &[(&str, i64)] = &[
+    ("Врачи", 50_00),          // group: consult
+    ("Стоматолог", 80_00),     // leaf: procedure
+];
+const MULTI_SUB_BUNDLE: &[(&str, i64)] = &[
+    ("Подписки", 5_00),        // group: base family plan
+    ("Музыка", 8_00),          // leaf: add-on
+];
+const MULTI_GROCERY_DELIVERY: &[(&str, i64)] = &[
+    ("Супермаркеты", 100_00),  // leaf under one group
+    ("Доставка", 25_00),       // leaf under another — cross-group split
+];
 
 #[derive(Debug)]
 struct TxnSpec {
@@ -490,6 +519,149 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 bank_description: None,
             });
         }
+
+        // ----- Group-level (parent category) tagging -----
+        // Real users often tag transactions to a group when no leaf fits or
+        // they don't want to be too precise. The report should surface these
+        // amounts as the group's own line, distinct from its child leaves.
+
+        // Жильё (group): minor home repair / household supplies.
+        if rng.chance(1, 3) {
+            out.push(TxnSpec {
+                date: safe_date(y, m, rng.range(2, 28)),
+                credit_minor: 0,
+                debit_minor: usd_from_range(&mut rng, 30, 80),
+                categorization: Categorization::Full("Жильё"),
+                peer: Some("Хозтовары для дома"),
+                bank_description: Some("Мелкий ремонт"),
+            });
+        }
+        // Еда (group): generic food expense not fitting Магазины/Кафе/Доставка.
+        if rng.chance(1, 4) {
+            out.push(TxnSpec {
+                date: safe_date(y, m, rng.range(2, 28)),
+                credit_minor: 0,
+                debit_minor: usd_from_range(&mut rng, 20, 50),
+                categorization: Categorization::Full("Еда"),
+                peer: Some("Магазинчик у дома"),
+                bank_description: Some("Перекус"),
+            });
+        }
+        // Транспорт (group): parking, tolls.
+        if rng.chance(1, 3) {
+            out.push(TxnSpec {
+                date: safe_date(y, m, rng.range(2, 28)),
+                credit_minor: 0,
+                debit_minor: usd_from_range(&mut rng, 10, 30),
+                categorization: Categorization::Full("Транспорт"),
+                peer: Some("Парковка"),
+                bank_description: None,
+            });
+        }
+        // Здоровье (group): lab tests, supplements.
+        if rng.chance(1, 4) {
+            out.push(TxnSpec {
+                date: safe_date(y, m, rng.range(2, 28)),
+                credit_minor: 0,
+                debit_minor: usd_from_range(&mut rng, 30, 100),
+                categorization: Categorization::Full("Здоровье"),
+                peer: Some("Лаборатория"),
+                bank_description: Some("Анализы"),
+            });
+        }
+        // Развлечения (group): a one-off event.
+        if rng.chance(1, 4) {
+            out.push(TxnSpec {
+                date: safe_date(y, m, rng.range(2, 28)),
+                credit_minor: 0,
+                debit_minor: usd_from_range(&mut rng, 20, 80),
+                categorization: Categorization::Full("Развлечения"),
+                peer: Some("Концерт"),
+                bank_description: None,
+            });
+        }
+        // Магазины (depth-2 group): generic shopping run.
+        if rng.chance(1, 3) {
+            out.push(TxnSpec {
+                date: safe_date(y, m, rng.range(2, 28)),
+                credit_minor: 0,
+                debit_minor: usd_from_range(&mut rng, 20, 60),
+                categorization: Categorization::Full("Магазины"),
+                peer: Some("Магазин у дома"),
+                bank_description: None,
+            });
+        }
+        // Бензин (depth-2 group): fuel from an unbranded station.
+        if rng.chance(1, 4) {
+            out.push(TxnSpec {
+                date: safe_date(y, m, rng.range(2, 28)),
+                credit_minor: 0,
+                debit_minor: usd_from_range(&mut rng, 30, 70),
+                categorization: Categorization::Full("Бензин"),
+                peer: Some("АЗС"),
+                bank_description: None,
+            });
+        }
+        // Подписки (depth-2 group): bundled family plan.
+        if rng.chance(1, 4) {
+            out.push(TxnSpec {
+                date: safe_date(y, m, rng.range(2, 28)),
+                credit_minor: 0,
+                debit_minor: usd_from_range(&mut rng, 10, 25),
+                categorization: Categorization::Full("Подписки"),
+                peer: Some("Family Plan"),
+                bank_description: None,
+            });
+        }
+
+        // ----- Multi-share splits inside one transaction -----
+        // Demonstrate group + leaf within the same txn so the user can see
+        // both the group's own line and its child line getting their share.
+
+        // Hypermarket trip — Магазины (group) + Супермаркеты (leaf descendant).
+        if rng.chance(1, 2) {
+            out.push(TxnSpec {
+                date: safe_date(y, m, rng.range(5, 26)),
+                credit_minor: 0,
+                debit_minor: multi_total(MULTI_HYPERMARKET),
+                categorization: Categorization::Multi(MULTI_HYPERMARKET),
+                peer: Some("Гипермаркет"),
+                bank_description: Some("Продукты + хозтовары"),
+            });
+        }
+        // Doctor appointment — Врачи (group) + Стоматолог (leaf).
+        if rng.chance(1, 4) {
+            out.push(TxnSpec {
+                date: safe_date(y, m, rng.range(5, 26)),
+                credit_minor: 0,
+                debit_minor: multi_total(MULTI_DOCTOR_VISIT),
+                categorization: Categorization::Multi(MULTI_DOCTOR_VISIT),
+                peer: Some("Стоматологическая клиника"),
+                bank_description: Some("Консультация + процедура"),
+            });
+        }
+        // Subscription with an add-on — Подписки (group) + Музыка (leaf).
+        if rng.chance(1, 3) {
+            out.push(TxnSpec {
+                date: safe_date(y, m, rng.range(5, 26)),
+                credit_minor: 0,
+                debit_minor: multi_total(MULTI_SUB_BUNDLE),
+                categorization: Categorization::Multi(MULTI_SUB_BUNDLE),
+                peer: Some("Family Plan + addon"),
+                bank_description: None,
+            });
+        }
+        // Two-leaf cross-group split — Супермаркеты + Доставка (different groups).
+        if rng.chance(1, 3) {
+            out.push(TxnSpec {
+                date: safe_date(y, m, rng.range(5, 26)),
+                credit_minor: 0,
+                debit_minor: multi_total(MULTI_GROCERY_DELIVERY),
+                categorization: Categorization::Multi(MULTI_GROCERY_DELIVERY),
+                peer: Some("Супермаркет с доставкой"),
+                bank_description: Some("Заказ + доставка"),
+            });
+        }
     }
 
     // Two illustrative split transactions in the most recent month: half goes
@@ -613,24 +785,42 @@ fn insert_transactions(
         )?;
 
         let total = t.credit_minor + t.debit_minor;
-        let link = match &t.categorization {
-            Categorization::None => None,
-            Categorization::Full(name) => Some((*name, total)),
-            Categorization::Half(name) => Some((*name, total / 2)),
-        };
-        if let Some((name, share)) = link {
-            if share > 0 {
-                let cat_id = cats
-                    .get(name)
-                    .copied()
-                    .unwrap_or_else(|| panic!("seed: unknown category '{name}'"));
-                conn.execute(
-                    "INSERT INTO transaction_categories
-                     (transaction_id, category_id, share_minor, position)
-                     VALUES (?1, ?2, ?3, 0)",
-                    params![txn_id, cat_id, share],
-                )?;
+        // Build the list of (category_name, share_minor) entries to insert.
+        // Single-share variants degenerate to a one-element list; Multi passes
+        // through directly. Skipping zero-share entries keeps the data clean.
+        let mut shares: Vec<(&str, i64)> = Vec::new();
+        match &t.categorization {
+            Categorization::None => {}
+            Categorization::Full(name) => {
+                if total > 0 {
+                    shares.push((name, total));
+                }
             }
+            Categorization::Half(name) => {
+                let s = total / 2;
+                if s > 0 {
+                    shares.push((name, s));
+                }
+            }
+            Categorization::Multi(parts) => {
+                for (name, share) in parts.iter() {
+                    if *share > 0 {
+                        shares.push((name, *share));
+                    }
+                }
+            }
+        }
+        for (position, (name, share)) in shares.into_iter().enumerate() {
+            let cat_id = cats
+                .get(name)
+                .copied()
+                .unwrap_or_else(|| panic!("seed: unknown category '{name}'"));
+            conn.execute(
+                "INSERT INTO transaction_categories
+                 (transaction_id, category_id, share_minor, position)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![txn_id, cat_id, share, position as i64],
+            )?;
         }
     }
     Ok(())
@@ -662,8 +852,6 @@ fn insert_report_view(
         "accountIds": [account_id],
         "expenseCategoryIds": expense_ids,
         "incomeCategoryIds": income_ids,
-        "expenseShowUncategorized": true,
-        "incomeShowUncategorized": true,
         "defaultRange": { "kind": "preset", "preset": "last_12_months", "from": null, "to": null },
         "defaultGranularity": "month",
         "defaultCurrency": DEMO_ACCOUNT_CURRENCY,
@@ -823,19 +1011,12 @@ mod tests {
         let n_txns: i64 = conn
             .query_row("SELECT COUNT(*) FROM transactions", [], |r| r.get(0))
             .unwrap();
-        // 3 years * ~23 per month ≈ 830 (now includes a monthly cash withdrawal).
+        // 3 years * ~30+ per month ≈ 1100 with the recent group/multi mix.
         // Bound generously to allow PRNG drift when the mix is tweaked.
-        assert!(n_txns > 600 && n_txns < 1200, "expected ~830 txns, got {n_txns}");
+        assert!(n_txns > 800 && n_txns < 1500, "expected ~1100 txns, got {n_txns}");
 
-        // Cash withdrawals (monthly) and the two split demo rows are *not* fully
-        // linked, so links < txns, but every linked txn should still appear at
-        // most once.
-        let n_links: i64 = conn
-            .query_row("SELECT COUNT(*) FROM transaction_categories", [], |r| r.get(0))
-            .unwrap();
-        assert!(n_links < n_txns, "monthly cash withdrawals must stay uncategorized");
-
-        // Specifically: each month contributes one fully-uncategorized cash withdrawal.
+        // Each month must contribute at least one fully-uncategorized cash
+        // withdrawal so the report has a permanent "Без категории" entry.
         let n_uncat: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM transactions t
@@ -849,6 +1030,23 @@ mod tests {
         assert!(
             n_uncat >= 30,
             "expected at least one uncategorized txn per month (~36+), got {n_uncat}"
+        );
+
+        // Multi-share transactions: at least a handful must exist so the
+        // report demos the group + leaf split scenario.
+        let n_multi_share: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM (
+                     SELECT transaction_id FROM transaction_categories
+                     GROUP BY transaction_id HAVING COUNT(*) > 1
+                 )",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            n_multi_share >= 20,
+            "expected several multi-share transactions, got {n_multi_share}"
         );
 
         // And there should be exactly two "half-categorized" rows (one expense, one income)

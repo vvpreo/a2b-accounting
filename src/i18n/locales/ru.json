@@ -306,6 +306,7 @@
     "totalExpense": "Итого расходов",
     "totalColumn": "Итого",
     "uncategorized": "Без категории",
+    "groupRowName": "ГРУППА ({name})",
     "fold": "Свернуть",
     "unfold": "Развернуть",
     "loading": "Считаю...",

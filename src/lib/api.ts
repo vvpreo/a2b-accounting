@@ -273,8 +273,16 @@ export interface ReportConfig {
   accountIds: number[];
   expenseCategoryIds: number[];
   incomeCategoryIds: number[];
-  expenseShowUncategorized: boolean;
-  incomeShowUncategorized: boolean;
+  // Full DFS display order of every category present at save time, including
+  // unchecked ones — lets the builder preserve a user's reorder for items
+  // that aren't currently selected. Optional for backwards compatibility.
+  expenseCategoryOrder?: number[];
+  incomeCategoryOrder?: number[];
+  // Legacy: kept optional so old saved views still parse. The backend now
+  // always shows the "Без категории" row whenever it has any amount, so this
+  // flag is ignored on read.
+  expenseShowUncategorized?: boolean;
+  incomeShowUncategorized?: boolean;
   defaultRange: ReportRange;
   defaultGranularity: Granularity;
   expandedCategoryIds: number[];
@@ -320,8 +328,6 @@ export interface ReportRequest {
   accountIds: number[];
   expenseCategoryIds: number[];
   incomeCategoryIds: number[];
-  expenseShowUncategorized: boolean;
-  incomeShowUncategorized: boolean;
   from: string;
   to: string;
   granularity: Granularity;

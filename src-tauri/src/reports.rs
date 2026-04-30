@@ -21,8 +21,6 @@ pub struct ReportRequest {
     pub account_ids: Vec<i64>,
     pub expense_category_ids: Vec<i64>,
     pub income_category_ids: Vec<i64>,
-    pub expense_show_uncategorized: bool,
-    pub income_show_uncategorized: bool,
     pub from: String,
     pub to: String,
     pub granularity: String,
@@ -161,22 +159,6 @@ struct CatNode {
     name: String,
     color: String,
     kind: String,
-}
-
-/// Walk parent links and return the closest ancestor (or self) that is in `selected`.
-fn nearest_selected_ancestor(
-    start: i64,
-    selected: &HashSet<i64>,
-    cats: &HashMap<i64, CatNode>,
-) -> Option<i64> {
-    let mut current = Some(start);
-    while let Some(id) = current {
-        if selected.contains(&id) {
-            return Some(id);
-        }
-        current = cats.get(&id).and_then(|c| c.parent_id);
-    }
-    None
 }
 
 /// For an *unselected* category, return the closest *strict* ancestor that *is* selected.
@@ -474,7 +456,6 @@ pub(crate) fn compute_report_inner(
         };
 
         for s in &txn_shares {
-            allocated += s.share_minor;
             // Defensive: if a share points at a category whose kind disagrees with the
             // transaction direction, just skip it. The set-categories command already
             // enforces this invariant on write, but the report should not crash.
@@ -486,27 +467,29 @@ pub(crate) fn compute_report_inner(
             if cat.kind != expected_kind {
                 continue;
             }
-            let target = match nearest_selected_ancestor(s.category_id, selected_set, &cats) {
-                Some(id) => id,
-                None => continue,
-            };
-            let row_idx = match layout_index.get(&target) {
-                Some(i) => *i,
-                None => continue,
-            };
-            values[row_idx][p_idx] += s.share_minor;
+            allocated += s.share_minor;
+            // New semantics: each share lands in its *own* category if that
+            // category is selected; otherwise it falls into "Без категории".
+            // We deliberately do NOT promote to the nearest selected ancestor:
+            // section totals must stay invariant across checkbox state, so any
+            // unselected category's amount has to land in the uncat bucket.
+            if selected_set.contains(&s.category_id) {
+                let row_idx = match layout_index.get(&s.category_id) {
+                    Some(i) => *i,
+                    None => continue,
+                };
+                values[row_idx][p_idx] += s.share_minor;
+            } else {
+                values[uncat_idx][p_idx] += s.share_minor;
+            }
         }
 
-        let show_for_section = if direction_is_income {
-            req.income_show_uncategorized
-        } else {
-            req.expense_show_uncategorized
-        };
-        if show_for_section {
-            let residual = total_minor - allocated;
-            if residual > 0 {
-                values[uncat_idx][p_idx] += residual;
-            }
+        // Whatever portion of the txn isn't covered by any share is genuinely
+        // uncategorised — also park it in the uncat bucket so the section
+        // total equals the txn total regardless of selection state.
+        let residual = total_minor - allocated;
+        if residual > 0 {
+            values[uncat_idx][p_idx] += residual;
         }
     }
 
@@ -516,7 +499,6 @@ pub(crate) fn compute_report_inner(
         &expense_values,
         expense_uncat,
         n_periods,
-        req.expense_show_uncategorized,
     );
     let income_section = build_section(
         &income_layout,
@@ -524,7 +506,6 @@ pub(crate) fn compute_report_inner(
         &income_values,
         income_uncat,
         n_periods,
-        req.income_show_uncategorized,
     );
 
     Ok(ReportResponse {
@@ -540,7 +521,6 @@ fn build_section(
     values: &[Vec<i64>],
     uncat_idx: usize,
     n_periods: usize,
-    show_uncategorized: bool,
 ) -> SectionData {
     let mut rows: Vec<ReportRow> = Vec::with_capacity(layout.len() + 1);
     let mut section_totals = vec![0_i64; n_periods];
@@ -562,7 +542,10 @@ fn build_section(
         });
     }
 
-    if show_uncategorized {
+    // Always show "Без категории" when it carries any amount — keeping the
+    // section total invariant across category checkbox state is the whole
+    // point of the new allocation rule (see compute_report_inner).
+    {
         let row_values = &values[uncat_idx];
         let total: i64 = row_values.iter().sum();
         if total != 0 {
@@ -672,19 +655,6 @@ mod tests {
         assert_eq!(layout, vec![(1, 0), (4, 0)]);
     }
 
-    #[test]
-    fn nearest_ancestor_handles_self_in_selected() {
-        let cats = sample_cats();
-        let mut sel = HashSet::new();
-        sel.insert(2);
-        // 3 → not selected → closest selected ancestor is 2.
-        assert_eq!(nearest_selected_ancestor(3, &sel, &cats), Some(2));
-        // 2 itself is selected → return itself.
-        assert_eq!(nearest_selected_ancestor(2, &sel, &cats), Some(2));
-        // 1 has no selected ancestor or self.
-        assert_eq!(nearest_selected_ancestor(1, &sel, &cats), None);
-    }
-
     fn sample_cats() -> HashMap<i64, CatNode> {
         let mut m = HashMap::new();
         m.insert(1, CatNode { parent_id: None, name: "Food".into(), color: "#a".into(), kind: "expense".into() });
@@ -789,14 +759,11 @@ mod tests {
         from: &str,
         to: &str,
         gran: &str,
-        show_uncat: bool,
     ) -> ReportRequest {
         ReportRequest {
             account_ids: accounts.to_vec(),
             expense_category_ids: expense.to_vec(),
             income_category_ids: income.to_vec(),
-            expense_show_uncategorized: show_uncat,
-            income_show_uncategorized: show_uncat,
             from: from.to_string(),
             to: to.to_string(),
             granularity: gran.to_string(),
@@ -814,7 +781,7 @@ mod tests {
 
         let resp = compute_report_inner(
             &f.conn,
-            &req(&[f.account_id], &[], &[salary], "2026-04-01", "2026-05-31", "month", false),
+            &req(&[f.account_id], &[], &[salary], "2026-04-01", "2026-05-31", "month"),
         )
         .unwrap();
 
@@ -839,7 +806,7 @@ mod tests {
 
         let resp = compute_report_inner(
             &f.conn,
-            &req(&[f.account_id], &[food, cafe], &[], "2026-04-01", "2026-04-30", "month", false),
+            &req(&[f.account_id], &[food, cafe], &[], "2026-04-01", "2026-04-30", "month"),
         )
         .unwrap();
 
@@ -854,7 +821,7 @@ mod tests {
     }
 
     #[test]
-    fn unselected_child_collapses_into_selected_ancestor() {
+    fn unselected_child_lands_in_uncategorized() {
         let f = open_fixture("RUB");
         let food = insert_root_cat(&f, "Food", "expense");
         let cafe = insert_child_cat(&f, "Cafe", food, "expense");
@@ -864,22 +831,28 @@ mod tests {
         link(&f, t_food, food, 800_00, 0);
         link(&f, t_cafe, cafe, 200_00, 0);
 
-        // User selects only Food.
+        // User selects only Food. Per the new "totals-invariant" rule Cafe's
+        // amount must NOT be promoted into Food — it goes to "Без категории".
         let resp = compute_report_inner(
             &f.conn,
-            &req(&[f.account_id], &[food], &[], "2026-04-01", "2026-04-30", "month", false),
+            &req(&[f.account_id], &[food], &[], "2026-04-01", "2026-04-30", "month"),
         )
         .unwrap();
 
-        assert_eq!(resp.expense.rows.len(), 1);
-        let row = &resp.expense.rows[0];
-        assert_eq!(row.category_id, Some(food));
-        // 800 (own) + 200 (cafe collapsed up) = 1000.
-        assert_eq!(row.total, "1000.00");
+        assert_eq!(resp.expense.rows.len(), 2, "Food row + uncategorized row");
+        let food_row = resp.expense.rows.iter().find(|r| r.category_id == Some(food)).unwrap();
+        let uncat_row = resp.expense.rows.iter().find(|r| r.category_id.is_none()).unwrap();
+        assert_eq!(food_row.total, "800.00", "Food shows only its own amount");
+        assert_eq!(uncat_row.total, "200.00", "Cafe falls into uncategorized");
+        // Section total still equals total spent (1000).
+        assert_eq!(resp.expense.total.last().unwrap(), "1000.00");
     }
 
     #[test]
-    fn show_uncategorized_picks_up_residuals() {
+    fn uncategorized_picks_up_residuals_unconditionally() {
+        // The uncat row is no longer gated by the show_uncategorized flag —
+        // it always appears when there's an unallocated amount, so section
+        // totals stay equal to the underlying transaction total.
         let f = open_fixture("RUB");
         let food = insert_root_cat(&f, "Food", "expense");
         let t = insert_txn(&f, "2026-04-15T10:00:00Z", 0, 1000_00, false);
@@ -887,15 +860,15 @@ mod tests {
 
         let resp = compute_report_inner(
             &f.conn,
-            &req(&[f.account_id], &[food], &[], "2026-04-01", "2026-04-30", "month", true),
+            // show_uncat=false in the request — backend ignores it now.
+            &req(&[f.account_id], &[food], &[], "2026-04-01", "2026-04-30", "month"),
         )
         .unwrap();
 
         assert_eq!(resp.expense.rows.len(), 2, "row for Food + uncategorized row");
-        let food_row = &resp.expense.rows[0];
-        let uncat_row = &resp.expense.rows[1];
+        let food_row = resp.expense.rows.iter().find(|r| r.category_id == Some(food)).unwrap();
+        let uncat_row = resp.expense.rows.iter().find(|r| r.category_id.is_none()).unwrap();
         assert_eq!(food_row.total, "600.00");
-        assert_eq!(uncat_row.category_id, None);
         assert_eq!(uncat_row.total, "400.00");
     }
 
@@ -912,7 +885,7 @@ mod tests {
 
         let resp = compute_report_inner(
             &f.conn,
-            &req(&[f.account_id], &[food], &[], "2026-04-01", "2026-04-30", "month", true),
+            &req(&[f.account_id], &[food], &[], "2026-04-01", "2026-04-30", "month"),
         )
         .unwrap();
         assert_eq!(resp.expense.rows.len(), 1, "Food row only — uncategorized is empty");
@@ -933,7 +906,7 @@ mod tests {
 
         let resp = compute_report_inner(
             &f.conn,
-            &req(&[f.account_id], &[], &[salary], "2026-04-01", "2026-04-30", "month", false),
+            &req(&[f.account_id], &[], &[salary], "2026-04-01", "2026-04-30", "month"),
         )
         .unwrap();
         assert_eq!(resp.income.rows.len(), 1);
@@ -1014,8 +987,6 @@ mod tests {
                 account_ids: vec![usd_acc, rub_acc],
                 expense_category_ids: vec![],
                 income_category_ids: vec![salary],
-                expense_show_uncategorized: false,
-                income_show_uncategorized: false,
                 from: "2026-04-01".to_string(),
                 to: "2026-04-30".to_string(),
                 granularity: "month".to_string(),
@@ -1070,24 +1041,30 @@ mod tests {
 
         let resp = compute_report_inner(
             &f.conn,
-            &req(&[f.account_id], &[], &[salary], "2026-04-01", "2026-04-30", "month", false),
+            &req(&[f.account_id], &[], &[salary], "2026-04-01", "2026-04-30", "month"),
         )
         .unwrap();
         assert_eq!(resp.income.rows[0].total, "100.00");
     }
 
     #[test]
-    fn empty_report_when_no_categories_selected() {
+    fn no_categories_selected_routes_everything_to_uncategorized() {
+        // With no categories selected for a section, every transaction in
+        // that section's direction surfaces as a single "Без категории" row —
+        // section totals still equal the underlying transaction totals.
         let f = open_fixture("RUB");
         let _ = insert_txn(&f, "2026-04-15T09:00:00Z", 100_00, 0, false);
         let resp = compute_report_inner(
             &f.conn,
-            &req(&[f.account_id], &[], &[], "2026-04-01", "2026-04-30", "month", false),
+            &req(&[f.account_id], &[], &[], "2026-04-01", "2026-04-30", "month"),
         )
         .unwrap();
+        // Income txn produced an uncategorised row in the income section.
+        assert_eq!(resp.income.rows.len(), 1);
+        assert_eq!(resp.income.rows[0].category_id, None);
+        assert_eq!(resp.income.rows[0].total, "100.00");
+        // Expense section had no transactions at all.
         assert!(resp.expense.rows.is_empty());
-        assert!(resp.income.rows.is_empty());
-        // Period totals still present, just zero.
         assert_eq!(resp.expense.total, vec!["0.00", "0.00"]);
     }
 
@@ -1096,13 +1073,13 @@ mod tests {
         let f = open_fixture("RUB");
         let bad = compute_report_inner(
             &f.conn,
-            &req(&[], &[], &[], "2026-04-30", "2026-04-01", "month", false),
+            &req(&[], &[], &[], "2026-04-30", "2026-04-01", "month"),
         );
         assert!(bad.is_err());
 
         let bad = compute_report_inner(
             &f.conn,
-            &req(&[], &[], &[], "2026-04-01", "2026-04-30", "decade", false),
+            &req(&[], &[], &[], "2026-04-01", "2026-04-30", "decade"),
         );
         assert!(bad.is_err());
     }

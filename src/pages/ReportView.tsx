@@ -23,8 +23,6 @@ interface ReportConfigShape {
   accountIds: number[];
   expenseCategoryIds: number[];
   incomeCategoryIds: number[];
-  expenseShowUncategorized: boolean;
-  incomeShowUncategorized: boolean;
   defaultRange: ReportRange;
   defaultGranularity: Granularity;
   expandedCategoryIds: number[];
@@ -35,8 +33,6 @@ const DEFAULT_CONFIG: ReportConfigShape = {
   accountIds: [],
   expenseCategoryIds: [],
   incomeCategoryIds: [],
-  expenseShowUncategorized: false,
-  incomeShowUncategorized: false,
   defaultRange: { kind: "preset", preset: "current_year" },
   defaultGranularity: "month",
   expandedCategoryIds: [],
@@ -111,23 +107,8 @@ function resolveRange(range: ReportRange): { from: string; to: string } {
 
 function safeParseConfig(raw: string): ReportConfigShape {
   try {
-    const parsed = JSON.parse(raw) as Partial<ReportConfigShape> & {
-      showUncategorized?: boolean;
-    };
-    // Backwards compat with the legacy single `showUncategorized` flag.
-    const legacyFallback = parsed.showUncategorized;
-    return {
-      ...DEFAULT_CONFIG,
-      ...parsed,
-      expenseShowUncategorized:
-        parsed.expenseShowUncategorized ??
-        legacyFallback ??
-        DEFAULT_CONFIG.expenseShowUncategorized,
-      incomeShowUncategorized:
-        parsed.incomeShowUncategorized ??
-        legacyFallback ??
-        DEFAULT_CONFIG.incomeShowUncategorized,
-    };
+    const parsed = JSON.parse(raw) as Partial<ReportConfigShape>;
+    return { ...DEFAULT_CONFIG, ...parsed };
   } catch {
     return DEFAULT_CONFIG;
   }
@@ -160,8 +141,6 @@ export function ReportViewPage({ view, onEdit }: Props) {
       accountIds: config.accountIds,
       expenseCategoryIds: config.expenseCategoryIds,
       incomeCategoryIds: config.incomeCategoryIds,
-      expenseShowUncategorized: config.expenseShowUncategorized,
-      incomeShowUncategorized: config.incomeShowUncategorized,
       from,
       to,
       granularity,
@@ -185,8 +164,6 @@ export function ReportViewPage({ view, onEdit }: Props) {
     config.accountIds,
     config.expenseCategoryIds,
     config.incomeCategoryIds,
-    config.expenseShowUncategorized,
-    config.incomeShowUncategorized,
   ]);
 
   function setRangeKind(next: RangePreset) {
@@ -268,9 +245,6 @@ export function ReportViewPage({ view, onEdit }: Props) {
         <PivotTable
           response={response}
           initialExpanded={config.expandedCategoryIds}
-          showUncategorized={
-            config.expenseShowUncategorized || config.incomeShowUncategorized
-          }
         />
       )}
     </section>
@@ -280,10 +254,9 @@ export function ReportViewPage({ view, onEdit }: Props) {
 interface PivotProps {
   response: ReportResponse;
   initialExpanded: number[];
-  showUncategorized: boolean;
 }
 
-function PivotTable({ response, initialExpanded, showUncategorized }: PivotProps) {
+function PivotTable({ response, initialExpanded }: PivotProps) {
   const t = useT();
   const { periods, expense, income } = response;
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
@@ -306,6 +279,9 @@ function PivotTable({ response, initialExpanded, showUncategorized }: PivotProps
     });
   }
 
+  // Template carries a literal `{name}` placeholder — substituted per row in
+  // renderSection. Calling t() without params returns the raw template.
+  const groupNameTemplate = t("report.groupRowName");
   const incomeRows = renderSection({
     section: income,
     sectionKey: "income",
@@ -315,6 +291,7 @@ function PivotTable({ response, initialExpanded, showUncategorized }: PivotProps
     onToggleRow: toggleRow,
     sectionTitle: t("report.sectionIncome"),
     uncategorizedLabel: t("report.uncategorized"),
+    groupNameTemplate,
     foldLabel: t("report.fold"),
     unfoldLabel: t("report.unfold"),
   });
@@ -327,14 +304,12 @@ function PivotTable({ response, initialExpanded, showUncategorized }: PivotProps
     onToggleRow: toggleRow,
     sectionTitle: t("report.sectionExpense"),
     uncategorizedLabel: t("report.uncategorized"),
+    groupNameTemplate,
     foldLabel: t("report.fold"),
     unfoldLabel: t("report.unfold"),
   });
 
-  const isEmpty =
-    expense.rows.length === 0 &&
-    income.rows.length === 0 &&
-    !showUncategorized;
+  const isEmpty = expense.rows.length === 0 && income.rows.length === 0;
 
   if (isEmpty) {
     return <div className="report-empty">{t("report.empty")}</div>;
@@ -372,8 +347,77 @@ interface RenderSectionArgs {
   onToggleRow: (catId: number) => void;
   sectionTitle: string;
   uncategorizedLabel: string;
+  // Template like "ГРУППА ({name})" — applied to the synthetic aggregate row
+  // produced for each selected category that has selected children.
+  groupNameTemplate: string;
   foldLabel: string;
   unfoldLabel: string;
+}
+
+// One row in the visual plan. A backend row that has selected descendants is
+// rendered as a pair: a "group" row at depth D showing the subtree total, plus
+// an "own" row at depth D+1 showing only what was tagged directly to that
+// category. That way every group's number on screen equals the sum of the
+// nested visible rows below it — no rolled-up "magic" amounts.
+interface PlanRow {
+  kind: "group" | "own" | "leaf" | "uncat";
+  // The original backend row index this plan entry was derived from. Used by
+  // the collapse logic to look up the category id and fold state.
+  sourceIdx: number;
+  depth: number;
+  values: string[];
+  total: string;
+  // Whether this entry can be collapsed (group rows only).
+  collapsible: boolean;
+}
+
+function buildPlan(
+  rows: ReportRow[],
+  hasDescendants: boolean[],
+  subtreeValues: string[][],
+  subtreeTotal: string[],
+): PlanRow[] {
+  const out: PlanRow[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (row.categoryId === null) {
+      out.push({ kind: "uncat", sourceIdx: i, depth: 0, values: row.values, total: row.total, collapsible: false });
+      continue;
+    }
+    if (hasDescendants[i]) {
+      // Group row at the original depth — carries the subtree total and is
+      // foldable.
+      out.push({
+        kind: "group",
+        sourceIdx: i,
+        depth: row.depth,
+        values: subtreeValues[i],
+        total: subtreeTotal[i],
+        collapsible: true,
+      });
+      // Own row always rendered, even when zero — the user wants the
+      // "directly tagged on this group" line visible for consistency, so the
+      // sum of visible nested rows always equals the group total.
+      out.push({
+        kind: "own",
+        sourceIdx: i,
+        depth: row.depth + 1,
+        values: row.values,
+        total: row.total,
+        collapsible: false,
+      });
+    } else {
+      out.push({
+        kind: "leaf",
+        sourceIdx: i,
+        depth: row.depth,
+        values: row.values,
+        total: row.total,
+        collapsible: false,
+      });
+    }
+  }
+  return out;
 }
 
 function renderSection({
@@ -385,6 +429,7 @@ function renderSection({
   onToggleRow,
   sectionTitle,
   uncategorizedLabel,
+  groupNameTemplate,
   foldLabel,
   unfoldLabel,
 }: RenderSectionArgs): React.ReactElement[] {
@@ -392,9 +437,9 @@ function renderSection({
   const { parents, hasDescendants, subtreeValues, subtreeMinor, subtreeTotal, subtreeTotalMinor } =
     analyzeRows(rows);
 
-  // Section totals are the sum of *root rows only* — child rows are already
-  // rolled up into their parents (parent value == own + sum(descendants)),
-  // so adding them again would double-count.
+  // Section totals are the sum of *root rows only* — every selected category
+  // either lands directly in its row (leaf) or is rolled into its group row,
+  // so summing roots covers the section without double-counting.
   const nPeriods = rows[0]?.values.length ?? 0;
   const sectionPerPeriodMinor = new Array<number>(nPeriods).fill(0);
   let sectionTotalMinor = 0;
@@ -441,84 +486,80 @@ function renderSection({
     return out;
   }
 
-  // Walk rows in order; skip rows whose nearest ancestor (by row.depth chain) is collapsed.
-  const collapsedAtDepth: Map<number, number> = new Map(); // depth -> first collapsed ancestor index
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    // Drop ancestors deeper than current depth from the collapse stack.
+  const plan = buildPlan(rows, hasDescendants, subtreeValues, subtreeTotal);
+
+  // Walk plan entries in order; collapse stack works on plan depths, since
+  // group/own rows live at different depths than backend rows would suggest.
+  const collapsedAtDepth: Map<number, number> = new Map();
+  for (let pi = 0; pi < plan.length; pi++) {
+    const entry = plan[pi];
     for (const d of Array.from(collapsedAtDepth.keys())) {
-      if (d >= row.depth) collapsedAtDepth.delete(d);
+      if (d >= entry.depth) collapsedAtDepth.delete(d);
     }
     const ancestorCollapsed = collapsedAtDepth.size > 0;
-    if (ancestorCollapsed) {
-      // If row is an uncategorized one (categoryId = null) it's still a root → never hidden.
-      if (row.categoryId !== null) continue;
-    }
+    if (ancestorCollapsed && entry.kind !== "uncat") continue;
 
-    const isUncategorized = row.categoryId === null;
-    const id = row.categoryId;
-    const isRowCollapsed = id != null && rowCollapsed.has(id);
-    const ownHasChildren = hasDescendants[i];
-    const isChild = parents[i] !== -1;
-
-    // Every row shows own + descendants (except uncategorized which has no
-    // children). That keeps parents consistent — "Food" always equals the sum
-    // of its sub-rows. Child rows are rendered in muted colour to make it
-    // obvious that they're already counted upstream.
-    const displayValues = ownHasChildren ? subtreeValues[i] : row.values;
-    const displayTotal = ownHasChildren ? subtreeTotal[i] : row.total;
+    const sourceRow = rows[entry.sourceIdx];
+    const isUncat = entry.kind === "uncat";
+    const isGroup = entry.kind === "group";
+    const id = sourceRow.categoryId;
+    const isCollapsed = isGroup && id != null && rowCollapsed.has(id);
 
     const rowClasses = ["pivot-row"];
-    if (isUncategorized) rowClasses.push("pivot-row--uncat");
-    if (isChild) rowClasses.push("pivot-row--child");
+    if (isUncat) rowClasses.push("pivot-row--uncat");
+    if (isGroup) rowClasses.push("pivot-row--group");
+    if (entry.kind === "own") rowClasses.push("pivot-row--own");
 
     out.push(
       <tr
-        key={`row-${sectionKey}-${i}`}
+        key={`row-${sectionKey}-${pi}`}
         className={rowClasses.join(" ")}
-        style={{ fontSize: `${ROW_FONT_SIZES[Math.min(row.depth, ROW_FONT_SIZES.length - 1)]}px` }}
+        style={{ fontSize: `${ROW_FONT_SIZES[Math.min(entry.depth, ROW_FONT_SIZES.length - 1)]}px` }}
       >
         <td
           className="pivot-name-cell"
-          style={{ paddingLeft: `${10 + row.depth * 18}px` }}
+          style={{ paddingLeft: `${10 + entry.depth * 18}px` }}
         >
-          {ownHasChildren && id != null ? (
+          {entry.collapsible && id != null ? (
             <button
               type="button"
               className="pivot-fold-btn"
               onClick={() => onToggleRow(id)}
-              title={isRowCollapsed ? unfoldLabel : foldLabel}
+              title={isCollapsed ? unfoldLabel : foldLabel}
             >
-              {isRowCollapsed ? "▸" : "▾"}
+              {isCollapsed ? "▸" : "▾"}
             </button>
           ) : (
             <span className="pivot-fold-spacer" aria-hidden />
           )}
-          {!isUncategorized && (
+          {!isUncat && (
             <span
               className="pivot-swatch"
-              style={{ background: row.color || "#999" }}
+              style={{ background: sourceRow.color || "#999" }}
               aria-hidden
             />
           )}
           <span className="pivot-name-text">
-            {isUncategorized ? uncategorizedLabel : row.name}
+            {isUncat
+              ? uncategorizedLabel
+              : isGroup
+              ? groupNameTemplate.replace("{name}", sourceRow.name)
+              : sourceRow.name}
           </span>
         </td>
-        {displayValues.map((v, idx) => (
+        {entry.values.map((v, idx) => (
           <td key={idx} className="pivot-value-cell">
             {formatMoney(v)}
           </td>
         ))}
         <td className="pivot-value-cell pivot-value-cell--total">
-          {formatMoney(displayTotal)}
+          {formatMoney(entry.total)}
         </td>
       </tr>,
     );
 
-    // If this row got collapsed and has descendants, suppress them in subsequent iterations.
-    if (isRowCollapsed && ownHasChildren) {
-      collapsedAtDepth.set(row.depth, i);
+    if (isCollapsed && entry.collapsible) {
+      collapsedAtDepth.set(entry.depth, entry.sourceIdx);
     }
   }
 

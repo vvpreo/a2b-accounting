@@ -296,6 +296,7 @@
     "totalExpense": "Total expense",
     "totalColumn": "Total",
     "uncategorized": "Uncategorized",
+    "groupRowName": "GROUP ({name})",
     "fold": "Collapse",
     "unfold": "Expand",
     "loading": "Computing...",
