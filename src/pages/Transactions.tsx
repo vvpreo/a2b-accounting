@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { useI18n, useT } from "../i18n";
@@ -133,6 +134,12 @@ export function TransactionsPage({
   const [pendingLinkTxnId, setPendingLinkTxnId] = useState<number | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
   const [unlinkConfirm, setUnlinkConfirm] = useState<number | null>(null);
+  // Floating tooltip rendered via a portal so it isn't clipped by the
+  // scrollable .txns-wrap. Coordinates are captured in viewport space at
+  // mouseenter time and placed directly over document.body.
+  const [tooltip, setTooltip] = useState<
+    { x: number; y: number; text: string } | null
+  >(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -266,17 +273,33 @@ export function TransactionsPage({
   // 🔗 column. Clicks *inside* `.col-link` are handled by the cell itself
   // (selection / cancel-on-anchor). Clicks on the cancel button in the
   // pending banner also leave the column, so they cancel naturally.
+  // Escape works as a global cancel — handy when the cursor is parked on
+  // a comment input or anywhere else focus might trap clicks.
   useEffect(() => {
     if (pendingLinkTxnId === null) return;
-    const handler = (event: MouseEvent) => {
+    const onClick = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null;
       if (!target) return;
       if (target.closest(".col-link")) return;
-      if (target.closest(".txn-link-pending-banner")) return;
+      if (target.closest(".txn-link-overlay")) return;
       setPendingLinkTxnId(null);
     };
-    window.addEventListener("click", handler);
-    return () => window.removeEventListener("click", handler);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setPendingLinkTxnId(null);
+      }
+    };
+    window.addEventListener("click", onClick);
+    // Capture-phase keydown so we beat any inputs that swallow Escape
+    // (e.g. the comment field's onKeyDown handler) — the user expects
+    // Escape to exit pending mode regardless of where focus sits.
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("click", onClick);
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
   }, [pendingLinkTxnId]);
 
   function localizedLinkError(code: string): string {
@@ -316,49 +339,53 @@ export function TransactionsPage({
     }
   }
 
-  // Click on a 🔗 cell — drives the pending state machine. Categorisation
-  // is intentionally untouched: per product spec, links and categories
-  // coexist freely.
+  // Pre-flight check matching the backend's link rules. Returns a
+  // localised reason if `target` is *not* a valid partner for the current
+  // anchor, or null when a link can be created. Doesn't apply to the
+  // anchor itself or when no anchor is set — callers gate on those.
+  function linkInvalidReason(target: Transaction): string | null {
+    if (pendingLinkTxnId === null) return null;
+    if (pendingLinkTxnId === target.id) return null;
+    if (linkPartnerById.has(target.id)) {
+      return t("transactions.linkError.link.already_linked");
+    }
+    const anchor = txns.find((tt) => tt.id === pendingLinkTxnId);
+    if (!anchor) return null;
+    if (anchor.accountId === target.accountId) {
+      return t("transactions.linkError.link.same_account");
+    }
+    const anchorIncoming = anchor.credit !== "0.00";
+    const targetIncoming = target.credit !== "0.00";
+    if (anchorIncoming === targetIncoming) {
+      return t("transactions.linkError.link.same_direction");
+    }
+    return null;
+  }
+
+  // Click on a 🔗 / ❌ cell. Invalid candidates during pending mode are
+  // silent no-ops — the ❌ icon and its hover tooltip already communicate
+  // the rejection, so we don't surface separate error toasts.
   function onLinkCellClick(x: Transaction) {
     const partnerId = linkPartnerById.get(x.id);
+    if (pendingLinkTxnId !== null) {
+      if (pendingLinkTxnId === x.id) {
+        setPendingLinkTxnId(null);
+        return;
+      }
+      if (linkInvalidReason(x) !== null) {
+        return; // silent no-op; ❌ tooltip already explains why
+      }
+      const anchor = txns.find((tt) => tt.id === pendingLinkTxnId);
+      if (anchor) void commitLink(anchor.id, x.id);
+      return;
+    }
     if (partnerId !== undefined) {
-      // Already linked → ask before breaking the link (creating is silent
-      // but breaking warrants explicit confirmation).
+      // Out of pending mode, clicking a linked row asks to break the link.
       setUnlinkConfirm(x.id);
       return;
     }
-    if (pendingLinkTxnId === null) {
-      setPendingLinkTxnId(x.id);
-      setLinkError(null);
-      return;
-    }
-    if (pendingLinkTxnId === x.id) {
-      // Re-clicking the same anchor cancels.
-      setPendingLinkTxnId(null);
-      return;
-    }
-    // Pre-flight validation matching the backend rules so the user gets
-    // immediate feedback without an extra round-trip.
-    const anchor = txns.find((t) => t.id === pendingLinkTxnId);
-    if (!anchor) {
-      setPendingLinkTxnId(null);
-      return;
-    }
-    if (anchor.accountId === x.accountId) {
-      setLinkError(t("transactions.linkError.link.same_account"));
-      return;
-    }
-    const anchorIncoming = anchor.credit !== "0.00";
-    const targetIncoming = x.credit !== "0.00";
-    if (anchorIncoming === targetIncoming) {
-      setLinkError(t("transactions.linkError.link.same_direction"));
-      return;
-    }
-    if (linkPartnerById.has(x.id)) {
-      setLinkError(t("transactions.linkError.link.already_linked"));
-      return;
-    }
-    void commitLink(anchor.id, x.id);
+    setPendingLinkTxnId(x.id);
+    setLinkError(null);
   }
 
   async function persistComment(id: number, raw: string) {
@@ -488,18 +515,6 @@ export function TransactionsPage({
             : undefined
         }
       >
-        {pendingLinkTxnId !== null && (
-          <div className="txn-link-pending-banner">
-            <span>{t("transactions.linkPickPartner")}</span>
-            <button
-              type="button"
-              onClick={() => setPendingLinkTxnId(null)}
-            >
-              {t("common.cancel")}
-            </button>
-          </div>
-        )}
-        {linkError && <div className="txn-link-error">{linkError}</div>}
         <table>
           <thead ref={theadRef}>
             <tr>
@@ -568,23 +583,52 @@ export function TransactionsPage({
                   .join(" ");
                 const isLinked = partnerId !== undefined;
                 const isPendingAnchor = pendingLinkTxnId === x.id;
-                // Icon visibility: a chain link only shows when this row has
-                // an actual link or is the pending anchor. Empty otherwise —
-                // the user asked for clean cells when nothing's connected.
-                const showLinkIcon = isLinked || isPendingAnchor;
+                const invalidReason =
+                  pendingLinkTxnId !== null && !isPendingAnchor
+                    ? linkInvalidReason(x)
+                    : null;
+                // Icon decision is split by pending state:
+                //  - in pending mode the table reads as a go/no-go pick:
+                //    🔗 (anchor or valid candidate) vs. ❌ (invalid for any
+                //    reason — including rows that are *already* linked).
+                //  - out of pending mode the link icon only marks rows that
+                //    actually have an existing link.
+                let iconKind: "link" | "invalid" | "none";
+                if (isPendingAnchor) {
+                  iconKind = "link";
+                } else if (pendingLinkTxnId !== null) {
+                  iconKind = invalidReason !== null ? "invalid" : "link";
+                } else if (isLinked) {
+                  iconKind = "link";
+                } else {
+                  iconKind = "none";
+                }
+                // Visual variant of the chain icon. Green ("candidate") only
+                // applies when a click would actually create a link; the
+                // existing-link tint takes over outside pending mode.
+                const isCandidate =
+                  pendingLinkTxnId !== null &&
+                  !isPendingAnchor &&
+                  iconKind === "link" &&
+                  invalidReason === null &&
+                  !isLinked;
                 const linkBtnClasses = [
                   "txn-link-btn",
-                  isLinked ? "is-linked" : "",
+                  isLinked && pendingLinkTxnId === null ? "is-linked" : "",
                   isPendingAnchor ? "is-pending" : "",
-                  !showLinkIcon ? "is-empty" : "",
+                  isCandidate ? "is-candidate" : "",
+                  iconKind === "invalid" ? "is-invalid" : "",
+                  iconKind === "none" ? "is-empty" : "",
                 ]
                   .filter(Boolean)
                   .join(" ");
                 let linkTitle: string;
-                if (isLinked) {
+                if (isLinked && pendingLinkTxnId === null) {
                   linkTitle = t("transactions.linkLinkedTitle");
                 } else if (isPendingAnchor) {
                   linkTitle = t("transactions.linkPendingTitle");
+                } else if (invalidReason !== null) {
+                  linkTitle = invalidReason;
                 } else if (pendingLinkTxnId !== null) {
                   linkTitle = t("transactions.linkPartnerCandidateTitle");
                 } else {
@@ -636,11 +680,27 @@ export function TransactionsPage({
                       <button
                         type="button"
                         className={linkBtnClasses}
-                        title={linkTitle}
                         aria-label={linkTitle}
                         onClick={() => onLinkCellClick(x)}
+                        onMouseEnter={(e) => {
+                          if (iconKind === "invalid" && invalidReason) {
+                            const r = e.currentTarget.getBoundingClientRect();
+                            setTooltip({
+                              x: r.left + r.width / 2,
+                              y: r.top,
+                              text: invalidReason,
+                            });
+                          }
+                        }}
+                        onMouseLeave={() => setTooltip(null)}
                       >
-                        {showLinkIcon ? "🔗" : ""}
+                        {iconKind === "link" ? (
+                          <ChainIcon />
+                        ) : iconKind === "invalid" ? (
+                          "❌"
+                        ) : (
+                          ""
+                        )}
                       </button>
                     </td>
                     {showCategory && (() => {
@@ -701,9 +761,41 @@ export function TransactionsPage({
                 return nodes;
               })
             )}
+            {visibleTxns.length > 0 && (
+              <tr className="txn-tail-spacer" aria-hidden="true">
+                <td colSpan={visibleColCount}></td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
+      {pendingLinkTxnId !== null && (
+        <div className="txn-link-overlay">
+          <span>{t("transactions.linkPickPartner")}</span>
+          <button
+            type="button"
+            onClick={() => setPendingLinkTxnId(null)}
+          >
+            {t("common.cancel")}
+          </button>
+        </div>
+      )}
+      {linkError && (
+        <div className="txn-link-overlay txn-link-overlay--error">
+          <span>{linkError}</span>
+        </div>
+      )}
+      {tooltip !== null &&
+        createPortal(
+          <div
+            className="txn-link-portal-tooltip"
+            style={{ left: tooltip.x, top: tooltip.y }}
+            role="tooltip"
+          >
+            {tooltip.text}
+          </div>,
+          document.body,
+        )}
       {unlinkConfirm !== null && (
         <div
           className="txn-link-confirm-overlay"
@@ -735,6 +827,28 @@ export function TransactionsPage({
         </div>
       )}
     </section>
+  );
+}
+
+// Chain link glyph. Used everywhere the cell wants a 🔗 symbol — rendered
+// as an SVG so CSS `color` actually changes its hue (the emoji 🔗 is
+// rendered in fixed multi-colour by the OS and ignores text color).
+function ChainIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5" />
+      <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5" />
+    </svg>
   );
 }
 

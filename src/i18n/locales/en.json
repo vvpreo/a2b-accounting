@@ -92,11 +92,13 @@
     "linkUnlinkConfirmText": "These transactions will stop counting as an internal transfer and will be included in reports again.",
     "linkUnlinkConfirmYes": "Break link",
     "linkError": {
-      "link.txn_not_found": "Transaction not found. Refresh the page.",
-      "link.same_txn": "Can't link a transaction to itself.",
-      "link.same_account": "Can't link transactions on the same account.",
-      "link.same_direction": "Linked transactions must be one incoming and one outgoing.",
-      "link.already_linked": "This transaction is already part of another link."
+      "link": {
+        "txn_not_found": "Transaction not found. Refresh the page.",
+        "same_txn": "Can't link a transaction to itself.",
+        "same_account": "Can't link transactions on the same account.",
+        "same_direction": "Linked transactions must be one incoming and one outgoing.",
+        "already_linked": "This transaction is already part of another link."
+      }
     },
     "empty": "No transactions match the selected filters.",
     "correctingLabel": "Correcting entry",

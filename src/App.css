@@ -535,6 +535,18 @@ tbody tr.is-link-partner {
   color: #1d4ed8;
 }
 
+/* Valid partner during pending mode: green 🔗 to flag clickable rows
+   at a glance — paired with the red ❌ on invalid rows for a clear
+   "go / no-go" read of the table. */
+.txn-link-btn.is-candidate {
+  color: #15803d;
+}
+
+.txn-link-btn.is-candidate:hover {
+  color: #14532d;
+  background: #dcfce7;
+}
+
 /* Pending state: the user clicked one half and is now picking the second.
    Show the icon prominently with a dashed outline so the chosen "anchor"
    row stays obvious as they hunt for the partner. */
@@ -545,44 +557,85 @@ tbody tr.is-link-partner {
   background: #eff6ff;
 }
 
-/* Floating banner that surfaces while a link is pending — gives the user
-   a hint and an explicit "cancel" action they can hit without leaving the
-   table. Pinned to the top of the txns scroll wrap. */
-.txn-link-pending-banner {
-  position: sticky;
-  top: 0;
-  z-index: 4;
+/* Invalid candidate during pending mode: ❌ icon, muted color,
+   not-allowed cursor. Click is a no-op (handled in the click handler);
+   hover surfaces the reason via a portal tooltip rendered above the
+   table so it can't be clipped by the scroll wrap. */
+.txn-link-btn.is-invalid {
+  color: #b91c1c;
+  cursor: not-allowed;
+  font-size: 11px;
+}
+
+.txn-link-btn.is-invalid:hover {
+  background: transparent;
+}
+
+.txn-link-portal-tooltip {
+  position: fixed;
+  transform: translate(-50%, calc(-100% - 8px));
+  background: #1f2937;
+  color: #f9fafb;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.35;
+  max-width: 280px;
+  pointer-events: none;
+  z-index: 200;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+/* Bottom-of-screen toast overlay used to surface pending state and link
+   errors. Placed outside the scroll wrap so it never shifts the table
+   layout when it appears or disappears. The trailing .txn-tail-spacer
+   row guarantees the last real transaction can always be scrolled into
+   view above the overlay. */
+.txn-link-overlay {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 50;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
-  padding: 8px 12px;
+  padding: 10px 16px;
   background: #1d4ed8;
   color: #fff;
   font-size: 13px;
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  max-width: min(560px, calc(100vw - 32px));
 }
 
-.txn-link-pending-banner button {
+.txn-link-overlay--error {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.txn-link-overlay button {
   background: rgba(255, 255, 255, 0.18);
   color: #fff;
   border: 1px solid rgba(255, 255, 255, 0.4);
   border-radius: 4px;
   padding: 3px 10px;
   cursor: pointer;
+  font-size: 13px;
 }
 
-.txn-link-pending-banner button:hover {
+.txn-link-overlay button:hover {
   background: rgba(255, 255, 255, 0.3);
 }
 
-.txn-link-error {
-  position: sticky;
-  top: 0;
-  z-index: 5;
-  padding: 8px 12px;
-  background: #fee2e2;
-  color: #991b1b;
-  font-size: 13px;
+/* Bottom padding inside the txns table — three blank rows worth of height
+   so the last transaction is always reachable above the floating
+   .txn-link-overlay. Border stripped so it doesn't read as a real row. */
+.txn-tail-spacer td {
+  height: 96px;
+  border: none;
+  background: transparent;
+  padding: 0;
 }
 
 /* Inline confirm dialog for unlinking — small modal-style overlay. */
@@ -674,6 +727,13 @@ tbody tr.is-link-partner {
   .txn-link-btn.is-linked {
     color: #93c5fd;
   }
+  .txn-link-btn.is-candidate {
+    color: #86efac;
+  }
+  .txn-link-btn.is-candidate:hover {
+    color: #bbf7d0;
+    background: #14532d;
+  }
   .txn-link-btn.is-pending {
     color: #93c5fd;
     outline-color: #93c5fd;
@@ -686,7 +746,7 @@ tbody tr.is-link-partner {
   .txn-link-confirm p {
     color: #cbd5e1;
   }
-  .txn-link-error {
+  .txn-link-overlay--error {
     background: #4c1d24;
     color: #fecaca;
   }
