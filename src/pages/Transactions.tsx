@@ -44,7 +44,7 @@ const COLUMN_KEYS: ColumnKey[] = [
   "peer",
   "bank_description",
 ];
-const DEFAULT_VISIBLE_COLUMNS: ColumnKey[] = ["category", "comment"];
+const DEFAULT_VISIBLE_COLUMNS: ColumnKey[] = COLUMN_KEYS;
 
 function rowMatchesKind(row: { isCorrecting: boolean; credit: string; debit: string; bankDescription: string | null; comment: string | null }, kind: RowKind): boolean {
   switch (kind) {
@@ -113,6 +113,12 @@ export function TransactionsPage({
   const [dateTo, setDateTo] = useState<string>(defaultDateTo);
   const [filtersExpanded, setFiltersExpanded] = useState(true);
   const [accountsInitialised, setAccountsInitialised] = useState(false);
+  // Hover state: the exact row under the cursor plus its accountId, so we can
+  // tint every row of the same account softly while highlighting the hovered
+  // one strongly. Both fields update together to keep the two cues in sync.
+  const [hovered, setHovered] = useState<{ id: number; accountId: number } | null>(
+    null,
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -384,8 +390,24 @@ export function TransactionsPage({
                     </tr>,
                   );
                 }
+                const rowClasses = [
+                  x.isCorrecting ? "is-correcting" : "",
+                  hovered?.accountId === x.accountId ? "is-hover-account" : "",
+                  hovered?.id === x.id ? "is-hover-row" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ");
                 nodes.push(
-                  <tr key={x.id} className={x.isCorrecting ? "is-correcting" : ""}>
+                  <tr
+                    key={x.id}
+                    className={rowClasses}
+                    onMouseEnter={() =>
+                      setHovered({ id: x.id, accountId: x.accountId })
+                    }
+                    onMouseLeave={() =>
+                      setHovered((cur) => (cur?.id === x.id ? null : cur))
+                    }
+                  >
                     <td className="col-fixed col-account">{accLabel}</td>
                     <td
                       className="col-fixed col-date"

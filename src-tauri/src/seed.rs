@@ -7,6 +7,18 @@
 //! The flag `app_settings.demo_seeded = "true"` guards the auto-fire so users
 //! who explicitly cleared their data don't get demo content reappearing on the
 //! next launch.
+//!
+//! Three accounts are seeded to mirror a realistic household setup and to lay
+//! groundwork for a future "mark transfer between own accounts" feature:
+//!   - Salary  ("Зарплатный счёт"): salary lands here, fixed monthly transfers
+//!     are sent out to Family and Savings, plus a few small misc spends.
+//!   - Family  ("Семейный счёт"): receives the monthly transfer from Salary
+//!     and occasional gifts; carries the bulk of recurring household expenses.
+//!   - Savings ("Сберегательный счёт"): receive-only, gets a fixed monthly
+//!     deposit from Salary. No outgoing activity.
+//! Transfers between accounts are emitted as paired uncategorized transactions
+//! (debit on the source, credit on the destination) so a future feature can
+//! link the two sides without changing the schema.
 
 use std::collections::HashMap;
 
@@ -17,13 +29,55 @@ use tauri::State;
 use crate::db::DbState;
 
 const DEMO_FLAG_KEY: &str = "demo_seeded";
-const DEMO_ACCOUNT_NAME: &str = "Семейный счёт";
 const DEMO_ACCOUNT_BANK: &str = "Demo Bank";
-const DEMO_ACCOUNT_NUMBER: &str = "DEMO-0001";
 const DEMO_ACCOUNT_OWNER: &str = "Демо";
 const DEMO_ACCOUNT_CURRENCY: &str = "USD";
 const DEMO_ACCOUNT_TIMEZONE: &str = "+03:00";
 const DEMO_REPORT_NAME: &str = "Отчёт учёта";
+
+// ---- Accounts ----
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum AccountKind {
+    Salary,
+    Family,
+    Savings,
+}
+
+struct AccountSpec {
+    kind: AccountKind,
+    name: &'static str,
+    account_number: &'static str,
+}
+
+const ACCOUNTS: &[AccountSpec] = &[
+    AccountSpec {
+        kind: AccountKind::Salary,
+        name: "Зарплатный счёт",
+        account_number: "DEMO-SAL-0001",
+    },
+    AccountSpec {
+        kind: AccountKind::Family,
+        name: "Семейный счёт",
+        account_number: "DEMO-FAM-0001",
+    },
+    AccountSpec {
+        kind: AccountKind::Savings,
+        name: "Сберегательный счёт",
+        account_number: "DEMO-SAV-0001",
+    },
+];
+
+// Fixed monthly internal transfers — kept as plain debits/credits with no
+// category so they collapse together in the report's "Без категории" line.
+const TRANSFER_TO_FAMILY_USD: u32 = 3_500;
+const TRANSFER_TO_SAVINGS_USD: u32 = 1_000;
+
+// Opening balance for the Family account, posted on the first seed day so the
+// running balance can absorb month-to-month variance in expenses without
+// dipping below zero. Salary and Savings accounts start at zero — Salary is
+// continually replenished by the day-1 paycheck, and Savings is receive-only.
+const OPENING_BALANCE_FAMILY_USD: u32 = 10_000;
 
 // ---- Categories ----
 
@@ -157,7 +211,8 @@ enum Categorization {
     /// Whole amount goes to a single category — the common case.
     Full(&'static str),
     /// No category at all → entire amount becomes the residual "Без категории"
-    /// when the report has `showUncategorized = true`.
+    /// when the report has `showUncategorized = true`. Also used for internal
+    /// transfers between own accounts.
     None,
     /// Half goes to a category, half stays unallocated. Used to demo the
     /// partial-categorization workflow on the report.
@@ -195,6 +250,7 @@ const MULTI_GROCERY_DELIVERY: &[(&str, i64)] = &[
 
 #[derive(Debug)]
 struct TxnSpec {
+    account: AccountKind,
     date: NaiveDate,
     credit_minor: i64,
     debit_minor: i64,
@@ -267,13 +323,33 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
     // has fresh data at the right edge.
     let end = today;
 
+    // Opening balance on the family account, posted on the very first day of
+    // the seed range so it precedes every other transaction. Without it, the
+    // family balance would briefly dip below zero whenever a month's expenses
+    // happen to exceed the fixed transfer-in (the rent alone is $2k right at
+    // the start of each month). Pushed first → stable sort places it at the
+    // head of the chain.
+    out.push(TxnSpec {
+        account: AccountKind::Family,
+        date: start,
+        credit_minor: usd(OPENING_BALANCE_FAMILY_USD),
+        debit_minor: 0,
+        categorization: Categorization::None,
+        peer: Some("Начальный остаток"),
+        bank_description: Some("Начальный остаток на счёте"),
+    });
+
     for month_start in iter_months(start, end) {
         let y = month_start.year();
         let m = month_start.month();
 
-        // Salary on the 5th: $5,000 net.
+        // ----- Salary account -----
+
+        // Paycheck on the 1st: $5,000 net. Lands first in the month so the
+        // outgoing transfers on day 2 / day 3 always have funds to draw from.
         out.push(TxnSpec {
-            date: safe_date(y, m, 5),
+            account: AccountKind::Salary,
+            date: safe_date(y, m, 1),
             credit_minor: usd(5_000),
             debit_minor: 0,
             categorization: Categorization::Full("Зарплата"),
@@ -284,6 +360,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // Quarterly bonus on the 25th of Mar/Jun/Sep/Dec.
         if matches!(m, 3 | 6 | 9 | 12) {
             out.push(TxnSpec {
+                account: AccountKind::Salary,
                 date: safe_date(y, m, 25),
                 credit_minor: usd(1_500),
                 debit_minor: 0,
@@ -293,9 +370,72 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             });
         }
 
-        // Occasional gift on a random day.
+        // ----- Internal transfers (Salary → Family, Salary → Savings) -----
+        // Two paired uncategorized rows per transfer: debit on the source,
+        // credit on the destination, same date. Future "mark internal
+        // transfer" feature will link them; for now they live as plain
+        // transactions and surface in the report as "Без категории" on both
+        // the income and expense sides (they cancel out across accounts).
+
+        // Day 2: salary → family.
+        out.push(TxnSpec {
+            account: AccountKind::Salary,
+            date: safe_date(y, m, 2),
+            credit_minor: 0,
+            debit_minor: usd(TRANSFER_TO_FAMILY_USD),
+            categorization: Categorization::None,
+            peer: Some("Семейный счёт"),
+            bank_description: Some("Перевод на семейный счёт"),
+        });
+        out.push(TxnSpec {
+            account: AccountKind::Family,
+            date: safe_date(y, m, 2),
+            credit_minor: usd(TRANSFER_TO_FAMILY_USD),
+            debit_minor: 0,
+            categorization: Categorization::None,
+            peer: Some("Зарплатный счёт"),
+            bank_description: Some("Перевод с зарплатного счёта"),
+        });
+
+        // Day 3: salary → savings.
+        out.push(TxnSpec {
+            account: AccountKind::Salary,
+            date: safe_date(y, m, 3),
+            credit_minor: 0,
+            debit_minor: usd(TRANSFER_TO_SAVINGS_USD),
+            categorization: Categorization::None,
+            peer: Some("Сберегательный счёт"),
+            bank_description: Some("Перевод на сберегательный счёт"),
+        });
+        out.push(TxnSpec {
+            account: AccountKind::Savings,
+            date: safe_date(y, m, 3),
+            credit_minor: usd(TRANSFER_TO_SAVINGS_USD),
+            debit_minor: 0,
+            categorization: Categorization::None,
+            peer: Some("Зарплатный счёт"),
+            bank_description: Some("Перевод с зарплатного счёта"),
+        });
+
+        // Misc small spends on Salary (souvenirs, stationery) — leftover from
+        // the salary inflow that didn't get transferred away. Demonstrates
+        // that the salary account isn't strictly transfer-only.
+        if rng.chance(3, 4) {
+            out.push(TxnSpec {
+                account: AccountKind::Salary,
+                date: safe_date(y, m, rng.range(10, 28)),
+                credit_minor: 0,
+                debit_minor: usd_from_range(&mut rng, 10, 70),
+                categorization: Categorization::Full("Прочее"),
+                peer: Some(rng.pick(MISC)),
+                bank_description: None,
+            });
+        }
+
+        // ----- Family account: occasional gifts -----
         if rng.chance(1, 3) {
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: usd_from_range(&mut rng, 50, 200),
                 debit_minor: 0,
@@ -305,9 +445,12 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             });
         }
 
-        // --- Recurring expenses ---
+        // ----- Family account: recurring expenses -----
+        // Rent on the 4th — strictly after the day-2 transfer-in so the family
+        // balance never dips below zero waiting for funds to arrive.
         out.push(TxnSpec {
-            date: safe_date(y, m, 1),
+            account: AccountKind::Family,
+            date: safe_date(y, m, 4),
             credit_minor: 0,
             debit_minor: usd(2_000),
             categorization: Categorization::Full("Аренда"),
@@ -315,6 +458,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             bank_description: None,
         });
         out.push(TxnSpec {
+            account: AccountKind::Family,
             date: safe_date(y, m, 10),
             credit_minor: 0,
             debit_minor: usd_from_range(&mut rng, 100, 200),
@@ -323,6 +467,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             bank_description: None,
         });
         out.push(TxnSpec {
+            account: AccountKind::Family,
             date: safe_date(y, m, 15),
             credit_minor: 0,
             debit_minor: usd(30),
@@ -331,6 +476,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             bank_description: None,
         });
         out.push(TxnSpec {
+            account: AccountKind::Family,
             date: safe_date(y, m, 5),
             credit_minor: 0,
             debit_minor: usd(80),
@@ -342,6 +488,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // grandchild level under "Подписки" is visible in the demo report.
         let sub_leaf = if rng.chance(1, 2) { "Музыка" } else { "Видео" };
         out.push(TxnSpec {
+            account: AccountKind::Family,
             date: safe_date(y, m, 5),
             credit_minor: 0,
             debit_minor: usd_from_range(&mut rng, 8, 25),
@@ -353,6 +500,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // Cash withdrawal — kept *uncategorized* on purpose so every month has
         // a chunk of unallocated spending visible in the report.
         out.push(TxnSpec {
+            account: AccountKind::Family,
             date: safe_date(y, m, 20),
             credit_minor: 0,
             debit_minor: usd_from_range(&mut rng, 80, 250),
@@ -365,6 +513,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // Both grandchildren of "Магазины", which is itself a child of "Еда".
         for _ in 0..4 {
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, days_in_month(y, m))),
                 credit_minor: 0,
                 debit_minor: usd_from_range(&mut rng, 40, 150),
@@ -375,6 +524,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         }
         if rng.chance(2, 3) {
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, days_in_month(y, m))),
                 credit_minor: 0,
                 debit_minor: usd_from_range(&mut rng, 30, 90),
@@ -387,6 +537,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // Cafe (2-3)
         for _ in 0..rng.range(2, 4) {
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, days_in_month(y, m))),
                 credit_minor: 0,
                 debit_minor: usd_from_range(&mut rng, 20, 80),
@@ -399,6 +550,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // Delivery (1-3)
         for _ in 0..rng.range(1, 4) {
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, days_in_month(y, m))),
                 credit_minor: 0,
                 debit_minor: usd_from_range(&mut rng, 25, 70),
@@ -411,6 +563,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // Taxi (1-3)
         for _ in 0..rng.range(1, 4) {
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, days_in_month(y, m))),
                 credit_minor: 0,
                 debit_minor: usd_from_range(&mut rng, 10, 30),
@@ -423,6 +576,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // Pharmacy: usually 1.
         if rng.chance(3, 4) {
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(5, 28)),
                 credit_minor: 0,
                 debit_minor: usd_from_range(&mut rng, 15, 60),
@@ -437,6 +591,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         if rng.chance(1, 2) {
             let doctor = if rng.chance(1, 2) { "Терапевт" } else { "Стоматолог" };
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(5, 28)),
                 credit_minor: 0,
                 debit_minor: usd_from_range(&mut rng, 80, 200),
@@ -451,6 +606,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         if rng.chance(3, 4) {
             let station = if rng.chance(1, 2) { "АЗС Shell" } else { "АЗС BP" };
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(3, 28)),
                 credit_minor: 0,
                 debit_minor: usd_from_range(&mut rng, 30, 90),
@@ -463,6 +619,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // Cinema: 1 per month.
         if rng.chance(2, 3) {
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(7, 27)),
                 credit_minor: 0,
                 debit_minor: usd_from_range(&mut rng, 15, 50),
@@ -475,6 +632,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // Hobby: 1 per 2-3 months.
         if rng.chance(2, 5) {
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(5, 28)),
                 credit_minor: 0,
                 debit_minor: usd_from_range(&mut rng, 40, 130),
@@ -487,6 +645,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // Clothes: 1 per 2 months.
         if rng.chance(1, 2) {
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(7, 27)),
                 credit_minor: 0,
                 debit_minor: usd_from_range(&mut rng, 80, 300),
@@ -499,6 +658,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // Education: 1 per 3 months.
         if rng.chance(1, 3) {
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(7, 27)),
                 credit_minor: 0,
                 debit_minor: usd_from_range(&mut rng, 50, 200),
@@ -508,26 +668,16 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             });
         }
 
-        // Misc: 1 per month.
-        if rng.chance(3, 4) {
-            out.push(TxnSpec {
-                date: safe_date(y, m, rng.range(2, 28)),
-                credit_minor: 0,
-                debit_minor: usd_from_range(&mut rng, 10, 70),
-                categorization: Categorization::Full("Прочее"),
-                peer: Some(rng.pick(MISC)),
-                bank_description: None,
-            });
-        }
-
         // ----- Group-level (parent category) tagging -----
         // Real users often tag transactions to a group when no leaf fits or
         // they don't want to be too precise. The report should surface these
         // amounts as the group's own line, distinct from its child leaves.
+        // All on Family — these are everyday household expenses.
 
         // Жильё (group): minor home repair / household supplies.
         if rng.chance(1, 3) {
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: 0,
                 debit_minor: usd_from_range(&mut rng, 30, 80),
@@ -539,6 +689,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // Еда (group): generic food expense not fitting Магазины/Кафе/Доставка.
         if rng.chance(1, 4) {
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: 0,
                 debit_minor: usd_from_range(&mut rng, 20, 50),
@@ -550,6 +701,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // Транспорт (group): parking, tolls.
         if rng.chance(1, 3) {
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: 0,
                 debit_minor: usd_from_range(&mut rng, 10, 30),
@@ -561,6 +713,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // Здоровье (group): lab tests, supplements.
         if rng.chance(1, 4) {
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: 0,
                 debit_minor: usd_from_range(&mut rng, 30, 100),
@@ -572,6 +725,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // Развлечения (group): a one-off event.
         if rng.chance(1, 4) {
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: 0,
                 debit_minor: usd_from_range(&mut rng, 20, 80),
@@ -583,6 +737,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // Магазины (depth-2 group): generic shopping run.
         if rng.chance(1, 3) {
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: 0,
                 debit_minor: usd_from_range(&mut rng, 20, 60),
@@ -594,6 +749,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // Бензин (depth-2 group): fuel from an unbranded station.
         if rng.chance(1, 4) {
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: 0,
                 debit_minor: usd_from_range(&mut rng, 30, 70),
@@ -605,6 +761,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // Подписки (depth-2 group): bundled family plan.
         if rng.chance(1, 4) {
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: 0,
                 debit_minor: usd_from_range(&mut rng, 10, 25),
@@ -617,10 +774,12 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // ----- Multi-share splits inside one transaction -----
         // Demonstrate group + leaf within the same txn so the user can see
         // both the group's own line and its child line getting their share.
+        // All on Family.
 
         // Hypermarket trip — Магазины (group) + Супермаркеты (leaf descendant).
         if rng.chance(1, 2) {
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(5, 26)),
                 credit_minor: 0,
                 debit_minor: multi_total(MULTI_HYPERMARKET),
@@ -632,6 +791,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // Doctor appointment — Врачи (group) + Стоматолог (leaf).
         if rng.chance(1, 4) {
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(5, 26)),
                 credit_minor: 0,
                 debit_minor: multi_total(MULTI_DOCTOR_VISIT),
@@ -643,6 +803,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // Subscription with an add-on — Подписки (group) + Музыка (leaf).
         if rng.chance(1, 3) {
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(5, 26)),
                 credit_minor: 0,
                 debit_minor: multi_total(MULTI_SUB_BUNDLE),
@@ -654,6 +815,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // Two-leaf cross-group split — Супермаркеты + Доставка (different groups).
         if rng.chance(1, 3) {
             out.push(TxnSpec {
+                account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(5, 26)),
                 credit_minor: 0,
                 debit_minor: multi_total(MULTI_GROCERY_DELIVERY),
@@ -666,9 +828,12 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
 
     // Two illustrative split transactions in the most recent month: half goes
     // to a category, half stays unallocated. Visible in the "last 12 months"
-    // demo report so the partial-categorization workflow is obvious.
+    // demo report so the partial-categorization workflow is obvious. The
+    // shopping one lives on Family (it's a household expense), the bonus one
+    // on Salary (a partner side-gig payment landing on the salary account).
     let last_month = NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap();
     out.push(TxnSpec {
+        account: AccountKind::Family,
         date: safe_date(last_month.year(), last_month.month(), 12),
         credit_minor: 0,
         debit_minor: usd(200),
@@ -677,6 +842,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         bank_description: Some("Покупка (часть без категории)"),
     });
     out.push(TxnSpec {
+        account: AccountKind::Salary,
         date: safe_date(last_month.year(), last_month.month(), 13),
         credit_minor: usd(1_000),
         debit_minor: 0,
@@ -685,7 +851,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         bank_description: Some("Бонус (часть без категории)"),
     });
 
-    // Stable order by (date, then a tie-breaker so balance is reproducible).
+    // Stable order by date — ties broken by insertion order, which keeps each
+    // account's per-day sequence reproducible after the per-account split.
     out.sort_by(|a, b| a.date.cmp(&b.date));
     out
 }
@@ -728,30 +895,45 @@ fn insert_category(
     )
 }
 
-fn insert_account(conn: &Connection) -> rusqlite::Result<i64> {
-    conn.query_row(
-        "INSERT INTO accounts (name, bank, currency, account_number, owner_name)
-         VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id",
-        params![
-            DEMO_ACCOUNT_NAME,
-            DEMO_ACCOUNT_BANK,
-            DEMO_ACCOUNT_CURRENCY,
-            DEMO_ACCOUNT_NUMBER,
-            DEMO_ACCOUNT_OWNER,
-        ],
-        |r| r.get(0),
-    )
+fn insert_accounts(conn: &Connection) -> rusqlite::Result<HashMap<AccountKind, i64>> {
+    let mut map = HashMap::new();
+    for spec in ACCOUNTS {
+        let id: i64 = conn.query_row(
+            "INSERT INTO accounts (name, bank, currency, account_number, owner_name)
+             VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id",
+            params![
+                spec.name,
+                DEMO_ACCOUNT_BANK,
+                DEMO_ACCOUNT_CURRENCY,
+                spec.account_number,
+                DEMO_ACCOUNT_OWNER,
+            ],
+            |r| r.get(0),
+        )?;
+        map.insert(spec.kind, id);
+    }
+    Ok(map)
 }
 
-fn insert_batch(conn: &Connection, account_id: i64, today: NaiveDate) -> rusqlite::Result<i64> {
+fn insert_batches(
+    conn: &Connection,
+    accounts: &HashMap<AccountKind, i64>,
+    today: NaiveDate,
+) -> rusqlite::Result<HashMap<AccountKind, i64>> {
     let imported_at = format!("{}T00:00:00.000Z", today);
-    conn.query_row(
-        "INSERT INTO import_batches
-         (account_id, imported_at, source_filename, row_count, timezone_offset)
-         VALUES (?1, ?2, ?3, 0, ?4) RETURNING id",
-        params![account_id, imported_at, "demo-seed", DEMO_ACCOUNT_TIMEZONE],
-        |r| r.get(0),
-    )
+    let mut map = HashMap::new();
+    for spec in ACCOUNTS {
+        let account_id = accounts[&spec.kind];
+        let id: i64 = conn.query_row(
+            "INSERT INTO import_batches
+             (account_id, imported_at, source_filename, row_count, timezone_offset)
+             VALUES (?1, ?2, ?3, 0, ?4) RETURNING id",
+            params![account_id, imported_at, "demo-seed", DEMO_ACCOUNT_TIMEZONE],
+            |r| r.get(0),
+        )?;
+        map.insert(spec.kind, id);
+    }
+    Ok(map)
 }
 
 fn insert_transactions(
@@ -759,9 +941,10 @@ fn insert_transactions(
     account_id: i64,
     batch_id: i64,
     cats: &HashMap<String, i64>,
-    txns: &[TxnSpec],
+    txns: &[&TxnSpec],
 ) -> rusqlite::Result<()> {
-    // Roll a running balance and persist.
+    // Roll a balance scoped to *this* account — the DB stores per-account
+    // chains and the import validator checks each chain independently.
     let mut balance: i64 = 0;
     for t in txns {
         balance += t.credit_minor - t.debit_minor;
@@ -837,7 +1020,7 @@ fn collect_ids(specs: &[CategorySpec], cats: &HashMap<String, i64>, out: &mut Ve
 
 fn insert_report_view(
     conn: &Connection,
-    account_id: i64,
+    accounts: &HashMap<AccountKind, i64>,
     cats: &HashMap<String, i64>,
 ) -> rusqlite::Result<()> {
     // Include every level (root + children + grandchildren) so the user can
@@ -847,9 +1030,15 @@ fn insert_report_view(
     let mut expense_ids: Vec<i64> = Vec::new();
     collect_ids(EXPENSE_CATEGORIES, cats, &mut expense_ids);
 
+    // All three accounts in the demo report — that's the realistic household
+    // view. Internal transfers between them surface as paired "Без категории"
+    // rows on the income and expense sides which cancel out at the report
+    // level; a future "mark internal transfer" feature will hide them.
+    let account_ids: Vec<i64> = ACCOUNTS.iter().map(|spec| accounts[&spec.kind]).collect();
+
     let config = serde_json::json!({
         "version": 1,
-        "accountIds": [account_id],
+        "accountIds": account_ids,
         "expenseCategoryIds": expense_ids,
         "incomeCategoryIds": income_ids,
         "defaultRange": { "kind": "preset", "preset": "last_12_months", "from": null, "to": null },
@@ -986,11 +1175,21 @@ fn wipe(conn: &Connection) -> rusqlite::Result<()> {
 
 fn seed_full(conn: &Connection, today: NaiveDate) -> rusqlite::Result<()> {
     let cats = insert_categories(conn)?;
-    let account_id = insert_account(conn)?;
-    let batch_id = insert_batch(conn, account_id, today)?;
+    let accounts = insert_accounts(conn)?;
+    let batches = insert_batches(conn, &accounts, today)?;
     let txns = generate_transactions(today);
-    insert_transactions(conn, account_id, batch_id, &cats, &txns)?;
-    insert_report_view(conn, account_id, &cats)?;
+
+    // Split the global txn list per account and run a separate balance chain
+    // for each. The original sort by date is stable, so each account keeps its
+    // own date ordering after the per-kind filter.
+    for spec in ACCOUNTS {
+        let account_id = accounts[&spec.kind];
+        let batch_id = batches[&spec.kind];
+        let per_account: Vec<&TxnSpec> = txns.iter().filter(|t| t.account == spec.kind).collect();
+        insert_transactions(conn, account_id, batch_id, &cats, &per_account)?;
+    }
+
+    insert_report_view(conn, &accounts, &cats)?;
     Ok(())
 }
 
@@ -1047,8 +1246,15 @@ mod tests {
         let today = NaiveDate::from_ymd_opt(2026, 4, 30).unwrap();
         seed_full(&conn, today).unwrap();
 
+        // Three demo accounts — Salary, Family, Savings.
         let n_acc: i64 = conn.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0)).unwrap();
-        assert_eq!(n_acc, 1);
+        assert_eq!(n_acc, 3);
+
+        // Three matching import batches, one per account.
+        let n_batches: i64 = conn
+            .query_row("SELECT COUNT(*) FROM import_batches", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n_batches, 3);
 
         // 3 income roots + 6 income (no children) + 8 expense roots + 14 expense
         // children = 3 + 0 children for income roots + 8 expense roots + 14 expense
@@ -1061,12 +1267,17 @@ mod tests {
         let n_txns: i64 = conn
             .query_row("SELECT COUNT(*) FROM transactions", [], |r| r.get(0))
             .unwrap();
-        // 3 years * ~30+ per month ≈ 1100 with the recent group/multi mix.
-        // Bound generously to allow PRNG drift when the mix is tweaked.
-        assert!(n_txns > 800 && n_txns < 1500, "expected ~1100 txns, got {n_txns}");
+        // ~1100 base monthly mix + 4 transfer rows per month × 36 months = ~144
+        // extra. Bound generously to allow PRNG drift when the mix is tweaked.
+        assert!(
+            n_txns > 900 && n_txns < 1700,
+            "expected ~1250 txns, got {n_txns}"
+        );
 
         // Each month must contribute at least one fully-uncategorized cash
         // withdrawal so the report has a permanent "Без категории" entry.
+        // Internal transfers also count — they're uncategorized too — so the
+        // bound only grows.
         let n_uncat: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM transactions t
@@ -1119,27 +1330,90 @@ mod tests {
     }
 
     #[test]
-    fn seed_balance_chain_is_consistent() {
+    fn seed_distributes_transactions_across_three_accounts() {
         let (_dir, conn) = open_clean_db();
         let today = NaiveDate::from_ymd_opt(2026, 4, 30).unwrap();
         seed_full(&conn, today).unwrap();
 
+        // Each of the three demo accounts must carry transactions; the
+        // savings account is intentionally minimal (one credit per month).
         let mut stmt = conn
             .prepare(
-                "SELECT credit, debit, balance FROM transactions
-                 ORDER BY occurred_at_utc ASC, id ASC",
+                "SELECT a.name, COUNT(t.id)
+                 FROM accounts a LEFT JOIN transactions t ON t.account_id = a.id
+                 GROUP BY a.id ORDER BY a.id",
+            )
+            .unwrap();
+        let rows: Vec<(String, i64)> = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+
+        let by_name: HashMap<String, i64> = rows.into_iter().collect();
+        // 36 months × (1 salary + 0..1 quarterly + 2 transfers + 0..1 misc) +
+        // 1 half-cat bonus → ≥ 36 × 3 ≈ 108 minimum, generous upper bound.
+        let salary = by_name.get("Зарплатный счёт").copied().unwrap_or(0);
+        assert!(
+            (100..=300).contains(&salary),
+            "Зарплатный счёт expected ~110-200 txns, got {salary}"
+        );
+        // Family carries the lion's share — recurring + variable + groups +
+        // multi-splits + monthly transfer-in.
+        let family = by_name.get("Семейный счёт").copied().unwrap_or(0);
+        assert!(family > 700, "Семейный счёт expected lots of txns, got {family}");
+        // Savings: exactly one transfer-in per month.
+        let savings = by_name.get("Сберегательный счёт").copied().unwrap_or(0);
+        assert_eq!(
+            savings, 37,
+            "Сберегательный счёт expected one transfer per month over 36 months + current = 37, got {savings}"
+        );
+    }
+
+    #[test]
+    fn seed_balance_chain_is_consistent_per_account() {
+        let (_dir, conn) = open_clean_db();
+        let today = NaiveDate::from_ymd_opt(2026, 4, 30).unwrap();
+        seed_full(&conn, today).unwrap();
+
+        // Each account has its own running balance — the import validator
+        // checks chains per-account, so the seed must produce them per-account.
+        let mut stmt = conn
+            .prepare(
+                "SELECT account_id, credit, debit, balance FROM transactions
+                 ORDER BY account_id ASC, occurred_at_utc ASC, id ASC",
             )
             .unwrap();
         let rows = stmt
             .query_map([], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
             })
             .unwrap();
+        let mut current_account: Option<i64> = None;
         let mut prev = 0_i64;
         for r in rows {
-            let (credit, debit, balance) = r.unwrap();
+            let (account_id, credit, debit, balance) = r.unwrap();
+            if current_account != Some(account_id) {
+                current_account = Some(account_id);
+                prev = 0;
+            }
             let expected = prev + credit - debit;
-            assert_eq!(balance, expected, "balance chain broken");
+            assert_eq!(
+                balance, expected,
+                "balance chain broken in account {account_id}"
+            );
+            // Demo data must never show a negative running balance — opening
+            // balance + ordering of paycheck/transfer/expenses is calibrated
+            // to keep every account in the black at all times.
+            assert!(
+                balance >= 0,
+                "negative running balance in account {account_id}: {balance}"
+            );
             prev = balance;
         }
     }
@@ -1176,12 +1450,12 @@ mod tests {
         let (_dir, conn) = open_clean_db();
         seed_if_first_launch(&conn).unwrap();
         let n_acc: i64 = conn.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0)).unwrap();
-        assert_eq!(n_acc, 1);
+        assert_eq!(n_acc, 3);
         assert!(flag_set(&conn).unwrap());
         // Second call must be idempotent.
         seed_if_first_launch(&conn).unwrap();
         let n_acc2: i64 = conn.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0)).unwrap();
-        assert_eq!(n_acc2, 1);
+        assert_eq!(n_acc2, 3);
     }
 
     #[test]
@@ -1235,5 +1509,7 @@ mod tests {
         assert_eq!(parsed["defaultRange"]["preset"], "last_12_months");
         let exp = parsed["expenseCategoryIds"].as_array().unwrap();
         assert!(exp.len() > 10, "expense list should include roots + children");
+        let accs = parsed["accountIds"].as_array().unwrap();
+        assert_eq!(accs.len(), 3, "demo report must include all three accounts");
     }
 }

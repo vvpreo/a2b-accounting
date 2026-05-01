@@ -477,6 +477,21 @@ tbody tr.is-correcting {
   color: #6b7280;
 }
 
+/* Hover cues on the transactions table:
+ *  - .is-hover-account tints every row that shares the hovered row's account
+ *    with a soft background, so the user can quickly scan the rest of that
+ *    account's history.
+ *  - .is-hover-row applies on top of that to the exact row under the cursor
+ *    with a stronger background so the focal row stays visually distinct.
+ *  Declaration order matters — .is-hover-row comes second so it wins when
+ *  both classes apply to the same row. */
+tbody tr.is-hover-account {
+  background: #f1f5f9;
+}
+tbody tr.is-hover-row {
+  background: #cbd5e1;
+}
+
 .inline-edit {
   width: 100%;
   min-width: 120px;
@@ -510,6 +525,12 @@ tbody tr.is-correcting {
 @media (prefers-color-scheme: dark) {
   tbody tr.is-correcting {
     color: #a1a1aa;
+  }
+  tbody tr.is-hover-account {
+    background: #1f2937;
+  }
+  tbody tr.is-hover-row {
+    background: #334155;
   }
 }
 
