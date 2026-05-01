@@ -491,6 +491,135 @@ tbody tr.is-hover-account {
 tbody tr.is-hover-row {
   background: #cbd5e1;
 }
+/* Hover-on partner row when the user is over a linked transaction:
+   the linked counterpart gets the strong "focal" tint too so the pair is
+   visually equal-weight, no matter which side the cursor is on. */
+tbody tr.is-link-partner {
+  background: #cbd5e1;
+}
+
+/* Transfer-link column ("🔗") cells. Width is fixed and minimal, mirroring
+   the col-fixed rules used for date/credit/debit. The cell itself is just a
+   small button surface; visual cues come from the inner span classes. */
+.col-link {
+  width: 36px;
+  min-width: 36px;
+  text-align: center;
+  padding: 0 4px;
+}
+
+.txn-link-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  width: 100%;
+  height: 100%;
+  padding: 4px 0;
+  color: #94a3b8;
+  border-radius: 3px;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+/* Visual states only paint the cell when the icon is actually rendered;
+   empty cells stay invisible (no hover background) so the column reads
+   clean by default. The button is still clickable in either state. */
+.txn-link-btn:not(.is-empty):hover {
+  color: #1e3a8a;
+  background: #e0e7ff;
+}
+
+/* Linked state: filled chain icon, distinct color. */
+.txn-link-btn.is-linked {
+  color: #1d4ed8;
+}
+
+/* Pending state: the user clicked one half and is now picking the second.
+   Show the icon prominently with a dashed outline so the chosen "anchor"
+   row stays obvious as they hunt for the partner. */
+.txn-link-btn.is-pending {
+  color: #1d4ed8;
+  outline: 2px dashed #1d4ed8;
+  outline-offset: -2px;
+  background: #eff6ff;
+}
+
+/* Floating banner that surfaces while a link is pending — gives the user
+   a hint and an explicit "cancel" action they can hit without leaving the
+   table. Pinned to the top of the txns scroll wrap. */
+.txn-link-pending-banner {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  background: #1d4ed8;
+  color: #fff;
+  font-size: 13px;
+}
+
+.txn-link-pending-banner button {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 4px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.txn-link-pending-banner button:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.txn-link-error {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: 8px 12px;
+  background: #fee2e2;
+  color: #991b1b;
+  font-size: 13px;
+}
+
+/* Inline confirm dialog for unlinking — small modal-style overlay. */
+.txn-link-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.txn-link-confirm {
+  background: #fff;
+  border-radius: 8px;
+  padding: 18px 22px;
+  max-width: 360px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+}
+
+.txn-link-confirm h3 {
+  margin: 0 0 8px 0;
+  font-size: 15px;
+}
+
+.txn-link-confirm p {
+  margin: 0 0 14px 0;
+  font-size: 13px;
+  color: #475569;
+}
+
+.txn-link-confirm-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
 
 .inline-edit {
   width: 100%;
@@ -531,6 +660,35 @@ tbody tr.is-hover-row {
   }
   tbody tr.is-hover-row {
     background: #334155;
+  }
+  tbody tr.is-link-partner {
+    background: #334155;
+  }
+  .txn-link-btn {
+    color: #71717a;
+  }
+  .txn-link-btn:not(.is-empty):hover {
+    color: #93c5fd;
+    background: #1e293b;
+  }
+  .txn-link-btn.is-linked {
+    color: #93c5fd;
+  }
+  .txn-link-btn.is-pending {
+    color: #93c5fd;
+    outline-color: #93c5fd;
+    background: #1e293b;
+  }
+  .txn-link-confirm {
+    background: #1f2937;
+    color: #f3f4f6;
+  }
+  .txn-link-confirm p {
+    color: #cbd5e1;
+  }
+  .txn-link-error {
+    background: #4c1d24;
+    color: #fecaca;
   }
 }
 

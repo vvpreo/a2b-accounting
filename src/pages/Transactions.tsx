@@ -12,11 +12,17 @@ import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { useI18n, useT } from "../i18n";
 import {
   Account,
+  LINK_ERROR_CODES,
+  LinkErrorCode,
   Transaction,
   TransactionCategoryView,
+  TxnLink,
+  linkTransactions,
   listAccounts,
+  listTransactionLinks,
   listTransactions,
   listTransactionsCategories,
+  unlinkTransaction,
   updateTransactionComment,
 } from "../lib/api";
 import { formatMoney, parseMoneyToMinor } from "../lib/money";
@@ -119,6 +125,14 @@ export function TransactionsPage({
   const [hovered, setHovered] = useState<{ id: number; accountId: number } | null>(
     null,
   );
+  // Transfer-link state. `links` mirrors the backend table; `pendingLinkTxnId`
+  // holds the txn whose 🔗 cell was clicked first and is now waiting for a
+  // partner. `unlinkConfirm` defers an actual unlink until the user confirms
+  // — matches user spec: linking is unconfirmed, unlinking is.
+  const [links, setLinks] = useState<TxnLink[]>([]);
+  const [pendingLinkTxnId, setPendingLinkTxnId] = useState<number | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const [unlinkConfirm, setUnlinkConfirm] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -150,6 +164,31 @@ export function TransactionsPage({
       cancelled = true;
     };
   }, [version, categoriesVersion]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listTransactionLinks(undefined)
+      .then((ls) => {
+        if (!cancelled) setLinks(ls);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [version]);
+
+  // Map of txn id → partner txn id. A transaction is part of at most one
+  // link, so this lookup is unambiguous.
+  const linkPartnerById = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const l of links) {
+      m.set(l.txnAId, l.txnBId);
+      m.set(l.txnBId, l.txnAId);
+    }
+    return m;
+  }, [links]);
 
   const categoriesByTxn = useMemo(() => {
     const map = new Map<number, TransactionCategoryView[]>();
@@ -194,7 +233,8 @@ export function TransactionsPage({
   const showComment = visibleColumns.includes("comment");
   const showPeer = visibleColumns.includes("peer");
   const showBankDescription = visibleColumns.includes("bank_description");
-  const visibleColCount = 5 + visibleColumns.length; // account/date/credit/debit/balance + optional
+  // 5 fixed money/date columns + always-visible 🔗 column + optional togglables.
+  const visibleColCount = 5 + 1 + visibleColumns.length;
 
   const visibleTxns = useMemo(() => {
     const fromMs = dateFrom ? Date.parse(dateFrom + "T00:00:00Z") : null;
@@ -214,6 +254,112 @@ export function TransactionsPage({
     const el = scrollWrapRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [visibleTxns, visibleColumns]);
+
+  // Auto-clear transient link errors so the banner doesn't linger.
+  useEffect(() => {
+    if (!linkError) return;
+    const handle = window.setTimeout(() => setLinkError(null), 4000);
+    return () => window.clearTimeout(handle);
+  }, [linkError]);
+
+  // Cancel a pending link whenever the user clicks anywhere outside the
+  // 🔗 column. Clicks *inside* `.col-link` are handled by the cell itself
+  // (selection / cancel-on-anchor). Clicks on the cancel button in the
+  // pending banner also leave the column, so they cancel naturally.
+  useEffect(() => {
+    if (pendingLinkTxnId === null) return;
+    const handler = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest(".col-link")) return;
+      if (target.closest(".txn-link-pending-banner")) return;
+      setPendingLinkTxnId(null);
+    };
+    window.addEventListener("click", handler);
+    return () => window.removeEventListener("click", handler);
+  }, [pendingLinkTxnId]);
+
+  function localizedLinkError(code: string): string {
+    if ((LINK_ERROR_CODES as string[]).includes(code)) {
+      return t(`transactions.linkError.${code as LinkErrorCode}`);
+    }
+    return code;
+  }
+
+  async function refreshLinks() {
+    try {
+      const ls = await listTransactionLinks(undefined);
+      setLinks(ls);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function commitLink(aId: number, bId: number) {
+    try {
+      await linkTransactions(aId, bId);
+      setPendingLinkTxnId(null);
+      setLinkError(null);
+      await refreshLinks();
+    } catch (e) {
+      setLinkError(localizedLinkError(String(e)));
+    }
+  }
+
+  async function commitUnlink(txnId: number) {
+    try {
+      await unlinkTransaction(txnId);
+      setUnlinkConfirm(null);
+      await refreshLinks();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  // Click on a 🔗 cell — drives the pending state machine. Categorisation
+  // is intentionally untouched: per product spec, links and categories
+  // coexist freely.
+  function onLinkCellClick(x: Transaction) {
+    const partnerId = linkPartnerById.get(x.id);
+    if (partnerId !== undefined) {
+      // Already linked → ask before breaking the link (creating is silent
+      // but breaking warrants explicit confirmation).
+      setUnlinkConfirm(x.id);
+      return;
+    }
+    if (pendingLinkTxnId === null) {
+      setPendingLinkTxnId(x.id);
+      setLinkError(null);
+      return;
+    }
+    if (pendingLinkTxnId === x.id) {
+      // Re-clicking the same anchor cancels.
+      setPendingLinkTxnId(null);
+      return;
+    }
+    // Pre-flight validation matching the backend rules so the user gets
+    // immediate feedback without an extra round-trip.
+    const anchor = txns.find((t) => t.id === pendingLinkTxnId);
+    if (!anchor) {
+      setPendingLinkTxnId(null);
+      return;
+    }
+    if (anchor.accountId === x.accountId) {
+      setLinkError(t("transactions.linkError.link.same_account"));
+      return;
+    }
+    const anchorIncoming = anchor.credit !== "0.00";
+    const targetIncoming = x.credit !== "0.00";
+    if (anchorIncoming === targetIncoming) {
+      setLinkError(t("transactions.linkError.link.same_direction"));
+      return;
+    }
+    if (linkPartnerById.has(x.id)) {
+      setLinkError(t("transactions.linkError.link.already_linked"));
+      return;
+    }
+    void commitLink(anchor.id, x.id);
+  }
 
   async function persistComment(id: number, raw: string) {
     const trimmed = raw.trim();
@@ -342,6 +488,18 @@ export function TransactionsPage({
             : undefined
         }
       >
+        {pendingLinkTxnId !== null && (
+          <div className="txn-link-pending-banner">
+            <span>{t("transactions.linkPickPartner")}</span>
+            <button
+              type="button"
+              onClick={() => setPendingLinkTxnId(null)}
+            >
+              {t("common.cancel")}
+            </button>
+          </div>
+        )}
+        {linkError && <div className="txn-link-error">{linkError}</div>}
         <table>
           <thead ref={theadRef}>
             <tr>
@@ -351,6 +509,12 @@ export function TransactionsPage({
               <th className="col-fixed num">{t("transactions.tableDebit")}</th>
               <th className="col-fixed num col-divider">
                 {t("transactions.tableBalance")}
+              </th>
+              <th
+                className="col-link"
+                title={t("transactions.tableLinkTitle")}
+              >
+                🔗
               </th>
               {showCategory && (
                 <th className="col-category">{t("transactions.tableCategory")}</th>
@@ -390,13 +554,42 @@ export function TransactionsPage({
                     </tr>,
                   );
                 }
+                const partnerId = linkPartnerById.get(x.id);
+                const isLinkPartnerOfHover =
+                  hovered !== null &&
+                  linkPartnerById.get(hovered.id) === x.id;
                 const rowClasses = [
                   x.isCorrecting ? "is-correcting" : "",
                   hovered?.accountId === x.accountId ? "is-hover-account" : "",
                   hovered?.id === x.id ? "is-hover-row" : "",
+                  isLinkPartnerOfHover ? "is-link-partner" : "",
                 ]
                   .filter(Boolean)
                   .join(" ");
+                const isLinked = partnerId !== undefined;
+                const isPendingAnchor = pendingLinkTxnId === x.id;
+                // Icon visibility: a chain link only shows when this row has
+                // an actual link or is the pending anchor. Empty otherwise —
+                // the user asked for clean cells when nothing's connected.
+                const showLinkIcon = isLinked || isPendingAnchor;
+                const linkBtnClasses = [
+                  "txn-link-btn",
+                  isLinked ? "is-linked" : "",
+                  isPendingAnchor ? "is-pending" : "",
+                  !showLinkIcon ? "is-empty" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ");
+                let linkTitle: string;
+                if (isLinked) {
+                  linkTitle = t("transactions.linkLinkedTitle");
+                } else if (isPendingAnchor) {
+                  linkTitle = t("transactions.linkPendingTitle");
+                } else if (pendingLinkTxnId !== null) {
+                  linkTitle = t("transactions.linkPartnerCandidateTitle");
+                } else {
+                  linkTitle = t("transactions.linkStartTitle");
+                }
                 nodes.push(
                   <tr
                     key={x.id}
@@ -438,6 +631,17 @@ export function TransactionsPage({
                     </td>
                     <td className="col-fixed num col-divider">
                       {formatMoney(x.balance)}
+                    </td>
+                    <td className="col-link">
+                      <button
+                        type="button"
+                        className={linkBtnClasses}
+                        title={linkTitle}
+                        aria-label={linkTitle}
+                        onClick={() => onLinkCellClick(x)}
+                      >
+                        {showLinkIcon ? "🔗" : ""}
+                      </button>
                     </td>
                     {showCategory && (() => {
                       const totalMinor =
@@ -500,6 +704,36 @@ export function TransactionsPage({
           </tbody>
         </table>
       </div>
+      {unlinkConfirm !== null && (
+        <div
+          className="txn-link-confirm-overlay"
+          onClick={() => setUnlinkConfirm(null)}
+        >
+          <div
+            className="txn-link-confirm"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3>{t("transactions.linkUnlinkConfirmTitle")}</h3>
+            <p>{t("transactions.linkUnlinkConfirmText")}</p>
+            <div className="txn-link-confirm-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setUnlinkConfirm(null)}
+              >
+                {t("common.cancel")}
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => commitUnlink(unlinkConfirm)}
+              >
+                {t("transactions.linkUnlinkConfirmYes")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

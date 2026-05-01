@@ -8,6 +8,7 @@ mod reports;
 mod seed;
 mod settings;
 mod transaction_categories;
+mod transaction_links;
 mod transactions;
 
 use std::path::PathBuf;
@@ -73,6 +74,9 @@ pub fn run() {
             categories::delete_category,
             transaction_categories::set_transaction_categories,
             transaction_categories::list_transactions_categories,
+            transaction_links::link_transactions,
+            transaction_links::unlink_transaction,
+            transaction_links::list_transaction_links,
             transactions::import_transactions,
             transactions::list_transactions,
             transactions::first_transaction_date,

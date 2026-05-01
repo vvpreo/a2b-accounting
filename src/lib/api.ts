@@ -176,6 +176,44 @@ export function listTransactionsCategories(
   });
 }
 
+export interface TxnLink {
+  id: number;
+  txnAId: number;
+  txnBId: number;
+}
+
+// Stable error codes returned by `link_transactions` so the UI can localise.
+export type LinkErrorCode =
+  | "link.txn_not_found"
+  | "link.same_txn"
+  | "link.same_account"
+  | "link.same_direction"
+  | "link.already_linked";
+
+export const LINK_ERROR_CODES: LinkErrorCode[] = [
+  "link.txn_not_found",
+  "link.same_txn",
+  "link.same_account",
+  "link.same_direction",
+  "link.already_linked",
+];
+
+export function listTransactionLinks(
+  accountIds?: number[],
+): Promise<TxnLink[]> {
+  return invoke<TxnLink[]>("list_transaction_links", {
+    accountIds: accountIds && accountIds.length > 0 ? accountIds : null,
+  });
+}
+
+export function linkTransactions(aId: number, bId: number): Promise<TxnLink> {
+  return invoke<TxnLink>("link_transactions", { aId, bId });
+}
+
+export function unlinkTransaction(transactionId: number): Promise<void> {
+  return invoke<void>("unlink_transaction", { transactionId });
+}
+
 export function importTransactions(args: {
   accountId: number;
   sourceFilename: string | null;

@@ -257,6 +257,11 @@ struct TxnSpec {
     categorization: Categorization,
     peer: Option<&'static str>,
     bank_description: Option<&'static str>,
+    /// When two specs share the same tag, both surface as one internal-transfer
+    /// link in the seeded `transaction_links` table. The runtime feature can
+    /// then verify how the report excludes such pairs without the user having
+    /// to mark anything by hand. Non-transfer specs leave this `None`.
+    transfer_tag: Option<String>,
 }
 
 const SHOPS: &[&str] = &["Перекрёсток", "Магнит", "Пятёрочка", "Лента", "Ашан"];
@@ -337,6 +342,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         categorization: Categorization::None,
         peer: Some("Начальный остаток"),
         bank_description: Some("Начальный остаток на счёте"),
+        transfer_tag: None,
     });
 
     for month_start in iter_months(start, end) {
@@ -355,6 +361,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             categorization: Categorization::Full("Зарплата"),
             peer: Some("ООО \"Работодатель\""),
             bank_description: Some("Заработная плата"),
+            transfer_tag: None,
         });
 
         // Quarterly bonus on the 25th of Mar/Jun/Sep/Dec.
@@ -367,6 +374,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Full("Зарплата"),
                 peer: Some("ООО \"Работодатель\""),
                 bank_description: Some("Квартальная премия"),
+                transfer_tag: None,
             });
         }
 
@@ -377,7 +385,10 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // transactions and surface in the report as "Без категории" on both
         // the income and expense sides (they cancel out across accounts).
 
-        // Day 2: salary → family.
+        // Day 2: salary → family. Same `transfer_tag` on both sides → seeded
+        // as a transaction_links row so the demo report excludes the pair as
+        // an internal transfer.
+        let tag_family = format!("salary->family@{y}-{m:02}");
         out.push(TxnSpec {
             account: AccountKind::Salary,
             date: safe_date(y, m, 2),
@@ -386,6 +397,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             categorization: Categorization::None,
             peer: Some("Семейный счёт"),
             bank_description: Some("Перевод на семейный счёт"),
+            transfer_tag: Some(tag_family.clone()),
         });
         out.push(TxnSpec {
             account: AccountKind::Family,
@@ -395,9 +407,11 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             categorization: Categorization::None,
             peer: Some("Зарплатный счёт"),
             bank_description: Some("Перевод с зарплатного счёта"),
+            transfer_tag: Some(tag_family),
         });
 
         // Day 3: salary → savings.
+        let tag_savings = format!("salary->savings@{y}-{m:02}");
         out.push(TxnSpec {
             account: AccountKind::Salary,
             date: safe_date(y, m, 3),
@@ -406,6 +420,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             categorization: Categorization::None,
             peer: Some("Сберегательный счёт"),
             bank_description: Some("Перевод на сберегательный счёт"),
+            transfer_tag: Some(tag_savings.clone()),
         });
         out.push(TxnSpec {
             account: AccountKind::Savings,
@@ -415,6 +430,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             categorization: Categorization::None,
             peer: Some("Зарплатный счёт"),
             bank_description: Some("Перевод с зарплатного счёта"),
+            transfer_tag: Some(tag_savings),
         });
 
         // Misc small spends on Salary (souvenirs, stationery) — leftover from
@@ -429,6 +445,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Full("Прочее"),
                 peer: Some(rng.pick(MISC)),
                 bank_description: None,
+                transfer_tag: None,
             });
         }
 
@@ -442,6 +459,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Full("Подарки"),
                 peer: Some("Перевод от родителей"),
                 bank_description: None,
+                transfer_tag: None,
             });
         }
 
@@ -456,6 +474,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             categorization: Categorization::Full("Аренда"),
             peer: Some("Аренда квартиры"),
             bank_description: None,
+            transfer_tag: None,
         });
         out.push(TxnSpec {
             account: AccountKind::Family,
@@ -465,6 +484,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             categorization: Categorization::Full("Коммуналка"),
             peer: Some("ЖКХ"),
             bank_description: None,
+            transfer_tag: None,
         });
         out.push(TxnSpec {
             account: AccountKind::Family,
@@ -474,6 +494,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             categorization: Categorization::Full("Интернет"),
             peer: Some("Провайдер"),
             bank_description: None,
+            transfer_tag: None,
         });
         out.push(TxnSpec {
             account: AccountKind::Family,
@@ -483,6 +504,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             categorization: Categorization::Full("Общественный"),
             peer: Some("Транспортная карта"),
             bank_description: Some("Пополнение проездного"),
+            transfer_tag: None,
         });
         // Subscription rows alternate between "Музыка" and "Видео" so the
         // grandchild level under "Подписки" is visible in the demo report.
@@ -495,6 +517,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             categorization: Categorization::Full(sub_leaf),
             peer: Some(rng.pick(SUBSCRIPTIONS)),
             bank_description: None,
+            transfer_tag: None,
         });
 
         // Cash withdrawal — kept *uncategorized* on purpose so every month has
@@ -507,6 +530,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             categorization: Categorization::None,
             peer: Some("ATM"),
             bank_description: Some("Снятие наличных"),
+            transfer_tag: None,
         });
 
         // --- Variable groceries: 4 supermarket runs + maybe 1 farmer's market ---
@@ -520,6 +544,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Full("Супермаркеты"),
                 peer: Some(rng.pick(SHOPS)),
                 bank_description: None,
+                transfer_tag: None,
             });
         }
         if rng.chance(2, 3) {
@@ -531,6 +556,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Full("Фермерский рынок"),
                 peer: Some("Фермерский рынок"),
                 bank_description: None,
+                transfer_tag: None,
             });
         }
 
@@ -544,6 +570,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Full("Кафе и рестораны"),
                 peer: Some(rng.pick(CAFES)),
                 bank_description: None,
+                transfer_tag: None,
             });
         }
 
@@ -557,6 +584,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Full("Доставка"),
                 peer: Some(rng.pick(DELIVERY)),
                 bank_description: None,
+                transfer_tag: None,
             });
         }
 
@@ -570,6 +598,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Full("Такси"),
                 peer: Some(rng.pick(TAXI)),
                 bank_description: None,
+                transfer_tag: None,
             });
         }
 
@@ -583,6 +612,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Full("Аптека"),
                 peer: Some(rng.pick(PHARMACY)),
                 bank_description: None,
+                transfer_tag: None,
             });
         }
 
@@ -598,6 +628,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Full(doctor),
                 peer: Some("Клиника"),
                 bank_description: Some("Приём врача"),
+                transfer_tag: None,
             });
         }
 
@@ -613,6 +644,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Full(station),
                 peer: Some(station),
                 bank_description: None,
+                transfer_tag: None,
             });
         }
 
@@ -626,6 +658,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Full("Кино и театр"),
                 peer: Some(rng.pick(CINEMAS)),
                 bank_description: None,
+                transfer_tag: None,
             });
         }
 
@@ -639,6 +672,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Full("Хобби"),
                 peer: Some(rng.pick(HOBBIES)),
                 bank_description: None,
+                transfer_tag: None,
             });
         }
 
@@ -652,6 +686,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Full("Одежда"),
                 peer: Some(rng.pick(CLOTHES)),
                 bank_description: None,
+                transfer_tag: None,
             });
         }
 
@@ -665,6 +700,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Full("Образование"),
                 peer: Some(rng.pick(EDU)),
                 bank_description: None,
+                transfer_tag: None,
             });
         }
 
@@ -684,6 +720,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Full("Жильё"),
                 peer: Some("Хозтовары для дома"),
                 bank_description: Some("Мелкий ремонт"),
+                transfer_tag: None,
             });
         }
         // Еда (group): generic food expense not fitting Магазины/Кафе/Доставка.
@@ -696,6 +733,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Full("Еда"),
                 peer: Some("Магазинчик у дома"),
                 bank_description: Some("Перекус"),
+                transfer_tag: None,
             });
         }
         // Транспорт (group): parking, tolls.
@@ -708,6 +746,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Full("Транспорт"),
                 peer: Some("Парковка"),
                 bank_description: None,
+                transfer_tag: None,
             });
         }
         // Здоровье (group): lab tests, supplements.
@@ -720,6 +759,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Full("Здоровье"),
                 peer: Some("Лаборатория"),
                 bank_description: Some("Анализы"),
+                transfer_tag: None,
             });
         }
         // Развлечения (group): a one-off event.
@@ -732,6 +772,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Full("Развлечения"),
                 peer: Some("Концерт"),
                 bank_description: None,
+                transfer_tag: None,
             });
         }
         // Магазины (depth-2 group): generic shopping run.
@@ -744,6 +785,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Full("Магазины"),
                 peer: Some("Магазин у дома"),
                 bank_description: None,
+                transfer_tag: None,
             });
         }
         // Бензин (depth-2 group): fuel from an unbranded station.
@@ -756,6 +798,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Full("Бензин"),
                 peer: Some("АЗС"),
                 bank_description: None,
+                transfer_tag: None,
             });
         }
         // Подписки (depth-2 group): bundled family plan.
@@ -768,6 +811,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Full("Подписки"),
                 peer: Some("Family Plan"),
                 bank_description: None,
+                transfer_tag: None,
             });
         }
 
@@ -786,6 +830,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Multi(MULTI_HYPERMARKET),
                 peer: Some("Гипермаркет"),
                 bank_description: Some("Продукты + хозтовары"),
+                transfer_tag: None,
             });
         }
         // Doctor appointment — Врачи (group) + Стоматолог (leaf).
@@ -798,6 +843,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Multi(MULTI_DOCTOR_VISIT),
                 peer: Some("Стоматологическая клиника"),
                 bank_description: Some("Консультация + процедура"),
+                transfer_tag: None,
             });
         }
         // Subscription with an add-on — Подписки (group) + Музыка (leaf).
@@ -810,6 +856,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Multi(MULTI_SUB_BUNDLE),
                 peer: Some("Family Plan + addon"),
                 bank_description: None,
+                transfer_tag: None,
             });
         }
         // Two-leaf cross-group split — Супермаркеты + Доставка (different groups).
@@ -822,6 +869,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 categorization: Categorization::Multi(MULTI_GROCERY_DELIVERY),
                 peer: Some("Супермаркет с доставкой"),
                 bank_description: Some("Заказ + доставка"),
+                transfer_tag: None,
             });
         }
     }
@@ -840,6 +888,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         categorization: Categorization::Half("Магазины"),
         peer: Some("Гипермаркет"),
         bank_description: Some("Покупка (часть без категории)"),
+        transfer_tag: None,
     });
     out.push(TxnSpec {
         account: AccountKind::Salary,
@@ -849,6 +898,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         categorization: Categorization::Half("Зарплата"),
         peer: Some("Партнёр"),
         bank_description: Some("Бонус (часть без категории)"),
+        transfer_tag: None,
     });
 
     // Stable order by date — ties broken by insertion order, which keeps each
@@ -942,6 +992,7 @@ fn insert_transactions(
     batch_id: i64,
     cats: &HashMap<String, i64>,
     txns: &[&TxnSpec],
+    transfer_ids: &mut HashMap<String, Vec<i64>>,
 ) -> rusqlite::Result<()> {
     // Roll a balance scoped to *this* account — the DB stores per-account
     // chains and the import validator checks each chain independently.
@@ -966,6 +1017,9 @@ fn insert_transactions(
             ],
             |r| r.get(0),
         )?;
+        if let Some(tag) = &t.transfer_tag {
+            transfer_ids.entry(tag.clone()).or_default().push(txn_id);
+        }
 
         let total = t.credit_minor + t.debit_minor;
         // Build the list of (category_name, share_minor) entries to insert.
@@ -1163,6 +1217,7 @@ pub fn seed_if_first_launch(conn: &Connection) -> rusqlite::Result<()> {
 fn wipe(conn: &Connection) -> rusqlite::Result<()> {
     // Order matters even with cascades: explicit deletes are clearer and safer
     // when a single statement spans multiple FK chains.
+    conn.execute("DELETE FROM transaction_links", [])?;
     conn.execute("DELETE FROM transaction_categories", [])?;
     conn.execute("DELETE FROM transactions", [])?;
     conn.execute("DELETE FROM import_batches", [])?;
@@ -1179,6 +1234,10 @@ fn seed_full(conn: &Connection, today: NaiveDate) -> rusqlite::Result<()> {
     let batches = insert_batches(conn, &accounts, today)?;
     let txns = generate_transactions(today);
 
+    // Map of `transfer_tag → [txn_id, txn_id]` for the two halves of every
+    // internal transfer. Built up across the per-account passes below and
+    // collapsed into transaction_links rows once all txns exist.
+    let mut transfer_ids: HashMap<String, Vec<i64>> = HashMap::new();
     // Split the global txn list per account and run a separate balance chain
     // for each. The original sort by date is stable, so each account keeps its
     // own date ordering after the per-kind filter.
@@ -1186,10 +1245,38 @@ fn seed_full(conn: &Connection, today: NaiveDate) -> rusqlite::Result<()> {
         let account_id = accounts[&spec.kind];
         let batch_id = batches[&spec.kind];
         let per_account: Vec<&TxnSpec> = txns.iter().filter(|t| t.account == spec.kind).collect();
-        insert_transactions(conn, account_id, batch_id, &cats, &per_account)?;
+        insert_transactions(conn, account_id, batch_id, &cats, &per_account, &mut transfer_ids)?;
     }
 
+    insert_transfer_links(conn, &transfer_ids)?;
     insert_report_view(conn, &accounts, &cats)?;
+    Ok(())
+}
+
+/// Materialises every collected transfer-tag pair as a `transaction_links`
+/// row. Each tag should have collected exactly two ids (one debit side, one
+/// credit side); anything else is a programming error in the spec generation.
+fn insert_transfer_links(
+    conn: &Connection,
+    transfer_ids: &HashMap<String, Vec<i64>>,
+) -> rusqlite::Result<()> {
+    for (tag, ids) in transfer_ids {
+        assert_eq!(
+            ids.len(),
+            2,
+            "transfer tag '{tag}' should pair exactly two txns, got {}",
+            ids.len()
+        );
+        let (lo, hi) = if ids[0] < ids[1] {
+            (ids[0], ids[1])
+        } else {
+            (ids[1], ids[0])
+        };
+        conn.execute(
+            "INSERT INTO transaction_links (txn_a_id, txn_b_id) VALUES (?1, ?2)",
+            params![lo, hi],
+        )?;
+    }
     Ok(())
 }
 
@@ -1327,6 +1414,33 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM report_views", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n_views, 1);
+
+        // Two transfer pairs per month over 36 months + the current month at
+        // `today` in the same `iter_months(start, end)` window. The exact
+        // count grows when `today` falls late enough in the month to push the
+        // monthly cycle through. Anchor by the per-savings count == 37 we
+        // already assert below — there is exactly one savings transfer per
+        // generated month, plus one family transfer per month, hence 2 × 37.
+        let n_links: i64 = conn
+            .query_row("SELECT COUNT(*) FROM transaction_links", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            n_links, 74,
+            "expected 2 transfer-pair links per month × 37 months, got {n_links}"
+        );
+
+        // Every link must connect two transactions on *different* accounts.
+        let cross: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM transaction_links l
+                 JOIN transactions ta ON ta.id = l.txn_a_id
+                 JOIN transactions tb ON tb.id = l.txn_b_id
+                 WHERE ta.account_id = tb.account_id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cross, 0, "no link should connect txns on the same account");
     }
 
     #[test]
@@ -1479,6 +1593,7 @@ mod tests {
             "transactions",
             "import_batches",
             "transaction_categories",
+            "transaction_links",
             "categories",
             "report_views",
             "exchange_rates",

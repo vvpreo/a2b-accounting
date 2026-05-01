@@ -57,6 +57,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "011_add_report_views",
         include_str!("../migrations/011_add_report_views.sql"),
     ),
+    (
+        12,
+        "012_add_transaction_links",
+        include_str!("../migrations/012_add_transaction_links.sql"),
+    ),
 ];
 
 pub fn open(data_dir: &Path) -> rusqlite::Result<Connection> {

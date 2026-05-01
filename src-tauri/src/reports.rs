@@ -530,6 +530,50 @@ fn compute_balance_metrics(
     (opening, closing)
 }
 
+/// Returns the set of transaction ids whose paired link partner is also part
+/// of `txn_ids` — those are the internal-transfer rows that fully cancel out
+/// inside the report and must be skipped from income/expense aggregation.
+/// Links whose other side falls outside the report scope are NOT excluded:
+/// the visible side stays as-is so the user still sees the gap.
+fn excluded_by_paired_link(
+    conn: &Connection,
+    txn_ids: &[i64],
+) -> Result<HashSet<i64>, String> {
+    let mut out: HashSet<i64> = HashSet::new();
+    if txn_ids.len() < 2 {
+        return Ok(out);
+    }
+    let in_scope: HashSet<i64> = txn_ids.iter().copied().collect();
+    let placeholders: Vec<String> = (1..=txn_ids.len()).map(|i| format!("?{i}")).collect();
+    // We only need links that touch *some* in-scope txn — load both sides and
+    // intersect with `in_scope` to find pairs where both halves are present.
+    let sql = format!(
+        "SELECT txn_a_id, txn_b_id FROM transaction_links
+         WHERE txn_a_id IN ({}) OR txn_b_id IN ({})",
+        placeholders.join(","),
+        placeholders.join(",")
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    // Numbered placeholders `?1..?N` are referenced by *both* IN(...) clauses
+    // — rusqlite resolves them to the same value, so we bind each id exactly
+    // once.
+    let params_vec: Vec<Box<dyn rusqlite::ToSql>> =
+        txn_ids.iter().map(|id| Box::new(*id) as Box<dyn rusqlite::ToSql>).collect();
+    let params_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|b| b.as_ref()).collect();
+    let mut rows = stmt
+        .query(params_refs.as_slice())
+        .map_err(|e| e.to_string())?;
+    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        let a: i64 = row.get(0).map_err(|e| e.to_string())?;
+        let b: i64 = row.get(1).map_err(|e| e.to_string())?;
+        if in_scope.contains(&a) && in_scope.contains(&b) {
+            out.insert(a);
+            out.insert(b);
+        }
+    }
+    Ok(out)
+}
+
 fn load_shares(conn: &Connection, txn_ids: &[i64]) -> Result<Vec<ShareRow>, String> {
     if txn_ids.is_empty() {
         return Ok(Vec::new());
@@ -625,6 +669,12 @@ pub(crate) fn compute_report_inner(
     let txns = load_transactions(conn, &req.account_ids, from, to)?;
     let txn_ids: Vec<i64> = txns.iter().map(|t| t.id).collect();
     let shares = load_shares(conn, &txn_ids)?;
+    // Internal transfer links: when *both* sides of a link are present in the
+    // currently-loaded txn set (i.e. both account and date filters keep them
+    // in scope), neither side counts toward income/expense — they cancel out
+    // as an internal movement. If only one half is in scope the visible side
+    // surfaces normally.
+    let excluded_by_link = excluded_by_paired_link(conn, &txn_ids)?;
 
     // Group shares by transaction once for fast residual computation.
     let mut shares_by_txn: HashMap<i64, Vec<&ShareRow>> = HashMap::new();
@@ -633,6 +683,9 @@ pub(crate) fn compute_report_inner(
     }
 
     for txn in &txns {
+        if excluded_by_link.contains(&txn.id) {
+            continue;
+        }
         let local = local_date(&txn.occurred_at_utc, &txn.timezone_offset)?;
         if local < from || local > to {
             continue;
@@ -1482,5 +1535,145 @@ mod tests {
         // income/expense pipeline treats it.
         assert_eq!(resp.balances.opening, vec!["0.00"]);
         assert_eq!(resp.balances.closing, vec!["0.00"]);
+    }
+
+    // ---------- Transfer-link exclusion ----------
+
+    fn fixture_two_accounts_for_transfers() -> (TempDir, Connection, i64, i64, i64, i64) {
+        let dir = TempDir::new().unwrap();
+        let conn = db::open(dir.path()).unwrap();
+        let a1: i64 = conn
+            .query_row(
+                "INSERT INTO accounts (bank, currency, account_number, owner_name)
+                 VALUES ('B', 'USD', 'A1', 'O') RETURNING id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let a2: i64 = conn
+            .query_row(
+                "INSERT INTO accounts (bank, currency, account_number, owner_name)
+                 VALUES ('B', 'USD', 'A2', 'O') RETURNING id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let b1: i64 = conn
+            .query_row(
+                "INSERT INTO import_batches
+                 (account_id, imported_at, source_filename, row_count, timezone_offset)
+                 VALUES (?1, '2026-04-01T00:00:00Z', NULL, 0, '+00:00') RETURNING id",
+                [a1],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let b2: i64 = conn
+            .query_row(
+                "INSERT INTO import_batches
+                 (account_id, imported_at, source_filename, row_count, timezone_offset)
+                 VALUES (?1, '2026-04-01T00:00:00Z', NULL, 0, '+00:00') RETURNING id",
+                [a2],
+                |r| r.get(0),
+            )
+            .unwrap();
+        (dir, conn, a1, a2, b1, b2)
+    }
+
+    fn raw_insert_link(conn: &Connection, lo: i64, hi: i64) {
+        let (lo, hi) = if lo < hi { (lo, hi) } else { (hi, lo) };
+        conn.execute(
+            "INSERT INTO transaction_links (txn_a_id, txn_b_id) VALUES (?1, ?2)",
+            params![lo, hi],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn linked_pair_in_scope_is_excluded_from_both_sections() {
+        // Transfer between own accounts: outgoing on A1 ($1000), incoming on A2.
+        // Both accounts in scope → both rows must be skipped, totals are zero.
+        let (_dir, conn, a1, a2, b1, b2) = fixture_two_accounts_for_transfers();
+        let out: i64 = conn
+            .query_row(
+                "INSERT INTO transactions
+                 (account_id, import_batch_id, occurred_at_utc, credit, debit, balance)
+                 VALUES (?1, ?2, '2026-04-10T10:00:00Z', 0, 1000_00, 0) RETURNING id",
+                params![a1, b1],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let inc: i64 = conn
+            .query_row(
+                "INSERT INTO transactions
+                 (account_id, import_batch_id, occurred_at_utc, credit, debit, balance)
+                 VALUES (?1, ?2, '2026-04-10T10:00:00Z', 1000_00, 0, 0) RETURNING id",
+                params![a2, b2],
+                |r| r.get(0),
+            )
+            .unwrap();
+        raw_insert_link(&conn, out, inc);
+        let resp = compute_report_inner(
+            &conn,
+            &ReportRequest {
+                account_ids: vec![a1, a2],
+                expense_category_ids: vec![],
+                income_category_ids: vec![],
+                from: "2026-04-01".to_string(),
+                to: "2026-04-30".to_string(),
+                granularity: "month".to_string(),
+            },
+        )
+        .unwrap();
+        // Income+expense fully cancel out — uncategorized rows must not appear.
+        assert!(
+            resp.income.rows.is_empty() && resp.expense.rows.is_empty(),
+            "linked pair should fully cancel: income={:?} expense={:?}",
+            resp.income.rows,
+            resp.expense.rows
+        );
+        assert_eq!(resp.income.total, vec!["0.00", "0.00"]);
+        assert_eq!(resp.expense.total, vec!["0.00", "0.00"]);
+    }
+
+    #[test]
+    fn linked_pair_with_only_one_side_in_scope_keeps_it() {
+        // Same link as above, but the report is scoped to only A1 — so the
+        // partner on A2 isn't in `txn_ids`. The visible side must remain in
+        // its uncategorized row.
+        let (_dir, conn, a1, a2, b1, b2) = fixture_two_accounts_for_transfers();
+        let out: i64 = conn
+            .query_row(
+                "INSERT INTO transactions
+                 (account_id, import_batch_id, occurred_at_utc, credit, debit, balance)
+                 VALUES (?1, ?2, '2026-04-10T10:00:00Z', 0, 1000_00, 0) RETURNING id",
+                params![a1, b1],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let inc: i64 = conn
+            .query_row(
+                "INSERT INTO transactions
+                 (account_id, import_batch_id, occurred_at_utc, credit, debit, balance)
+                 VALUES (?1, ?2, '2026-04-10T10:00:00Z', 1000_00, 0, 0) RETURNING id",
+                params![a2, b2],
+                |r| r.get(0),
+            )
+            .unwrap();
+        raw_insert_link(&conn, out, inc);
+        let resp = compute_report_inner(
+            &conn,
+            &ReportRequest {
+                account_ids: vec![a1],
+                expense_category_ids: vec![],
+                income_category_ids: vec![],
+                from: "2026-04-01".to_string(),
+                to: "2026-04-30".to_string(),
+                granularity: "month".to_string(),
+            },
+        )
+        .unwrap();
+        assert_eq!(resp.expense.rows.len(), 1, "outgoing side surfaces as uncategorized");
+        assert_eq!(resp.expense.rows[0].total, "1000.00");
+        assert!(resp.income.rows.is_empty());
     }
 }
