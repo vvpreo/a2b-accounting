@@ -15,6 +15,10 @@ interface Props<T extends string | number> {
   emptyItemsLabel: string;
   multiSelectedLabel: (count: number) => string;
   applyLabel: string;
+  /** When false, the "select all" master row at the top of the panel is
+   *  hidden. The summary text still uses `allLabel` when every item is
+   *  selected. Defaults to true. */
+  showSelectAll?: boolean;
 }
 
 export function MultiSelectDropdown<T extends string | number>({
@@ -26,6 +30,7 @@ export function MultiSelectDropdown<T extends string | number>({
   emptyItemsLabel,
   multiSelectedLabel,
   applyLabel,
+  showSelectAll = true,
 }: Props<T>) {
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState<T[]>(selected);
@@ -97,15 +102,19 @@ export function MultiSelectDropdown<T extends string | number>({
       </button>
       {open && (
         <div className="dropdown-panel">
-          <label className="dropdown-item">
-            <input
-              type="checkbox"
-              checked={allChecked}
-              onChange={toggleAll}
-            />
-            <span>{allLabel}</span>
-          </label>
-          <div className="dropdown-divider" />
+          {showSelectAll && (
+            <>
+              <label className="dropdown-item">
+                <input
+                  type="checkbox"
+                  checked={allChecked}
+                  onChange={toggleAll}
+                />
+                <span>{allLabel}</span>
+              </label>
+              <div className="dropdown-divider" />
+            </>
+          )}
           <div className="dropdown-list">
             {items.map((item) => (
               <label key={String(item.id)} className="dropdown-item">

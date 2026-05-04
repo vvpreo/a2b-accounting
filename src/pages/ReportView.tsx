@@ -41,8 +41,18 @@ const DEFAULT_CONFIG: ReportConfig = {
   defaultGranularity: "month",
   expandedCategoryIds: [],
   showTotalColumn: true,
+  showZeroRows: false,
   visibleMetrics: ALL_METRIC_KEYS,
 };
+
+// Legacy compat: older configs persisted the inverse `hideZeroRows` flag.
+// Prefer the new field, then fall back to inverted legacy, then default to
+// `false` (don't show zero rows) for brand-new reports.
+function resolveShowZeroRows(cfg: ReportConfig): boolean {
+  if (cfg.showZeroRows !== undefined) return cfg.showZeroRows;
+  if (cfg.hideZeroRows !== undefined) return !cfg.hideZeroRows;
+  return false;
+}
 
 // Sanitize the persisted set: drop unknown keys, dedupe, preserve canonical
 // rendering order. Older configs without the field default to all metrics
@@ -174,6 +184,9 @@ export function ReportViewPage({ view, onSaved }: Props) {
   const [range, setRange] = useState<ReportRange>(initialConfig.defaultRange);
   const [granularity, setGranularity] = useState<Granularity>(initialConfig.defaultGranularity);
   const [showTotal, setShowTotal] = useState(initialConfig.showTotalColumn ?? true);
+  const [showZeroRows, setShowZeroRows] = useState(() =>
+    resolveShowZeroRows(initialConfig),
+  );
   const [visibleMetrics, setVisibleMetrics] = useState<MetricKey[]>(() =>
     normalizeVisibleMetrics(initialConfig.visibleMetrics),
   );
@@ -261,6 +274,7 @@ export function ReportViewPage({ view, onSaved }: Props) {
     setRange(initialConfig.defaultRange);
     setGranularity(initialConfig.defaultGranularity);
     setShowTotal(initialConfig.showTotalColumn ?? true);
+    setShowZeroRows(resolveShowZeroRows(initialConfig));
     setVisibleMetrics(normalizeVisibleMetrics(initialConfig.visibleMetrics));
     setExpenseOrder(
       computeInitialOrder(
@@ -347,6 +361,7 @@ export function ReportViewPage({ view, onSaved }: Props) {
         defaultGranularity: granularity,
         expandedCategoryIds: initialConfig.expandedCategoryIds,
         showTotalColumn: showTotal,
+        showZeroRows,
         visibleMetrics,
       };
       lastSavedRef.current = { name, payload: JSON.stringify(config) };
@@ -366,6 +381,7 @@ export function ReportViewPage({ view, onSaved }: Props) {
       defaultGranularity: granularity,
       expandedCategoryIds: initialConfig.expandedCategoryIds,
       showTotalColumn: showTotal,
+      showZeroRows,
       visibleMetrics,
     };
     const payload = JSON.stringify(config);
@@ -404,6 +420,7 @@ export function ReportViewPage({ view, onSaved }: Props) {
     range,
     granularity,
     showTotal,
+    showZeroRows,
     visibleMetrics,
     expenseOrder,
     expenseSelected,
@@ -429,6 +446,18 @@ export function ReportViewPage({ view, onSaved }: Props) {
     id: a.id,
     label: `${a.name || a.accountNumber || `#${a.id}`} · ${a.currency}`,
   }));
+
+  // Display options collapsed into a single multi-select dropdown — keeps
+  // the toolbar compact even as we add more boolean toggles. The dropdown's
+  // "selected" array is the projection of the underlying booleans; on apply
+  // we splat them back into individual state setters.
+  const displayItems = [
+    { id: "totalColumn", label: t("report.showTotalColumn") },
+    { id: "zeroRows", label: t("report.showZeroRows") },
+  ];
+  const displaySelected: string[] = [];
+  if (showTotal) displaySelected.push("totalColumn");
+  if (showZeroRows) displaySelected.push("zeroRows");
 
   return (
     <section className="page report-page">
@@ -519,13 +548,24 @@ export function ReportViewPage({ view, onSaved }: Props) {
                 ))}
               </select>
             </label>
-            <label className="filter-field filter-field--checkbox">
-              <input
-                type="checkbox"
-                checked={showTotal}
-                onChange={(e) => setShowTotal(e.target.checked)}
+            <label className="filter-field">
+              <span>{t("report.displayLabel")}</span>
+              <MultiSelectDropdown<string>
+                items={displayItems}
+                selected={displaySelected}
+                onApply={(next) => {
+                  setShowTotal(next.includes("totalColumn"));
+                  setShowZeroRows(next.includes("zeroRows"));
+                }}
+                allLabel={t("report.displayAll")}
+                noneLabel={t("report.displayNone")}
+                emptyItemsLabel={t("report.displayNone")}
+                multiSelectedLabel={(count) =>
+                  t("report.displayMany", { count })
+                }
+                applyLabel={t("report.displayApply")}
+                showSelectAll={false}
               />
-              <span>{t("report.showTotalColumn")}</span>
             </label>
 
             <label className="filter-field">
@@ -580,6 +620,7 @@ export function ReportViewPage({ view, onSaved }: Props) {
           response={response}
           initialExpanded={initialConfig.expandedCategoryIds}
           showTotal={showTotal}
+          showZeroRows={showZeroRows}
           visibleMetrics={visibleMetrics}
           onOpenMetricsSettings={() => setMetricsSettingsOpen(true)}
         />
@@ -603,6 +644,11 @@ interface PivotProps {
   response: ReportResponse;
   initialExpanded: number[];
   showTotal: boolean;
+  // When false, income/expense rows whose every value is zero (in minor
+  // units) are dropped before render — a whole section collapses to nothing
+  // (header included) when its grand total is also zero. When true, every
+  // row is shown verbatim. Metrics rows are unaffected.
+  showZeroRows: boolean;
   visibleMetrics: MetricKey[];
   onOpenMetricsSettings: () => void;
 }
@@ -611,6 +657,7 @@ function PivotTable({
   response,
   initialExpanded,
   showTotal,
+  showZeroRows,
   visibleMetrics,
   onOpenMetricsSettings,
 }: PivotProps) {
@@ -667,6 +714,7 @@ function PivotTable({
     foldLabel: t("report.fold"),
     unfoldLabel: t("report.unfold"),
     showTotal,
+    showZeroRows,
   });
   const expenseRows = renderSection({
     section: expense,
@@ -681,9 +729,14 @@ function PivotTable({
     foldLabel: t("report.fold"),
     unfoldLabel: t("report.unfold"),
     showTotal,
+    showZeroRows,
   });
 
-  const isEmpty = expense.rows.length === 0 && income.rows.length === 0;
+  // After zero-row filtering, both rendered arrays may be empty even though
+  // the backend returned rows (e.g., every category is zero). Treat that the
+  // same as "no transactions" — show the empty placeholder rather than a
+  // bare metrics section with no context.
+  const isEmpty = incomeRows.length === 0 && expenseRows.length === 0;
 
   if (isEmpty) {
     return <div className="report-empty">{t("report.empty")}</div>;
@@ -757,6 +810,10 @@ interface RenderSectionArgs {
   foldLabel: string;
   unfoldLabel: string;
   showTotal: boolean;
+  // When false, rows whose subtree (group) or own (leaf/own/uncat) total is
+  // zero are dropped; if the section grand total is also zero the header is
+  // skipped too. When true, everything renders.
+  showZeroRows: boolean;
 }
 
 // One row in the visual plan. A backend row that has selected descendants is
@@ -838,6 +895,7 @@ function renderSection({
   foldLabel,
   unfoldLabel,
   showTotal,
+  showZeroRows,
 }: RenderSectionArgs): React.ReactElement[] {
   const { rows } = section;
   const { parents, hasDescendants, subtreeValues, subtreeMinor, subtreeTotal, subtreeTotalMinor } =
@@ -858,6 +916,14 @@ function renderSection({
   }
   const sectionPerPeriod = sectionPerPeriodMinor.map((m) => formatMinorAsMoney(m));
   const sectionTotalStr = formatMinorAsMoney(sectionTotalMinor);
+
+  // When the user opts out of zero rows and the section grand total is
+  // zero, every row underneath is also zero (income/expense values are
+  // non-negative, so 0 sum implies 0 rows) — no point showing the header
+  // either.
+  if (!showZeroRows && sectionTotalMinor === 0) {
+    return [];
+  }
 
   const out: React.ReactElement[] = [];
   // Section header row: title on the left + section totals across all periods.
@@ -906,6 +972,16 @@ function renderSection({
     }
     const ancestorCollapsed = collapsedAtDepth.size > 0;
     if (ancestorCollapsed && entry.kind !== "uncat") continue;
+
+    // Drop rows whose displayed total is zero unless the user has opted in
+    // to seeing them. For "group" entries this is the subtree total —
+    // skipping here also skips registering the row in collapsedAtDepth, but
+    // that's fine: every descendant inherits a zero total (income/expense
+    // values are non-negative), so each one is tested independently and
+    // skipped on its own merits.
+    if (!showZeroRows && (parseMoneyToMinor(entry.total) ?? 0) === 0) {
+      continue;
+    }
 
     const sourceRow = rows[entry.sourceIdx];
     const isUncat = entry.kind === "uncat";

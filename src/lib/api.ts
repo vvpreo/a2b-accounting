@@ -358,6 +358,18 @@ export interface ReportConfig {
   // Persisted runtime preference: hide/show the trailing "Итого" column.
   // Optional for backwards compatibility with older saved configs.
   showTotalColumn?: boolean;
+  // When true, income/expense rows whose every per-period value AND total
+  // are zero are kept in the rendered pivot; when false they're dropped.
+  // Metrics rows are not affected — they're controlled via `visibleMetrics`.
+  // Optional; missing field defaults to `false` (hide zero rows), which is
+  // the default UX.
+  showZeroRows?: boolean;
+  /**
+   * @deprecated Legacy field — superseded by `showZeroRows` (inverted
+   * meaning). Reader inverts and falls back when `showZeroRows` is absent;
+   * writer no longer emits this key.
+   */
+  hideZeroRows?: boolean;
   // Subset of MetricKey values to render in the "Метрики" section. When
   // omitted (older configs), the renderer falls back to ALL_METRIC_KEYS.
   visibleMetrics?: MetricKey[];
