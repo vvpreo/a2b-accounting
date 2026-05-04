@@ -109,12 +109,19 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* The page itself never scrolls — the inner .txns-wrap does. Drop the
+     stable gutter inherited from .page so the filter bar and the table
+     align flush with the .tabs navigation above (which has no gutter). */
+  scrollbar-gutter: auto;
 }
 
 .page--transactions .txns-wrap {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  /* Reserve the gutter on the actual scroll container so the table
+     contents don't jump horizontally when a vertical scrollbar appears. */
+  scrollbar-gutter: stable;
 }
 
 .page--transactions table {
