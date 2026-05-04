@@ -56,11 +56,6 @@ function App() {
     setReportViewsVersion((v) => v + 1);
   }
 
-  function goToTransactions(accountIds: number[]) {
-    setTxnFilterAccountIds(accountIds);
-    setTab("transactions");
-  }
-
   if (tab === null) {
     return <main className="container" />;
   }
@@ -76,7 +71,6 @@ function App() {
       {tab === "categories" && <CategoriesPage />}
       {tab === "accounts" && (
         <AccountsPage
-          onGoToTransactions={goToTransactions}
           onCreateAccount={() => setCreatingAccount(true)}
           version={accountsVersion}
         />

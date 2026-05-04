@@ -133,20 +133,14 @@ function AccountFields({
 }
 
 interface Props {
-  onGoToTransactions: (accountIds: number[]) => void;
   onCreateAccount: () => void;
   version: number;
 }
 
-export function AccountsPage({
-  onGoToTransactions,
-  onCreateAccount,
-  version,
-}: Props) {
+export function AccountsPage({ onCreateAccount, version }: Props) {
   const t = useT();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [editing, setEditing] = useState<Account | null>(null);
   const [detailAccountId, setDetailAccountId] = useState<number | null>(null);
 
   async function refresh() {
@@ -157,29 +151,10 @@ export function AccountsPage({
     refresh().catch((e) => setError(String(e)));
   }, [version]);
 
-  if (detailAccountId !== null) {
-    const acc = accounts.find((a) => a.id === detailAccountId);
-    if (acc) {
-      return (
-        <AccountDetailView
-          account={acc}
-          onBack={() => setDetailAccountId(null)}
-          onGoToTransactions={() => onGoToTransactions([acc.id])}
-          onEdit={() => setEditing(acc)}
-          onAccountChanged={async () => {
-            await refresh();
-          }}
-          onAccountDeleted={async () => {
-            setDetailAccountId(null);
-            await refresh();
-          }}
-          editing={editing}
-          setEditing={setEditing}
-        />
-      );
-    }
-    setDetailAccountId(null);
-  }
+  const detailAccount =
+    detailAccountId !== null
+      ? accounts.find((a) => a.id === detailAccountId) ?? null
+      : null;
 
   return (
     <section className="page">
@@ -219,13 +194,6 @@ export function AccountsPage({
                   <button
                     type="button"
                     className="btn-ghost"
-                    onClick={() => onGoToTransactions([a.id])}
-                  >
-                    {t("accounts.actionTransactions")}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-ghost"
                     onClick={() => setDetailAccountId(a.id)}
                   >
                     {t("accounts.actionDetails")}
@@ -247,46 +215,176 @@ export function AccountsPage({
         </button>
       </div>
 
-      {editing && (
-        <EditAccountModal
-          account={editing}
-          onClose={() => setEditing(null)}
+      {detailAccount && (
+        <AccountDetailModal
+          account={detailAccount}
+          onClose={() => setDetailAccountId(null)}
           onSaved={async () => {
-            setEditing(null);
             await refresh();
           }}
           onDeleted={async () => {
-            setEditing(null);
+            setDetailAccountId(null);
             await refresh();
           }}
         />
       )}
-
     </section>
   );
 }
 
-interface AccountDetailViewProps {
+type DetailTab = "general" | "batches";
+
+function AccountDetailModal({
+  account,
+  onClose,
+  onSaved,
+  onDeleted,
+}: {
   account: Account;
-  onBack: () => void;
-  onGoToTransactions: () => void;
-  onEdit: () => void;
-  onAccountChanged: () => Promise<void>;
-  onAccountDeleted: () => Promise<void>;
-  editing: Account | null;
-  setEditing: (acc: Account | null) => void;
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+  onDeleted: () => Promise<void>;
+}) {
+  const t = useT();
+  const [tab, setTab] = useState<DetailTab>("general");
+
+  const [form, setForm] = useState<AccountFormValues>({
+    presetId: findPresetByName(account.bank)?.id ?? ACCOUNT_PRESETS[0].id,
+    currency: account.currency,
+    name: account.name,
+    accountNumber: account.accountNumber,
+    ownerName: account.ownerName,
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [generalError, setGeneralError] = useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  async function onSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setGeneralError(null);
+    setSubmitting(true);
+    try {
+      await updateAccount({ id: account.id, ...formToApi(form) });
+      await onSaved();
+      onClose();
+    } catch (e) {
+      setGeneralError(String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function onConfirmDelete() {
+    setGeneralError(null);
+    setDeleting(true);
+    try {
+      await deleteAccount(account.id);
+      await onDeleted();
+    } catch (e) {
+      setGeneralError(String(e));
+      setDeleting(false);
+    }
+  }
+
+  const busy = submitting || deleting;
+
+  return createPortal(
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <header className="modal-header">
+          <h3>
+            {account.name} — {account.bank}
+            {account.accountNumber ? ` · ${account.accountNumber}` : ""} (
+            {account.currency})
+          </h3>
+          <button
+            className="icon-btn"
+            onClick={onClose}
+            aria-label={t("common.close")}
+            type="button"
+          >
+            ×
+          </button>
+        </header>
+        <div className="modal-tabs">
+          <button
+            type="button"
+            className={`modal-tab-button${tab === "general" ? " active" : ""}`}
+            onClick={() => setTab("general")}
+          >
+            {t("accounts.detailsTabGeneral")}
+          </button>
+          <button
+            type="button"
+            className={`modal-tab-button${tab === "batches" ? " active" : ""}`}
+            onClick={() => setTab("batches")}
+          >
+            {t("accounts.detailsTabBatches")}
+          </button>
+        </div>
+        {tab === "general" ? (
+          <form onSubmit={onSubmit}>
+            <div className="modal-body">
+              <div className="account-form account-form--modal">
+                <AccountFields value={form} onChange={setForm} />
+              </div>
+              {confirmingDelete && (
+                <div className="delete-confirm">
+                  {t("accounts.deleteConfirm", {
+                    name: account.name || account.accountNumber,
+                  })}
+                  <div className="delete-confirm-actions">
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      onClick={() => setConfirmingDelete(false)}
+                      disabled={deleting}
+                    >
+                      {t("common.cancel")}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-danger"
+                      onClick={onConfirmDelete}
+                      disabled={deleting}
+                    >
+                      {deleting
+                        ? t("common.deleting")
+                        : t("accounts.deleteConfirmYes")}
+                    </button>
+                  </div>
+                </div>
+              )}
+              {generalError && <div className="error">{generalError}</div>}
+            </div>
+            <footer className="modal-footer">
+              <button
+                type="button"
+                className="btn-danger-ghost modal-footer-left"
+                onClick={() => setConfirmingDelete(true)}
+                disabled={busy || confirmingDelete}
+              >
+                {t("accounts.deleteButton")}
+              </button>
+              <button type="button" className="btn-ghost" onClick={onClose}>
+                {t("common.cancel")}
+              </button>
+              <button type="submit" className="btn-primary" disabled={busy}>
+                {submitting ? t("common.saving") : t("common.save")}
+              </button>
+            </footer>
+          </form>
+        ) : (
+          <BatchesTab account={account} />
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
 }
 
-function AccountDetailView({
-  account,
-  onBack,
-  onGoToTransactions,
-  onEdit,
-  onAccountChanged,
-  onAccountDeleted,
-  editing,
-  setEditing,
-}: AccountDetailViewProps) {
+function BatchesTab({ account }: { account: Account }) {
   const t = useT();
   const tPlural = useTPlural();
   const [batches, setBatches] = useState<ImportBatch[]>([]);
@@ -331,27 +429,7 @@ function AccountDetailView({
   }
 
   return (
-    <section className="page">
-      <div className="page-toolbar">
-        <button type="button" className="btn-ghost" onClick={onBack}>
-          {t("accounts.detailsBack")}
-        </button>
-        <h2>
-          {account.name} — {account.bank} · {account.accountNumber} (
-          {account.currency})
-        </h2>
-        <button type="button" className="btn-ghost" onClick={onEdit}>
-          {t("accounts.detailsEdit")}
-        </button>
-        <button
-          type="button"
-          className="btn-primary"
-          onClick={onGoToTransactions}
-        >
-          {t("accounts.detailsGoToTransactions")}
-        </button>
-      </div>
-
+    <div className="modal-body">
       {error && <div className="error">{error}</div>}
 
       {validationErrors.length === 0 ? (
@@ -426,145 +504,7 @@ function AccountDetailView({
           </ul>
         )}
       </aside>
-
-      {editing && editing.id === account.id && (
-        <EditAccountModal
-          account={editing}
-          onClose={() => setEditing(null)}
-          onSaved={async () => {
-            setEditing(null);
-            await onAccountChanged();
-          }}
-          onDeleted={async () => {
-            setEditing(null);
-            await onAccountDeleted();
-          }}
-        />
-      )}
-    </section>
-  );
-}
-
-function EditAccountModal({
-  account,
-  onClose,
-  onSaved,
-  onDeleted,
-}: {
-  account: Account;
-  onClose: () => void;
-  onSaved: () => void;
-  onDeleted: () => void;
-}) {
-  const t = useT();
-  const [form, setForm] = useState<AccountFormValues>({
-    presetId: findPresetByName(account.bank)?.id ?? ACCOUNT_PRESETS[0].id,
-    currency: account.currency,
-    name: account.name,
-    accountNumber: account.accountNumber,
-    ownerName: account.ownerName,
-  });
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-
-  async function onSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setError(null);
-    setSubmitting(true);
-    try {
-      await updateAccount({ id: account.id, ...formToApi(form) });
-      onSaved();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function onConfirmDelete() {
-    setError(null);
-    setDeleting(true);
-    try {
-      await deleteAccount(account.id);
-      onDeleted();
-    } catch (e) {
-      setError(String(e));
-      setDeleting(false);
-    }
-  }
-
-  const busy = submitting || deleting;
-
-  return createPortal(
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <header className="modal-header">
-          <h3>{t("accounts.editTitle", { id: account.id })}</h3>
-          <button
-            className="icon-btn"
-            onClick={onClose}
-            aria-label={t("common.close")}
-            type="button"
-          >
-            ×
-          </button>
-        </header>
-        <form onSubmit={onSubmit}>
-          <div className="modal-body">
-            <div className="account-form account-form--modal">
-              <AccountFields value={form} onChange={setForm} />
-            </div>
-            {confirmingDelete && (
-              <div className="delete-confirm">
-                {t("accounts.deleteConfirm", {
-                  name: account.name || account.accountNumber,
-                })}
-                <div className="delete-confirm-actions">
-                  <button
-                    type="button"
-                    className="btn-ghost"
-                    onClick={() => setConfirmingDelete(false)}
-                    disabled={deleting}
-                  >
-                    {t("common.cancel")}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-danger"
-                    onClick={onConfirmDelete}
-                    disabled={deleting}
-                  >
-                    {deleting
-                      ? t("common.deleting")
-                      : t("accounts.deleteConfirmYes")}
-                  </button>
-                </div>
-              </div>
-            )}
-            {error && <div className="error">{error}</div>}
-          </div>
-          <footer className="modal-footer">
-            <button
-              type="button"
-              className="btn-danger-ghost modal-footer-left"
-              onClick={() => setConfirmingDelete(true)}
-              disabled={busy || confirmingDelete}
-            >
-              {t("accounts.deleteButton")}
-            </button>
-            <button type="button" className="btn-ghost" onClick={onClose}>
-              {t("common.cancel")}
-            </button>
-            <button type="submit" className="btn-primary" disabled={busy}>
-              {submitting ? t("common.saving") : t("common.save")}
-            </button>
-          </footer>
-        </form>
-      </div>
-    </div>,
-    document.body,
+    </div>
   );
 }
 
