@@ -8,14 +8,18 @@
 //! who explicitly cleared their data don't get demo content reappearing on the
 //! next launch.
 //!
-//! Three accounts are seeded to mirror a realistic household setup and to lay
+//! Four accounts are seeded to mirror a realistic household setup and to lay
 //! groundwork for a future "mark transfer between own accounts" feature:
 //!   - Salary  ("Зарплатный счёт"): salary lands here, fixed monthly transfers
-//!     are sent out to Family and Savings, plus a few small misc spends.
+//!     are sent out to Family / Savings / Vacation, plus a few small misc spends.
 //!   - Family  ("Семейный счёт"): receives the monthly transfer from Salary
 //!     and occasional gifts; carries the bulk of recurring household expenses.
 //!   - Savings ("Сберегательный счёт"): receive-only, gets a fixed monthly
 //!     deposit from Salary. No outgoing activity.
+//!   - Vacation ("На отпуск"): receive-only, opened ~8 months ago. Funded by
+//!     redistributing a slice of the Salary→Family transfer into a new
+//!     Salary→Vacation transfer of the same total magnitude — net outflow
+//!     from Salary is unchanged.
 //! Transfers between accounts are emitted as paired uncategorized transactions
 //! (debit on the source, credit on the destination) so a future feature can
 //! link the two sides without changing the schema.
@@ -42,6 +46,7 @@ enum AccountKind {
     Salary,
     Family,
     Savings,
+    Vacation,
 }
 
 struct AccountSpec {
@@ -66,12 +71,27 @@ const ACCOUNTS: &[AccountSpec] = &[
         name: "Сберегательный счёт",
         account_number: "DEMO-SAV-0001",
     },
+    AccountSpec {
+        kind: AccountKind::Vacation,
+        name: "На отпуск",
+        account_number: "DEMO-VAC-0001",
+    },
 ];
 
 // Fixed monthly internal transfers — kept as plain debits/credits with no
 // category so they collapse together in the report's "Без категории" line.
 const TRANSFER_TO_FAMILY_USD: u32 = 3_500;
 const TRANSFER_TO_SAVINGS_USD: u32 = 1_000;
+// Vacation transfer: a new outflow from Salary that didn't exist before the
+// account opened. Salary inflow comfortably covers the existing transfers
+// plus this one, so adding it doesn't risk underflowing any account.
+const TRANSFER_TO_VACATION_USD: u32 = 400;
+// Number of monthly contributions the vacation account has accumulated.
+// Anchored to `today`, the first contribution lands in the month
+// `today - (VACATION_ACTIVE_MONTHS - 1)`. With the typical mid-/late-month
+// `today`, that means the vacation account effectively appeared ~8 months
+// before today.
+const VACATION_ACTIVE_MONTHS: u32 = 8;
 
 // Opening balance for the Family account, posted on the first seed day so the
 // running balance can absorb month-to-month variance in expenses without
@@ -328,6 +348,17 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
     // has fresh data at the right edge.
     let end = today;
 
+    // The vacation account opens `VACATION_ACTIVE_MONTHS - 1` whole months
+    // before `today`, so its first contribution lands in that month and the
+    // account ends up with exactly `VACATION_ACTIVE_MONTHS` monthly credits
+    // including the current one. We use `>=` against this anchor to gate the
+    // per-month emission.
+    let vacation_start = today
+        .checked_sub_months(Months::new(VACATION_ACTIVE_MONTHS - 1))
+        .unwrap()
+        .with_day(1)
+        .unwrap();
+
     // Opening balance on the family account, posted on the very first day of
     // the seed range so it precedes every other transaction. Without it, the
     // family balance would briefly dip below zero whenever a month's expenses
@@ -385,6 +416,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // transactions and surface in the report as "Без категории" on both
         // the income and expense sides (they cancel out across accounts).
 
+        let vacation_active = month_start >= vacation_start;
+
         // Day 2: salary → family. Same `transfer_tag` on both sides → seeded
         // as a transaction_links row so the demo report excludes the pair as
         // an internal transfer.
@@ -432,6 +465,32 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             bank_description: Some("Перевод с зарплатного счёта"),
             transfer_tag: Some(tag_savings),
         });
+
+        // Day 4: salary → vacation. Only emitted while the vacation account
+        // is active; before that it didn't exist yet.
+        if vacation_active {
+            let tag_vacation = format!("salary->vacation@{y}-{m:02}");
+            out.push(TxnSpec {
+                account: AccountKind::Salary,
+                date: safe_date(y, m, 4),
+                credit_minor: 0,
+                debit_minor: usd(TRANSFER_TO_VACATION_USD),
+                categorization: Categorization::None,
+                peer: Some("Счёт «На отпуск»"),
+                bank_description: Some("Перевод на отпускной счёт"),
+                transfer_tag: Some(tag_vacation.clone()),
+            });
+            out.push(TxnSpec {
+                account: AccountKind::Vacation,
+                date: safe_date(y, m, 4),
+                credit_minor: usd(TRANSFER_TO_VACATION_USD),
+                debit_minor: 0,
+                categorization: Categorization::None,
+                peer: Some("Зарплатный счёт"),
+                bank_description: Some("Перевод с зарплатного счёта"),
+                transfer_tag: Some(tag_vacation),
+            });
+        }
 
         // Misc small spends on Salary (souvenirs, stationery) — leftover from
         // the salary inflow that didn't get transferred away. Demonstrates
@@ -1333,15 +1392,15 @@ mod tests {
         let today = NaiveDate::from_ymd_opt(2026, 4, 30).unwrap();
         seed_full(&conn, today).unwrap();
 
-        // Three demo accounts — Salary, Family, Savings.
+        // Four demo accounts — Salary, Family, Savings, Vacation.
         let n_acc: i64 = conn.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0)).unwrap();
-        assert_eq!(n_acc, 3);
+        assert_eq!(n_acc, 4);
 
-        // Three matching import batches, one per account.
+        // Four matching import batches, one per account.
         let n_batches: i64 = conn
             .query_row("SELECT COUNT(*) FROM import_batches", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(n_batches, 3);
+        assert_eq!(n_batches, 4);
 
         // 3 income roots + 6 income (no children) + 8 expense roots + 14 expense
         // children = 3 + 0 children for income roots + 8 expense roots + 14 expense
@@ -1415,18 +1474,15 @@ mod tests {
             .unwrap();
         assert_eq!(n_views, 1);
 
-        // Two transfer pairs per month over 36 months + the current month at
-        // `today` in the same `iter_months(start, end)` window. The exact
-        // count grows when `today` falls late enough in the month to push the
-        // monthly cycle through. Anchor by the per-savings count == 37 we
-        // already assert below — there is exactly one savings transfer per
-        // generated month, plus one family transfer per month, hence 2 × 37.
+        // Family + savings transfers run across the full window; the vacation
+        // transfer only fires for `VACATION_ACTIVE_MONTHS` (8) of those. So:
+        // (family + savings) × 37 months + vacation × 8 = 74 + 8 = 82.
         let n_links: i64 = conn
             .query_row("SELECT COUNT(*) FROM transaction_links", [], |r| r.get(0))
             .unwrap();
         assert_eq!(
-            n_links, 74,
-            "expected 2 transfer-pair links per month × 37 months, got {n_links}"
+            n_links, 82,
+            "expected 2 always-on transfer pairs × 37 months + 1 vacation pair × 8, got {n_links}"
         );
 
         // Every link must connect two transactions on *different* accounts.
@@ -1444,13 +1500,14 @@ mod tests {
     }
 
     #[test]
-    fn seed_distributes_transactions_across_three_accounts() {
+    fn seed_distributes_transactions_across_all_accounts() {
         let (_dir, conn) = open_clean_db();
         let today = NaiveDate::from_ymd_opt(2026, 4, 30).unwrap();
         seed_full(&conn, today).unwrap();
 
-        // Each of the three demo accounts must carry transactions; the
-        // savings account is intentionally minimal (one credit per month).
+        // Each of the four demo accounts must carry transactions; the savings
+        // and vacation accounts are intentionally receive-only with one
+        // credit per active month.
         let mut stmt = conn
             .prepare(
                 "SELECT a.name, COUNT(t.id)
@@ -1465,22 +1522,30 @@ mod tests {
             .unwrap();
 
         let by_name: HashMap<String, i64> = rows.into_iter().collect();
-        // 36 months × (1 salary + 0..1 quarterly + 2 transfers + 0..1 misc) +
-        // 1 half-cat bonus → ≥ 36 × 3 ≈ 108 minimum, generous upper bound.
+        // 37 months × (1 salary + 0..1 quarterly + 2..3 transfers + 0..1 misc)
+        // + 1 half-cat bonus → ~110-200 baseline; vacation transfers add 8 to
+        // the upper bound. Generous range absorbs PRNG drift.
         let salary = by_name.get("Зарплатный счёт").copied().unwrap_or(0);
         assert!(
             (100..=300).contains(&salary),
-            "Зарплатный счёт expected ~110-200 txns, got {salary}"
+            "Зарплатный счёт expected ~120-220 txns, got {salary}"
         );
         // Family carries the lion's share — recurring + variable + groups +
         // multi-splits + monthly transfer-in.
         let family = by_name.get("Семейный счёт").copied().unwrap_or(0);
         assert!(family > 700, "Семейный счёт expected lots of txns, got {family}");
-        // Savings: exactly one transfer-in per month.
+        // Savings: exactly one transfer-in per month over the full window.
         let savings = by_name.get("Сберегательный счёт").copied().unwrap_or(0);
         assert_eq!(
             savings, 37,
             "Сберегательный счёт expected one transfer per month over 36 months + current = 37, got {savings}"
+        );
+        // Vacation: one transfer-in for each of the active months (8 by
+        // default — see VACATION_ACTIVE_MONTHS).
+        let vacation = by_name.get("На отпуск").copied().unwrap_or(0);
+        assert_eq!(
+            vacation, VACATION_ACTIVE_MONTHS as i64,
+            "Vacation expected exactly {VACATION_ACTIVE_MONTHS} monthly transfers, got {vacation}"
         );
     }
 
@@ -1564,12 +1629,12 @@ mod tests {
         let (_dir, conn) = open_clean_db();
         seed_if_first_launch(&conn).unwrap();
         let n_acc: i64 = conn.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0)).unwrap();
-        assert_eq!(n_acc, 3);
+        assert_eq!(n_acc, 4);
         assert!(flag_set(&conn).unwrap());
         // Second call must be idempotent.
         seed_if_first_launch(&conn).unwrap();
         let n_acc2: i64 = conn.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0)).unwrap();
-        assert_eq!(n_acc2, 3);
+        assert_eq!(n_acc2, 4);
     }
 
     #[test]
@@ -1625,6 +1690,6 @@ mod tests {
         let exp = parsed["expenseCategoryIds"].as_array().unwrap();
         assert!(exp.len() > 10, "expense list should include roots + children");
         let accs = parsed["accountIds"].as_array().unwrap();
-        assert_eq!(accs.len(), 3, "demo report must include all three accounts");
+        assert_eq!(accs.len(), 4, "demo report must include all four accounts");
     }
 }
