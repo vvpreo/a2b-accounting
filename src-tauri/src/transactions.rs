@@ -545,6 +545,69 @@ pub fn first_transaction_date(
     Ok(earliest.map(|d| d.format("%Y-%m-%d").to_string()))
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountLatestTransaction {
+    pub account_id: i64,
+    /// UTC timestamp of the most recent transaction.
+    pub occurred_at_utc: String,
+    /// Timezone offset of the import batch the transaction belongs to —
+    /// the frontend converts UTC → local with it for display.
+    pub timezone_offset: String,
+    /// Net amount in minor units, decimal-formatted. Positive for credits,
+    /// negative for debits. Frontend pairs it with the account's currency.
+    pub amount_minor: String,
+}
+
+fn collect_latest_transactions(
+    conn: &Connection,
+) -> rusqlite::Result<Vec<AccountLatestTransaction>> {
+    // For each account take the row with the maximum occurred_at_utc; ties
+    // (multiple txns at the same instant) are broken by id so the result
+    // is deterministic.
+    let mut stmt = conn.prepare(
+        "SELECT t.account_id, t.occurred_at_utc, b.timezone_offset,
+                t.credit, t.debit
+         FROM transactions t
+         JOIN import_batches b ON b.id = t.import_batch_id
+         JOIN (
+             SELECT account_id, MAX(occurred_at_utc) AS max_utc
+             FROM transactions
+             GROUP BY account_id
+         ) m ON m.account_id = t.account_id
+            AND m.max_utc = t.occurred_at_utc
+         WHERE t.id = (
+             SELECT MAX(id) FROM transactions
+             WHERE account_id = t.account_id
+               AND occurred_at_utc = t.occurred_at_utc
+         )",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        let account_id: i64 = r.get(0)?;
+        let occurred_at_utc: String = r.get(1)?;
+        let tz: String = r.get(2)?;
+        let credit: i64 = r.get(3)?;
+        let debit: i64 = r.get(4)?;
+        Ok(AccountLatestTransaction {
+            account_id,
+            occurred_at_utc,
+            timezone_offset: tz,
+            amount_minor: money::format_minor(credit - debit),
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+}
+
+/// Latest transaction per account, intended for the accounts table column
+/// that nudges the user to reload data when an account looks stale.
+#[tauri::command]
+pub fn latest_transactions(
+    state: State<'_, DbState>,
+) -> Result<Vec<AccountLatestTransaction>, String> {
+    let conn = state.lock().map_err(|e| e.to_string())?;
+    collect_latest_transactions(&conn).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn list_import_batches(
     state: State<'_, DbState>,
@@ -1505,5 +1568,69 @@ mod tests {
         }
         let errs = validate_account_chain(&conn, a).unwrap();
         assert!(errs.is_empty(), "chain should be consistent after correction: {:?}", errs);
+    }
+
+    #[test]
+    fn collect_latest_transactions_returns_one_row_per_account() {
+        let (_dir, conn, a1, a2) = fixture_two_accounts();
+        // a1: two txns; latest is the credit.
+        insert_db_txn(&conn, a1, 1, "2026-03-01T10:00:00Z", "Vendor", 0, 5000, 95000, "early");
+        insert_db_txn(&conn, a1, 1, "2026-04-15T10:00:00Z", "Salary", 200000, 0, 295000, "latest a1");
+        // a2: single txn (debit).
+        insert_db_txn(&conn, a2, 2, "2026-04-20T10:00:00Z", "Rent", 0, 75000, 25000, "latest a2");
+
+        let mut got = collect_latest_transactions(&conn).unwrap();
+        got.sort_by_key(|r| r.account_id);
+
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].account_id, a1);
+        assert_eq!(got[0].occurred_at_utc, "2026-04-15T10:00:00Z");
+        assert_eq!(got[0].amount_minor, "2000.00");
+        assert_eq!(got[1].account_id, a2);
+        assert_eq!(got[1].occurred_at_utc, "2026-04-20T10:00:00Z");
+        // Outgoing → negative.
+        assert_eq!(got[1].amount_minor, "-750.00");
+    }
+
+    #[test]
+    fn collect_latest_transactions_omits_accounts_without_transactions() {
+        // Build a clean DB with two accounts; only one gets a transaction.
+        let dir = TempDir::new().unwrap();
+        let conn = db::open(dir.path()).unwrap();
+        let a1: i64 = conn
+            .query_row(
+                "INSERT INTO accounts (bank, currency, account_number, owner_name)
+                 VALUES ('B1', 'USD', '1', 'A') RETURNING id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let a2: i64 = conn
+            .query_row(
+                "INSERT INTO accounts (bank, currency, account_number, owner_name)
+                 VALUES ('B2', 'EUR', '2', 'B') RETURNING id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let batch: i64 = conn
+            .query_row(
+                "INSERT INTO import_batches
+                 (account_id, imported_at, source_filename, row_count, timezone_offset)
+                 VALUES (?1, '2026-01-01T00:00:00Z', NULL, 0, '+00:00') RETURNING id",
+                params![a1],
+                |r| r.get(0),
+            )
+            .unwrap();
+        insert_db_txn(&conn, a1, batch, "2026-04-01T10:00:00Z", "Anyone", 1000, 0, 1000, "only");
+
+        let got = collect_latest_transactions(&conn).unwrap();
+        assert_eq!(got.len(), 1, "a2 has no transactions and must be omitted");
+        assert_eq!(got[0].account_id, a1);
+        // Sanity: a2 exists but is silent.
+        let a2_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM transactions WHERE account_id = ?1", [a2], |r| r.get(0))
+            .unwrap();
+        assert_eq!(a2_count, 0);
     }
 }

@@ -45,10 +45,12 @@
     "tableCurrency": "Валюта",
     "tableNumber": "Номер",
     "tableOwner": "Владелец",
+    "tableLastTxn": "Последняя транзакция",
     "activityStatus": {
       "no_data": "Нет данных",
       "incomplete": "Неполные данные",
-      "complete": "Данные есть"
+      "complete": "Данные есть",
+      "pre_account": "Счёт ещё не существовал"
     },
     "activityBalanceError": "Есть расхождения в цепочке балансов",
     "activityUncategorizedCorrecting": "Есть некатегоризированные корректирующие проводки",

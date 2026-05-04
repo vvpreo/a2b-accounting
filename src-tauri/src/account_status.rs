@@ -21,6 +21,10 @@ pub struct AccountMonthCell {
     pub status: String,
     pub balance_error: bool,
     pub uncategorized_correcting: bool,
+    /// True if the account has at least one transaction strictly after this
+    /// month — i.e. the chain "closes" past this point. Drives the black
+    /// anchor border in the UI (red error border still wins on top).
+    pub anchored: bool,
 }
 
 #[tauri::command]
@@ -75,10 +79,29 @@ fn compute(
             .collect::<rusqlite::Result<Vec<_>>>()?;
         drop(stmt);
 
+        let first_txn_utc = txns.first().map(|t| t.occurred_at_utc.clone());
         let last_txn_utc = txns.last().map(|t| t.occurred_at_utc.clone());
         let errors = validate_account_chain(conn, account_id)?;
 
         for range in months {
+            // Months that end on or before the account's first transaction are
+            // treated as "the account did not yet exist" — we don't render any
+            // data for them. An account with zero transactions still falls
+            // through to the normal logic and shows up as `no_data`.
+            if let Some(first) = first_txn_utc.as_deref() {
+                if range.end_utc.as_str() <= first {
+                    out.push(AccountMonthCell {
+                        account_id,
+                        year_month: range.year_month.clone(),
+                        status: "pre_account".to_string(),
+                        balance_error: false,
+                        uncategorized_correcting: false,
+                        anchored: false,
+                    });
+                    continue;
+                }
+            }
+
             let in_range: Vec<&TxnRow> = txns
                 .iter()
                 .filter(|t| {
@@ -117,14 +140,16 @@ fn compute(
                     .filter(|t| t.is_correcting)
                     .all(|t| t.has_categories);
 
-            let data_after = last_txn_utc
+            // Anchor signal is independent of the fill color now: the cell is
+            // anchored whenever any later transaction exists for this account.
+            let anchored = last_txn_utc
                 .as_deref()
                 .map(|t| t >= range.end_utc.as_str())
                 .unwrap_or(false);
 
             let status = if no_data {
                 "no_data"
-            } else if all_correcting_categorized && !balance_error && data_after {
+            } else if all_correcting_categorized && !balance_error {
                 "complete"
             } else {
                 "incomplete"
@@ -136,6 +161,7 @@ fn compute(
                 status: status.to_string(),
                 balance_error,
                 uncategorized_correcting: dashed,
+                anchored,
             });
         }
     }
@@ -265,11 +291,11 @@ mod tests {
     }
 
     #[test]
-    fn regular_transaction_with_data_after_is_complete() {
+    fn regular_transaction_status_complete_anchor_decoupled() {
         let f = fixture();
         // January: regular debit, balance 9000
         insert_txn(&f, "2026-01-15T10:00:00Z", 0, 1000, 9000, false);
-        // February: regular debit (the "data after" anchor)
+        // February: regular debit (later than January)
         insert_txn(&f, "2026-02-15T10:00:00Z", 0, 500, 8500, false);
 
         let m = ranges(&[
@@ -278,10 +304,14 @@ mod tests {
         ]);
         let r = compute(&f.conn, &m).unwrap();
 
-        // January is complete because there is data after it (in February).
-        assert_eq!(cell(&r, "2026-01").status, "complete");
-        // February has no data after itself — incomplete.
-        assert_eq!(cell(&r, "2026-02").status, "incomplete");
+        // Both months are "complete" by fill — the data is clean. The
+        // difference is captured by the `anchored` flag instead.
+        let jan = cell(&r, "2026-01");
+        assert_eq!(jan.status, "complete");
+        assert!(jan.anchored);
+        let feb = cell(&r, "2026-02");
+        assert_eq!(feb.status, "complete");
+        assert!(!feb.anchored);
     }
 
     #[test]
@@ -442,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn data_in_last_month_without_anything_after_is_incomplete() {
+    fn data_in_last_month_is_complete_but_unanchored() {
         let f = fixture();
         // Only data is in March (the most recent of our three ranges).
         insert_txn(&f, "2026-03-10T10:00:00Z", 0, 100, 9900, false);
@@ -454,9 +484,104 @@ mod tests {
         ]);
         let r = compute(&f.conn, &m).unwrap();
 
-        // No "data after" → can't be complete even though month has clean data.
-        assert_eq!(cell(&r, "2026-03").status, "incomplete");
-        assert_eq!(cell(&r, "2026-01").status, "no_data");
-        assert_eq!(cell(&r, "2026-02").status, "no_data");
+        // March: clean data → complete fill, but no later transaction
+        // exists, so the cell is not anchored.
+        let mar = cell(&r, "2026-03");
+        assert_eq!(mar.status, "complete");
+        assert!(!mar.anchored);
+        // Months that end before the account's first transaction are
+        // treated as if the account didn't exist yet.
+        assert_eq!(cell(&r, "2026-01").status, "pre_account");
+        assert_eq!(cell(&r, "2026-02").status, "pre_account");
+    }
+
+    #[test]
+    fn months_before_first_transaction_are_pre_account() {
+        let f = fixture();
+        // First transaction lands mid-March; January and February ended
+        // before that, so they pre-date the account's existence.
+        insert_txn(&f, "2026-03-15T10:00:00Z", 0, 500, 9500, false);
+        // April provides "data after" so March can settle as `complete`.
+        insert_txn(&f, "2026-04-05T10:00:00Z", 0, 100, 9400, false);
+
+        let m = ranges(&[
+            ("2025-12", "2025-12-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+            ("2026-01", "2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z"),
+            ("2026-02", "2026-02-01T00:00:00Z", "2026-03-01T00:00:00Z"),
+            ("2026-03", "2026-03-01T00:00:00Z", "2026-04-01T00:00:00Z"),
+            ("2026-04", "2026-04-01T00:00:00Z", "2026-05-01T00:00:00Z"),
+        ]);
+        let r = compute(&f.conn, &m).unwrap();
+
+        for ym in ["2025-12", "2026-01", "2026-02"] {
+            let c = cell(&r, ym);
+            assert_eq!(c.status, "pre_account", "{ym} should be pre_account");
+            assert!(!c.balance_error);
+            assert!(!c.uncategorized_correcting);
+        }
+        // The month containing the first transaction is back to normal logic.
+        let mar = cell(&r, "2026-03");
+        assert_eq!(mar.status, "complete");
+        assert!(mar.anchored);
+        // The latest month has no data after it: still complete by fill,
+        // but unanchored — the strip will render no border.
+        let apr = cell(&r, "2026-04");
+        assert_eq!(apr.status, "complete");
+        assert!(!apr.anchored);
+    }
+
+    #[test]
+    fn empty_month_is_anchored_when_later_data_exists() {
+        // A no_data month that sits between the account's first transaction
+        // and the latest transaction should still be flagged anchored — the
+        // chain "passes through" it. The UI treats this as a verified-empty
+        // month (gray fill + black anchor border).
+        let f = fixture();
+        insert_txn(&f, "2026-01-15T10:00:00Z", 0, 100, 9900, false);
+        insert_txn(&f, "2026-03-15T10:00:00Z", 0, 100, 9800, false);
+
+        let m = ranges(&[
+            ("2026-01", "2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z"),
+            ("2026-02", "2026-02-01T00:00:00Z", "2026-03-01T00:00:00Z"),
+            ("2026-03", "2026-03-01T00:00:00Z", "2026-04-01T00:00:00Z"),
+        ]);
+        let r = compute(&f.conn, &m).unwrap();
+
+        let feb = cell(&r, "2026-02");
+        assert_eq!(feb.status, "no_data");
+        assert!(feb.anchored, "no_data month with later data must be anchored");
+        let mar = cell(&r, "2026-03");
+        assert!(!mar.anchored, "month containing the latest txn is not anchored");
+    }
+
+    #[test]
+    fn pre_account_month_is_never_anchored() {
+        let f = fixture();
+        insert_txn(&f, "2026-03-10T10:00:00Z", 0, 100, 9900, false);
+
+        let m = ranges(&[
+            ("2026-01", "2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z"),
+            ("2026-03", "2026-03-01T00:00:00Z", "2026-04-01T00:00:00Z"),
+        ]);
+        let r = compute(&f.conn, &m).unwrap();
+        let jan = cell(&r, "2026-01");
+        assert_eq!(jan.status, "pre_account");
+        assert!(!jan.anchored);
+    }
+
+    #[test]
+    fn account_with_no_transactions_stays_no_data_not_pre_account() {
+        // Without a "first transaction" anchor, the pre_account fast-path
+        // shouldn't fire — empty accounts should still surface as no_data
+        // so the user notices that the account exists but has nothing.
+        let f = fixture();
+        let m = ranges(&[
+            ("2026-01", "2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z"),
+            ("2026-02", "2026-02-01T00:00:00Z", "2026-03-01T00:00:00Z"),
+        ]);
+        let r = compute(&f.conn, &m).unwrap();
+        for c in &r {
+            assert_eq!(c.status, "no_data");
+        }
     }
 }

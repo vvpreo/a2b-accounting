@@ -82,6 +82,7 @@ pub fn run() {
             transactions::import_transactions,
             transactions::list_transactions,
             transactions::first_transaction_date,
+            transactions::latest_transactions,
             transactions::list_import_batches,
             transactions::delete_import_batch,
             transactions::validate_balance_chain,

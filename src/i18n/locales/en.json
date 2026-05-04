@@ -45,10 +45,12 @@
     "tableCurrency": "Currency",
     "tableNumber": "Number",
     "tableOwner": "Owner",
+    "tableLastTxn": "Last transaction",
     "activityStatus": {
       "no_data": "No data",
       "incomplete": "Incomplete",
-      "complete": "Complete"
+      "complete": "Complete",
+      "pre_account": "Account did not exist yet"
     },
     "activityBalanceError": "Balance chain mismatch",
     "activityUncategorizedCorrecting": "Uncategorized correcting entries present",

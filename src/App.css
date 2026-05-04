@@ -314,6 +314,26 @@ body {
   justify-content: flex-end;
 }
 
+.last-txn-cell {
+  white-space: nowrap;
+}
+
+.last-txn {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.15;
+  font-size: 12px;
+}
+
+.last-txn-date {
+  color: #52525b;
+}
+
+.last-txn-amount {
+  font-variant-numeric: tabular-nums;
+}
+
 .actions-cell button {
   font-size: 12px;
   padding: 3px 8px;
@@ -805,6 +825,38 @@ td.empty {
   padding: 0;
 }
 
+/* Stacks the year labels above the month strip. Inline-flex so the wrapper
+   only takes the width of its widest row (the months row). */
+.activity-strip-stack {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+/* Year labels mirror the months strip: same flex gap and same year-gap
+   spacer so each label's left edge aligns with the first month cell of
+   that calendar year. */
+.activity-strip-years {
+  display: inline-flex;
+  gap: 2px;
+  align-items: flex-end;
+  flex-wrap: nowrap;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  color: #71717a;
+}
+
+.activity-strip-year-label {
+  flex-shrink: 0;
+  text-align: left;
+  white-space: nowrap;
+  /* If a year-run is only one or two months wide, the four-digit year may
+     be wider than the run; let it spill into the gap rather than truncate. */
+  overflow: visible;
+}
+
 .activity-strip {
   display: inline-flex;
   gap: 2px;
@@ -816,12 +868,12 @@ td.empty {
    break reads as a clear gap. */
 .activity-strip-year-gap {
   display: inline-block;
-  width: 24px;
+  width: 26px;
   flex-shrink: 0;
 }
 
 .activity-cell {
-  width: 24px;
+  width: 26px;
   height: 18px;
   border-radius: 3px;
   border: 1.5px solid transparent;
@@ -838,6 +890,16 @@ td.empty {
   user-select: none;
 }
 
+/* Months strictly before the account's first transaction: render an
+   invisible placeholder so the strip keeps the same column width across
+   accounts but the cell appears absent to the user. */
+.activity-cell--pre_account {
+  background: transparent;
+  border-color: transparent;
+  color: transparent;
+  pointer-events: none;
+}
+
 .activity-cell--no_data {
   background: #d4d4d8;
 }
@@ -850,14 +912,21 @@ td.empty {
   background: #22c55e;
 }
 
-.activity-cell--dashed {
-  border-style: dashed;
+/* Anchor border: month is "closed" — there is later data in the chain.
+   The border encodes anchor state independently of the fill color. */
+.activity-cell--anchored {
   border-color: #18181b;
 }
 
-/* Error overrides border-color regardless of dashed/solid. */
+/* Error border overrides anchor color (red wins regardless of state). */
 .activity-cell--error {
   border-color: #dc2626;
+}
+
+/* Dashed style is applied independently of color: the line can be
+   anchored-black, error-red or transparent (current month). */
+.activity-cell--dashed {
+  border-style: dashed;
 }
 
 .accounts-add-row {
@@ -1832,8 +1901,18 @@ code {
     color: #d4d4d8;
   }
 
-  .activity-cell--dashed {
+  /* Anchor border in dark mode uses the foreground color so it remains
+     visible on the slightly lighter no_data fill. */
+  .activity-cell--anchored {
     border-color: #d4d4d8;
+  }
+
+  .activity-strip-years {
+    color: #a1a1aa;
+  }
+
+  .last-txn-date {
+    color: #a1a1aa;
   }
 
   .file-input-label {

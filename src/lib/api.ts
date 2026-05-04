@@ -253,7 +253,11 @@ export function validateBalanceChain(
   return invoke<ValidationError[]>("validate_balance_chain", { accountId });
 }
 
-export type AccountMonthStatus = "no_data" | "incomplete" | "complete";
+export type AccountMonthStatus =
+  | "pre_account"
+  | "no_data"
+  | "incomplete"
+  | "complete";
 
 export interface AccountMonthCell {
   accountId: number;
@@ -261,6 +265,23 @@ export interface AccountMonthCell {
   status: AccountMonthStatus;
   balanceError: boolean;
   uncategorizedCorrecting: boolean;
+  /** True if any transaction exists strictly later than this month — the
+   *  chain "closes" past this point. Drives the black anchor border. */
+  anchored: boolean;
+}
+
+export interface AccountLatestTransaction {
+  accountId: number;
+  /** UTC ISO timestamp. */
+  occurredAtUtc: string;
+  /** Timezone offset string ("+03:00" etc.) of the source import batch. */
+  timezoneOffset: string;
+  /** Net amount, decimal-formatted, signed (positive = credit). */
+  amountMinor: string;
+}
+
+export function latestTransactions(): Promise<AccountLatestTransaction[]> {
+  return invoke<AccountLatestTransaction[]>("latest_transactions");
 }
 
 export interface MonthRange {

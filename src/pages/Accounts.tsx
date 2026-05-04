@@ -11,6 +11,7 @@ import { createPortal } from "react-dom";
 import { useI18n, useT, useTPlural } from "../i18n";
 import {
   Account,
+  AccountLatestTransaction,
   AccountMonthCell,
   ImportBatch,
   MonthRange,
@@ -21,6 +22,7 @@ import {
   deleteImportBatch,
   firstTransactionDate,
   getSetting,
+  latestTransactions,
   listAccounts,
   listImportBatches,
   setSetting,
@@ -60,13 +62,13 @@ function monthsBetween(earliestLocalIso: string, now: Date): number {
 }
 
 function buildLastNMonthRanges(now: Date, count: number): MonthRange[] {
-  // Start of the current month in local time. The last full bucket is the
-  // previous month; we walk back `count` months from there. Using local-time
-  // month boundaries matches how the user perceives "month" elsewhere.
+  // Walk back `count` closed months (previous month and earlier) and then
+  // append the current month as a trailing, unanchored bucket. So depth=12
+  // produces 13 ranges total: 12 closed + the in-progress current month.
   const baseYear = now.getFullYear();
   const baseMonth = now.getMonth(); // 0-indexed
   const ranges: MonthRange[] = [];
-  for (let i = count; i >= 1; i--) {
+  for (let i = count; i >= 0; i--) {
     const start = new Date(baseYear, baseMonth - i, 1, 0, 0, 0, 0);
     const end = new Date(baseYear, baseMonth - i + 1, 1, 0, 0, 0, 0);
     const yearMonth = `${start.getFullYear()}-${String(
@@ -207,6 +209,9 @@ export function AccountsPage({ onCreateAccount, version }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [detailAccountId, setDetailAccountId] = useState<number | null>(null);
   const [statusCells, setStatusCells] = useState<AccountMonthCell[]>([]);
+  const [latestByAccount, setLatestByAccount] = useState<
+    Map<number, AccountLatestTransaction>
+  >(new Map());
   const [monthsDepth, setMonthsDepth] = useState<MonthDepth>(DEFAULT_MONTH_DEPTH);
   // We don't fetch the strip until the persisted depth has been read once —
   // otherwise we'd issue a wasted request with the default depth and then a
@@ -279,8 +284,12 @@ export function AccountsPage({ onCreateAccount, version }: Props) {
   const refresh = useCallback(async () => {
     if (!depthLoaded || !allTimeReady) return;
     try {
-      const list = await listAccounts();
+      const [list, latest] = await Promise.all([
+        listAccounts(),
+        latestTransactions(),
+      ]);
       setAccounts(list);
+      setLatestByAccount(new Map(latest.map((t) => [t.accountId, t])));
       setError(null);
       if (list.length === 0 || monthRanges.length === 0) {
         setStatusCells([]);
@@ -374,13 +383,14 @@ export function AccountsPage({ onCreateAccount, version }: Props) {
             <th>{t("accounts.tableCurrency")}</th>
             <th>{t("accounts.tableNumber")}</th>
             <th>{t("accounts.tableOwner")}</th>
+            <th>{t("accounts.tableLastTxn")}</th>
             <th></th>
           </tr>
         </thead>
         <tbody>
           {accounts.length === 0 ? (
             <tr>
-              <td colSpan={7} className="empty">
+              <td colSpan={8} className="empty">
                 {t("accounts.empty")}
               </td>
             </tr>
@@ -394,6 +404,12 @@ export function AccountsPage({ onCreateAccount, version }: Props) {
                   <td>{a.currency}</td>
                   <td>{a.accountNumber}</td>
                   <td>{a.ownerName}</td>
+                  <td className="last-txn-cell">
+                    <LastTransactionCell
+                      latest={latestByAccount.get(a.id) ?? null}
+                      currency={a.currency}
+                    />
+                  </td>
                   <td className="actions-cell">
                     <button
                       type="button"
@@ -407,7 +423,7 @@ export function AccountsPage({ onCreateAccount, version }: Props) {
                 <tr className="account-strip-row">
                   <td className="account-strip-spacer" />
                   <td className="account-strip-spacer" />
-                  <td colSpan={5}>
+                  <td colSpan={6}>
                     <ActivityStrip cells={cellsByAccount.get(a.id) ?? []} />
                   </td>
                 </tr>
@@ -788,6 +804,55 @@ function formatInstant(iso: string): string {
   return d.toISOString().slice(0, 19).replace("T", " ");
 }
 
+function LastTransactionCell({
+  latest,
+  currency,
+}: {
+  latest: AccountLatestTransaction | null;
+  currency: string;
+}) {
+  const { locale } = useI18n();
+  const dateFmt = useMemo(
+    () =>
+      new Intl.DateTimeFormat(locale, {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+      }),
+    [locale],
+  );
+  const amountFmt = useMemo(() => {
+    try {
+      return new Intl.NumberFormat(locale, {
+        style: "currency",
+        currency,
+        signDisplay: "exceptZero",
+      });
+    } catch {
+      // Unknown / non-ISO currency code (e.g. crypto) — fall back to plain
+      // number formatting and append the currency string manually.
+      return null;
+    }
+  }, [locale, currency]);
+
+  if (!latest) return <span className="muted">—</span>;
+
+  const date = dateFmt.format(new Date(latest.occurredAtUtc));
+  const n = Number(latest.amountMinor);
+  const amount = Number.isFinite(n)
+    ? amountFmt
+      ? amountFmt.format(n)
+      : `${n > 0 ? "+" : ""}${latest.amountMinor} ${currency}`
+    : `${latest.amountMinor} ${currency}`;
+
+  return (
+    <span className="last-txn">
+      <span className="last-txn-date">{date}</span>
+      <span className="last-txn-amount">{amount}</span>
+    </span>
+  );
+}
+
 function ActivityStrip({ cells }: { cells: AccountMonthCell[] }) {
   const t = useT();
   const { locale } = useI18n();
@@ -831,33 +896,75 @@ function ActivityStrip({ cells }: { cells: AccountMonthCell[] }) {
     return slice.charAt(0).toUpperCase() + slice.slice(1).toLowerCase();
   }
 
+  // Group consecutive cells by calendar year so we can render a year label
+  // sized to span exactly the months belonging to that year. The widths are
+  // chosen so each label's left edge sits on top of the leftmost month
+  // square of its year run.
+  const yearRuns = useMemo(() => {
+    const runs: { year: string; count: number }[] = [];
+    for (const c of cells) {
+      const y = c.yearMonth.slice(0, 4);
+      const last = runs[runs.length - 1];
+      if (last && last.year === y) last.count += 1;
+      else runs.push({ year: y, count: 1 });
+    }
+    return runs;
+  }, [cells]);
+
+  // Run width in the months row: count * 26px (cells) + (count - 1) * 2px
+  // (inter-cell flex gap) = 28 * count - 2.
+  function runWidthPx(count: number): number {
+    return 28 * count - 2;
+  }
+
   return (
-    <div className="activity-strip">
-      {cells.map((c, i) => {
-        const prev = i > 0 ? cells[i - 1] : null;
-        const yearChanged =
-          prev !== null && c.yearMonth.slice(0, 4) !== prev.yearMonth.slice(0, 4);
-        return (
-          <Fragment key={c.yearMonth}>
-            {yearChanged && (
+    <div className="activity-strip-stack">
+      <div className="activity-strip-years" aria-hidden="true">
+        {yearRuns.map((run, idx) => (
+          <Fragment key={`${run.year}-${idx}`}>
+            {idx > 0 && (
               <span className="activity-strip-year-gap" aria-hidden="true" />
             )}
             <span
-              className={[
-                "activity-cell",
-                `activity-cell--${c.status}`,
-                c.balanceError ? "activity-cell--error" : "",
-                c.uncategorizedCorrecting ? "activity-cell--dashed" : "",
-              ]
-                .filter(Boolean)
-                .join(" ")}
-              title={tooltip(c)}
+              className="activity-strip-year-label"
+              style={{ width: `${runWidthPx(run.count)}px` }}
             >
-              {shortLabel(c)}
+              {run.year}
             </span>
           </Fragment>
-        );
-      })}
+        ))}
+      </div>
+      <div className="activity-strip">
+        {cells.map((c, i) => {
+          const prev = i > 0 ? cells[i - 1] : null;
+          const yearChanged =
+            prev !== null && c.yearMonth.slice(0, 4) !== prev.yearMonth.slice(0, 4);
+          const isPreAccount = c.status === "pre_account";
+          return (
+            <Fragment key={c.yearMonth}>
+              {yearChanged && (
+                <span className="activity-strip-year-gap" aria-hidden="true" />
+              )}
+              <span
+                className={[
+                  "activity-cell",
+                  `activity-cell--${c.status}`,
+                  // Anchor border (black) — only meaningful on a non-pre cell.
+                  c.anchored && !isPreAccount ? "activity-cell--anchored" : "",
+                  c.balanceError ? "activity-cell--error" : "",
+                  c.uncategorizedCorrecting ? "activity-cell--dashed" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                title={isPreAccount ? undefined : tooltip(c)}
+                aria-hidden={isPreAccount ? "true" : undefined}
+              >
+                {isPreAccount ? "" : shortLabel(c)}
+              </span>
+            </Fragment>
+          );
+        })}
+      </div>
     </div>
   );
 }
