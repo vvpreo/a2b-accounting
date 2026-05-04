@@ -3,7 +3,9 @@ import {
   FormEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { createPortal } from "react-dom";
@@ -223,6 +225,36 @@ export function AccountsPage({ onCreateAccount, version }: Props) {
   const [allTimeCount, setAllTimeCount] = useState<number | null>(null);
   const [filtersExpanded, setFiltersExpanded] = useState(true);
 
+  // All ActivityStrip viewports scroll together. Each strip registers its
+  // scroll-viewport DOM node here on mount; the scroll handler mirrors the
+  // active scrollLeft to every other registered viewport, and a layout
+  // effect parks every viewport at the right edge (current month) whenever
+  // the month-range or cell data shifts.
+  const stripViewportsRef = useRef<Set<HTMLDivElement>>(new Set());
+  const syncingScrollRef = useRef(false);
+
+  const handleStripScroll = useCallback((source: HTMLDivElement) => {
+    if (syncingScrollRef.current) return;
+    syncingScrollRef.current = true;
+    const left = source.scrollLeft;
+    for (const el of stripViewportsRef.current) {
+      if (el !== source && el.scrollLeft !== left) {
+        el.scrollLeft = left;
+      }
+    }
+    requestAnimationFrame(() => {
+      syncingScrollRef.current = false;
+    });
+  }, []);
+
+  const registerStripViewport = useCallback((el: HTMLDivElement) => {
+    stripViewportsRef.current.add(el);
+  }, []);
+
+  const unregisterStripViewport = useCallback((el: HTMLDivElement) => {
+    stripViewportsRef.current.delete(el);
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     getSetting(SETTING_KEY_ACTIVITY_MONTHS)
@@ -322,6 +354,18 @@ export function AccountsPage({ onCreateAccount, version }: Props) {
     }
     return map;
   }, [statusCells, monthRanges]);
+
+  // Park every strip viewport at the right edge so the current month is
+  // in view on first paint after a depth change or a fresh data load.
+  useLayoutEffect(() => {
+    syncingScrollRef.current = true;
+    for (const el of stripViewportsRef.current) {
+      el.scrollLeft = el.scrollWidth;
+    }
+    requestAnimationFrame(() => {
+      syncingScrollRef.current = false;
+    });
+  }, [monthRanges, statusCells]);
 
   const detailAccount =
     detailAccountId !== null
@@ -423,8 +467,13 @@ export function AccountsPage({ onCreateAccount, version }: Props) {
                 <tr className="account-strip-row">
                   <td className="account-strip-spacer" />
                   <td className="account-strip-spacer" />
-                  <td colSpan={6}>
-                    <ActivityStrip cells={cellsByAccount.get(a.id) ?? []} />
+                  <td colSpan={6} className="account-strip-cell">
+                    <ActivityStrip
+                      cells={cellsByAccount.get(a.id) ?? []}
+                      registerViewport={registerStripViewport}
+                      unregisterViewport={unregisterStripViewport}
+                      onScroll={handleStripScroll}
+                    />
                   </td>
                 </tr>
               </Fragment>
@@ -853,9 +902,27 @@ function LastTransactionCell({
   );
 }
 
-function ActivityStrip({ cells }: { cells: AccountMonthCell[] }) {
+function ActivityStrip({
+  cells,
+  registerViewport,
+  unregisterViewport,
+  onScroll,
+}: {
+  cells: AccountMonthCell[];
+  registerViewport: (el: HTMLDivElement) => void;
+  unregisterViewport: (el: HTMLDivElement) => void;
+  onScroll: (source: HTMLDivElement) => void;
+}) {
   const t = useT();
   const { locale } = useI18n();
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    registerViewport(el);
+    return () => unregisterViewport(el);
+  }, [registerViewport, unregisterViewport]);
 
   const monthFormatter = useMemo(
     () =>
@@ -918,52 +985,64 @@ function ActivityStrip({ cells }: { cells: AccountMonthCell[] }) {
   }
 
   return (
-    <div className="activity-strip-stack">
-      <div className="activity-strip-years" aria-hidden="true">
-        {yearRuns.map((run, idx) => (
-          <Fragment key={`${run.year}-${idx}`}>
-            {idx > 0 && (
-              <span className="activity-strip-year-gap" aria-hidden="true" />
-            )}
-            <span
-              className="activity-strip-year-label"
-              style={{ width: `${runWidthPx(run.count)}px` }}
-            >
-              {run.year}
-            </span>
-          </Fragment>
-        ))}
-      </div>
-      <div className="activity-strip">
-        {cells.map((c, i) => {
-          const prev = i > 0 ? cells[i - 1] : null;
-          const yearChanged =
-            prev !== null && c.yearMonth.slice(0, 4) !== prev.yearMonth.slice(0, 4);
-          const isPreAccount = c.status === "pre_account";
-          return (
-            <Fragment key={c.yearMonth}>
-              {yearChanged && (
+    <div
+      className="activity-scroll-viewport"
+      ref={viewportRef}
+      onScroll={(e) => onScroll(e.currentTarget)}
+    >
+      <div className="activity-strip-stack">
+        <div className="activity-strip-years" aria-hidden="true">
+          {yearRuns.map((run, idx) => (
+            <Fragment key={`${run.year}-${idx}`}>
+              {idx > 0 && (
                 <span className="activity-strip-year-gap" aria-hidden="true" />
               )}
               <span
-                className={[
-                  "activity-cell",
-                  `activity-cell--${c.status}`,
-                  // Anchor border (black) — only meaningful on a non-pre cell.
-                  c.anchored && !isPreAccount ? "activity-cell--anchored" : "",
-                  c.balanceError ? "activity-cell--error" : "",
-                  c.uncategorizedCorrecting ? "activity-cell--dashed" : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-                title={isPreAccount ? undefined : tooltip(c)}
-                aria-hidden={isPreAccount ? "true" : undefined}
+                className="activity-strip-year-label"
+                style={{ width: `${runWidthPx(run.count)}px` }}
               >
-                {isPreAccount ? "" : shortLabel(c)}
+                {run.year}
               </span>
             </Fragment>
-          );
-        })}
+          ))}
+        </div>
+        <div className="activity-strip">
+          {cells.map((c, i) => {
+            const prev = i > 0 ? cells[i - 1] : null;
+            const yearChanged =
+              prev !== null &&
+              c.yearMonth.slice(0, 4) !== prev.yearMonth.slice(0, 4);
+            const isPreAccount = c.status === "pre_account";
+            return (
+              <Fragment key={c.yearMonth}>
+                {yearChanged && (
+                  <span
+                    className="activity-strip-year-gap"
+                    aria-hidden="true"
+                  />
+                )}
+                <span
+                  className={[
+                    "activity-cell",
+                    `activity-cell--${c.status}`,
+                    // Anchor border (black) — only meaningful on a non-pre cell.
+                    c.anchored && !isPreAccount
+                      ? "activity-cell--anchored"
+                      : "",
+                    c.balanceError ? "activity-cell--error" : "",
+                    c.uncategorizedCorrecting ? "activity-cell--dashed" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  title={isPreAccount ? undefined : tooltip(c)}
+                  aria-hidden={isPreAccount ? "true" : undefined}
+                >
+                  {isPreAccount ? "" : shortLabel(c)}
+                </span>
+              </Fragment>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

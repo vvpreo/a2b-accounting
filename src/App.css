@@ -825,13 +825,75 @@ td.empty {
   padding: 0;
 }
 
+/* The strip cell is sized exactly to fit the year row + gap + months row.
+   The scrollbar leaves no trace at rest — it materialises only on hover
+   and overlays the bottom 1–2px of the months row, so nothing looks
+   "abandoned" below the strip when the cursor is elsewhere. */
+.account-strip-row td.account-strip-cell {
+  position: relative;
+  height: 33px;
+  /* Override the 8px padding-bottom from `.account-strip-row td`: we
+     don't need a reserved gutter since the scrollbar is overlay-style. */
+  padding-bottom: 0;
+}
+
+/* Horizontal scroll viewport: every viewport in the table is kept in sync
+   by the AccountsPage scroll handler. Months are pinned to the right (see
+   the auto inline-start margin on the inner stack), and on data load the
+   viewport is parked at scrollLeft = scrollWidth so the current month is
+   always visible. */
+.activity-scroll-viewport {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 10px;
+  right: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  display: flex;
+  /* Firefox: completely hidden at rest; on hover we re-enable the bar. */
+  scrollbar-width: none;
+}
+
+.activity-scroll-viewport:hover {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(63, 63, 70, 0.4) transparent;
+}
+
+/* WebKit: collapse the scrollbar to zero size at rest so it consumes no
+   layout (no visible gutter beneath the months). On hover we expand it to
+   4px and colour the thumb — this overlays the bottom ~2px of the months
+   row, but only while the cursor is actually over the strip. */
+.activity-scroll-viewport::-webkit-scrollbar {
+  height: 0;
+  width: 0;
+}
+
+.activity-scroll-viewport:hover::-webkit-scrollbar {
+  height: 4px;
+  width: 4px;
+}
+
+.activity-scroll-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.activity-scroll-viewport::-webkit-scrollbar-thumb {
+  background: rgba(63, 63, 70, 0.4);
+  border-radius: 2px;
+}
+
 /* Stacks the year labels above the month strip. Inline-flex so the wrapper
-   only takes the width of its widest row (the months row). */
+   only takes the width of its widest row (the months row). The auto
+   inline-start margin pins the stack to the right edge of the viewport
+   when content fits, and collapses to zero when content overflows so the
+   user can scroll left to reveal older months. */
 .activity-strip-stack {
   display: inline-flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
+  margin-inline-start: auto;
 }
 
 /* Year labels mirror the months strip: same flex gap and same year-gap
@@ -1909,6 +1971,14 @@ code {
 
   .activity-strip-years {
     color: #a1a1aa;
+  }
+
+  .activity-scroll-viewport:hover {
+    scrollbar-color: rgba(212, 212, 216, 0.35) transparent;
+  }
+
+  .activity-scroll-viewport::-webkit-scrollbar-thumb {
+    background: rgba(212, 212, 216, 0.35);
   }
 
   .last-txn-date {
