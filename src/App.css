@@ -505,39 +505,46 @@ tbody tr.is-link-partner {
   width: 36px;
   min-width: 36px;
   text-align: center;
-  padding: 0 4px;
+  padding: 0;
+  position: relative;
 }
 
 .txn-link-btn {
+  /* Filling the cell makes the entire 🔗 column clickable, not just a
+     small button surface — important for "start pending" cells where
+     no icon is rendered. */
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: transparent;
   border: none;
   cursor: pointer;
   font-size: 14px;
   line-height: 1;
-  width: 100%;
-  height: 100%;
-  padding: 4px 0;
   color: #94a3b8;
-  border-radius: 3px;
   transition: color 0.12s ease, background 0.12s ease;
 }
 
-/* Visual states only paint the cell when the icon is actually rendered;
-   empty cells stay invisible (no hover background) so the column reads
-   clean by default. The button is still clickable in either state. */
-.txn-link-btn:not(.is-empty):hover {
-  color: #1e3a8a;
-  background: #e0e7ff;
-}
+/* Each link-cell state owns its own visuals AND its own :hover treatment.
+   We deliberately don't keep a generic .txn-link-btn:hover fallback any
+   more — it kept fighting the state-specific rules at equal specificity
+   and the first matching state was losing colour/background to the
+   generic hover. Now every state is self-contained. */
 
-/* Linked state: filled chain icon, distinct color. */
+/* Linked state outside pending mode: blue chain icon. Hovering hints
+   that a click opens the "break the link" confirmation. */
 .txn-link-btn.is-linked {
   color: #1d4ed8;
 }
 
-/* Valid partner during pending mode: green 🔗 to flag clickable rows
-   at a glance — paired with the red ❌ on invalid rows for a clear
-   "go / no-go" read of the table. */
+.txn-link-btn.is-linked:hover {
+  background: #e0e7ff;
+}
+
+/* Valid partner during pending mode: green 🔗. Hover deepens the
+   tint so the row clearly stands out as the click target. */
 .txn-link-btn.is-candidate {
   color: #15803d;
 }
@@ -547,9 +554,21 @@ tbody tr.is-link-partner {
   background: #dcfce7;
 }
 
-/* Pending state: the user clicked one half and is now picking the second.
-   Show the icon prominently with a dashed outline so the chosen "anchor"
-   row stays obvious as they hunt for the partner. */
+/* Pre-pending hint: an unlinked row's cell hides its ChainIcon by
+   default (transparent currentColor) and reveals it in green when the
+   user hovers — same tint as the candidate step, so the user can see
+   at a glance "clicking here starts a link from this row". */
+.txn-link-btn.is-startable {
+  color: transparent;
+}
+
+.txn-link-btn.is-startable:hover {
+  color: #15803d;
+  background: #dcfce7;
+}
+
+/* Anchor (the row the user just clicked to open pending mode): dashed
+   blue outline + light blue background, visible regardless of hover. */
 .txn-link-btn.is-pending {
   color: #1d4ed8;
   outline: 2px dashed #1d4ed8;
@@ -557,18 +576,14 @@ tbody tr.is-link-partner {
   background: #eff6ff;
 }
 
-/* Invalid candidate during pending mode: ❌ icon, muted color,
+/* Invalid candidate during pending mode: ❌ SVG icon, muted red color,
    not-allowed cursor. Click is a no-op (handled in the click handler);
    hover surfaces the reason via a portal tooltip rendered above the
-   table so it can't be clipped by the scroll wrap. */
+   table so it can't be clipped by the scroll wrap. No background
+   change on hover — the tooltip is the feedback channel here. */
 .txn-link-btn.is-invalid {
   color: #b91c1c;
   cursor: not-allowed;
-  font-size: 11px;
-}
-
-.txn-link-btn.is-invalid:hover {
-  background: transparent;
 }
 
 .txn-link-portal-tooltip {
@@ -720,18 +735,21 @@ tbody tr.is-link-partner {
   .txn-link-btn {
     color: #71717a;
   }
-  .txn-link-btn:not(.is-empty):hover {
-    color: #93c5fd;
-    background: #1e293b;
-  }
   .txn-link-btn.is-linked {
     color: #93c5fd;
+  }
+  .txn-link-btn.is-linked:hover {
+    background: #1e293b;
   }
   .txn-link-btn.is-candidate {
     color: #86efac;
   }
   .txn-link-btn.is-candidate:hover {
     color: #bbf7d0;
+    background: #14532d;
+  }
+  .txn-link-btn.is-startable:hover {
+    color: #86efac;
     background: #14532d;
   }
   .txn-link-btn.is-pending {

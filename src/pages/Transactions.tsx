@@ -612,13 +612,24 @@ export function TransactionsPage({
                   iconKind === "link" &&
                   invalidReason === null &&
                   !isLinked;
+                // Outside pending mode, a click on an unlinked row's cell
+                // *starts* a new pending. Mark the cell as "startable" so
+                // hover can hint at that affordance with the same green
+                // tint we use for the second-pick step.
+                const isStartable =
+                  pendingLinkTxnId === null && !isLinked;
                 const linkBtnClasses = [
                   "txn-link-btn",
                   isLinked && pendingLinkTxnId === null ? "is-linked" : "",
                   isPendingAnchor ? "is-pending" : "",
                   isCandidate ? "is-candidate" : "",
+                  isStartable ? "is-startable" : "",
                   iconKind === "invalid" ? "is-invalid" : "",
-                  iconKind === "none" ? "is-empty" : "",
+                  // Startable cells render a hidden ChainIcon that fades in
+                  // on hover (see is-startable CSS), so they aren't truly
+                  // "empty" and shouldn't suppress the hover background
+                  // via the :not(.is-empty) rule.
+                  iconKind === "none" && !isStartable ? "is-empty" : "",
                 ]
                   .filter(Boolean)
                   .join(" ");
@@ -681,6 +692,10 @@ export function TransactionsPage({
                         type="button"
                         className={linkBtnClasses}
                         aria-label={linkTitle}
+                        data-icon-kind={iconKind}
+                        data-invalid-reason={invalidReason ?? ""}
+                        data-pending={pendingLinkTxnId === null ? "false" : "true"}
+                        data-anchor={isPendingAnchor ? "true" : "false"}
                         onClick={() => onLinkCellClick(x)}
                         onMouseEnter={(e) => {
                           if (iconKind === "invalid" && invalidReason) {
@@ -694,10 +709,10 @@ export function TransactionsPage({
                         }}
                         onMouseLeave={() => setTooltip(null)}
                       >
-                        {iconKind === "link" ? (
+                        {iconKind === "link" || isStartable ? (
                           <ChainIcon />
                         ) : iconKind === "invalid" ? (
-                          "❌"
+                          <CrossIcon />
                         ) : (
                           ""
                         )}
@@ -848,6 +863,28 @@ function ChainIcon() {
     >
       <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5" />
       <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5" />
+    </svg>
+  );
+}
+
+// "Can't link" cross — used during pending mode for rows that are not
+// valid partners. Bigger, bolder strokes than ChainIcon so the rejection
+// reads instantly even at thumbnail size.
+function CrossIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <line x1="5" y1="5" x2="19" y2="19" />
+      <line x1="19" y1="5" x2="5" y2="19" />
     </svg>
   );
 }
