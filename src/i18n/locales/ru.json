@@ -54,6 +54,7 @@
     },
     "activityBalanceError": "Есть расхождения в цепочке балансов",
     "activityUncategorizedCorrecting": "Есть некатегоризированные корректирующие проводки",
+    "activityNoTransactions": "Нет транзакций по счёту",
     "menuActivity": "Активность",
     "menuMonthsValue": "{count} мес.",
     "menuMonthsAll": "Весь период",

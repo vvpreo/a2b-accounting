@@ -115,6 +115,26 @@ body {
   scrollbar-gutter: auto;
 }
 
+/* Accounts mirrors the transactions layout: page itself does not scroll,
+   the filter bar lives outside the scroll wrap so it always spans the
+   full width of the .tabs row above, and the per-account table scrolls
+   inside its own .accounts-wrap. */
+.page--accounts {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
+.page--accounts .accounts-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  /* Reserve the gutter on the actual scroll container so the table
+     doesn't jump horizontally when its vertical scrollbar appears. */
+  scrollbar-gutter: stable;
+}
+
 .page--transactions .txns-wrap {
   flex: 1;
   min-height: 0;
@@ -883,6 +903,25 @@ td.empty {
   border-radius: 2px;
 }
 
+/* Empty-state placeholder shown in place of the month strip for accounts
+   that have no transactions yet. Sits in the same absolute slot as the
+   scroll viewport so the row height stays in sync with strips of other
+   accounts. Right-aligned to match where the months would otherwise be. */
+.activity-strip-empty {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 10px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  font-size: 12px;
+  font-style: italic;
+  color: #71717a;
+  user-select: none;
+}
+
 /* Stacks the year labels above the month strip. Inline-flex so the wrapper
    only takes the width of its widest row (the months row). The auto
    inline-start margin pins the stack to the right edge of the viewport
@@ -989,18 +1028,6 @@ td.empty {
    anchored-black, error-red or transparent (current month). */
 .activity-cell--dashed {
   border-style: dashed;
-}
-
-.accounts-add-row {
-  margin-top: 32px;
-  display: flex;
-  justify-content: center;
-}
-
-.accounts-add-row .btn-primary {
-  font-size: 16px;
-  padding: 14px 36px;
-  border-radius: 6px;
 }
 
 /* Account transactions layout */
@@ -1970,6 +1997,10 @@ code {
   }
 
   .activity-strip-years {
+    color: #a1a1aa;
+  }
+
+  .activity-strip-empty {
     color: #a1a1aa;
   }
 

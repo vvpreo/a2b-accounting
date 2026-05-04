@@ -373,7 +373,7 @@ export function AccountsPage({ onCreateAccount, version }: Props) {
       : null;
 
   return (
-    <section className="page">
+    <section className="page page--accounts">
       <section
         className={`filter-bar${filtersExpanded ? "" : " filter-bar--collapsed"}`}
       >
@@ -412,14 +412,22 @@ export function AccountsPage({ onCreateAccount, version }: Props) {
                 ))}
               </select>
             </label>
+            <button
+              type="button"
+              className="btn-primary filter-bar-action"
+              onClick={onCreateAccount}
+            >
+              {t("accounts.add")}
+            </button>
           </div>
         )}
       </section>
 
       {error && <div className="error">{error}</div>}
 
-      <table className="accounts-table">
-        <thead>
+      <div className="accounts-wrap">
+        <table className="accounts-table">
+          <thead>
           <tr>
             <th>{t("accounts.tableId")}</th>
             <th>{t("accounts.tableName")}</th>
@@ -470,6 +478,7 @@ export function AccountsPage({ onCreateAccount, version }: Props) {
                   <td colSpan={6} className="account-strip-cell">
                     <ActivityStrip
                       cells={cellsByAccount.get(a.id) ?? []}
+                      hasTransactions={latestByAccount.has(a.id)}
                       registerViewport={registerStripViewport}
                       unregisterViewport={unregisterStripViewport}
                       onScroll={handleStripScroll}
@@ -481,15 +490,6 @@ export function AccountsPage({ onCreateAccount, version }: Props) {
           )}
         </tbody>
       </table>
-
-      <div className="accounts-add-row">
-        <button
-          type="button"
-          className="btn-primary"
-          onClick={onCreateAccount}
-        >
-          {t("accounts.add")}
-        </button>
       </div>
 
       {detailAccount && (
@@ -904,11 +904,13 @@ function LastTransactionCell({
 
 function ActivityStrip({
   cells,
+  hasTransactions,
   registerViewport,
   unregisterViewport,
   onScroll,
 }: {
   cells: AccountMonthCell[];
+  hasTransactions: boolean;
   registerViewport: (el: HTMLDivElement) => void;
   unregisterViewport: (el: HTMLDivElement) => void;
   onScroll: (source: HTMLDivElement) => void;
@@ -918,11 +920,14 @@ function ActivityStrip({
   const viewportRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    // Accounts with zero transactions skip the strip and the scroll sync;
+    // there is nothing to align with the other strips.
+    if (!hasTransactions) return;
     const el = viewportRef.current;
     if (!el) return;
     registerViewport(el);
     return () => unregisterViewport(el);
-  }, [registerViewport, unregisterViewport]);
+  }, [hasTransactions, registerViewport, unregisterViewport]);
 
   const monthFormatter = useMemo(
     () =>
@@ -982,6 +987,14 @@ function ActivityStrip({
   // (inter-cell flex gap) = 28 * count - 2.
   function runWidthPx(count: number): number {
     return 28 * count - 2;
+  }
+
+  if (!hasTransactions) {
+    return (
+      <div className="activity-strip-empty">
+        {t("accounts.activityNoTransactions")}
+      </div>
+    );
   }
 
   return (

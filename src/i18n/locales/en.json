@@ -54,6 +54,7 @@
     },
     "activityBalanceError": "Balance chain mismatch",
     "activityUncategorizedCorrecting": "Uncategorized correcting entries present",
+    "activityNoTransactions": "No transactions in this account",
     "menuActivity": "Activity",
     "menuMonthsValue": "{count} mo.",
     "menuMonthsAll": "All time",
