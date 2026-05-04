@@ -327,11 +327,42 @@ body {
   margin-bottom: 0;
 }
 
-.actions-cell {
+.account-name-cell {
   display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.account-name-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-edit-btn {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid #d4d4d8;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.account-edit-btn:hover {
+  background: #f1f1f4;
 }
 
 .last-txn-cell {
@@ -352,11 +383,6 @@ body {
 
 .last-txn-amount {
   font-variant-numeric: tabular-nums;
-}
-
-.actions-cell button {
-  font-size: 12px;
-  padding: 3px 8px;
 }
 
 .account-form label {
@@ -2294,6 +2320,14 @@ code {
   }
 
   .categories-action-btn:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .account-edit-btn {
+    border-color: #3f3f46;
+  }
+
+  .account-edit-btn:hover {
     background: rgba(255, 255, 255, 0.06);
   }
 

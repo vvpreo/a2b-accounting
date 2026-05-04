@@ -436,13 +436,12 @@ export function AccountsPage({ onCreateAccount, version }: Props) {
             <th>{t("accounts.tableNumber")}</th>
             <th>{t("accounts.tableOwner")}</th>
             <th>{t("accounts.tableLastTxn")}</th>
-            <th></th>
           </tr>
         </thead>
         <tbody>
           {accounts.length === 0 ? (
             <tr>
-              <td colSpan={8} className="empty">
+              <td colSpan={7} className="empty">
                 {t("accounts.empty")}
               </td>
             </tr>
@@ -451,7 +450,18 @@ export function AccountsPage({ onCreateAccount, version }: Props) {
               <Fragment key={a.id}>
                 <tr className="account-row">
                   <td>{a.id}</td>
-                  <td>{a.name}</td>
+                  <td className="account-name-cell">
+                    <span className="account-name-text">{a.name}</span>
+                    <button
+                      type="button"
+                      className="account-edit-btn"
+                      onClick={() => setDetailAccountId(a.id)}
+                      aria-label={t("accounts.actionDetails")}
+                      title={t("accounts.actionDetails")}
+                    >
+                      ✎
+                    </button>
+                  </td>
                   <td>{a.bank}</td>
                   <td>{a.currency}</td>
                   <td>{a.accountNumber}</td>
@@ -462,20 +472,11 @@ export function AccountsPage({ onCreateAccount, version }: Props) {
                       currency={a.currency}
                     />
                   </td>
-                  <td className="actions-cell">
-                    <button
-                      type="button"
-                      className="btn-ghost"
-                      onClick={() => setDetailAccountId(a.id)}
-                    >
-                      {t("accounts.actionDetails")}
-                    </button>
-                  </td>
                 </tr>
                 <tr className="account-strip-row">
                   <td className="account-strip-spacer" />
                   <td className="account-strip-spacer" />
-                  <td colSpan={6} className="account-strip-cell">
+                  <td colSpan={5} className="account-strip-cell">
                     <ActivityStrip
                       cells={cellsByAccount.get(a.id) ?? []}
                       hasTransactions={latestByAccount.has(a.id)}
