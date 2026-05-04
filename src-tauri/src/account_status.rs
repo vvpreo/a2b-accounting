@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::db::DbState;
+use crate::money;
 use crate::transactions::validate_account_chain;
 
 #[derive(Debug, Deserialize)]
@@ -25,6 +26,28 @@ pub struct AccountMonthCell {
     /// month — i.e. the chain "closes" past this point. Drives the black
     /// anchor border in the UI (red error border still wins on top).
     pub anchored: bool,
+}
+
+/// Per-account, per-month rollup that powers the optional "summary" strip
+/// rows on the Accounts page (% categorised txns / amounts).
+///
+/// All counts and sums exclude internal-transfer transactions — those that
+/// have a row in `transaction_links`. Money values are returned as strings
+/// in major units (e.g. "1234.56") via `crate::money::format_minor`, mirroring
+/// how `transactions::list_transactions` reports `credit`/`debit`.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountMonthSummary {
+    pub account_id: i64,
+    pub year_month: String,
+    pub income_total_count: i64,
+    pub income_categorized_count: i64,
+    pub income_total_minor: String,
+    pub income_categorized_share_minor: String,
+    pub expense_total_count: i64,
+    pub expense_categorized_count: i64,
+    pub expense_total_minor: String,
+    pub expense_categorized_share_minor: String,
 }
 
 #[tauri::command]
@@ -154,6 +177,123 @@ fn compute(
                 balance_error,
                 uncategorized_correcting: dashed,
                 anchored,
+            });
+        }
+    }
+
+    Ok(out)
+}
+
+#[tauri::command]
+pub fn account_monthly_summary_stats(
+    state: State<'_, DbState>,
+    months: Vec<MonthRange>,
+) -> Result<Vec<AccountMonthSummary>, String> {
+    let conn = state.lock().map_err(|e| e.to_string())?;
+    compute_summary(&conn, &months).map_err(|e| e.to_string())
+}
+
+struct SummaryTxnRow {
+    occurred_at_utc: String,
+    credit: i64,
+    debit: i64,
+    has_categories: bool,
+    is_linked: bool,
+    share_sum: i64,
+}
+
+fn compute_summary(
+    conn: &Connection,
+    months: &[MonthRange],
+) -> rusqlite::Result<Vec<AccountMonthSummary>> {
+    let mut stmt = conn.prepare("SELECT id FROM accounts ORDER BY id ASC")?;
+    let account_ids: Vec<i64> = stmt
+        .query_map([], |r| r.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+
+    let mut out = Vec::with_capacity(account_ids.len() * months.len());
+
+    for account_id in account_ids {
+        let mut stmt = conn.prepare(
+            "SELECT t.occurred_at_utc,
+                    t.credit,
+                    t.debit,
+                    EXISTS(SELECT 1 FROM transaction_categories tc
+                           WHERE tc.transaction_id = t.id) AS has_categories,
+                    EXISTS(SELECT 1 FROM transaction_links tl
+                           WHERE tl.txn_a_id = t.id OR tl.txn_b_id = t.id) AS is_linked,
+                    COALESCE((SELECT SUM(tc.share_minor) FROM transaction_categories tc
+                              WHERE tc.transaction_id = t.id), 0) AS share_sum
+             FROM transactions t
+             WHERE t.account_id = ?1
+             ORDER BY t.occurred_at_utc ASC",
+        )?;
+        let txns: Vec<SummaryTxnRow> = stmt
+            .query_map([account_id], |r| {
+                Ok(SummaryTxnRow {
+                    occurred_at_utc: r.get(0)?,
+                    credit: r.get(1)?,
+                    debit: r.get(2)?,
+                    has_categories: r.get(3)?,
+                    is_linked: r.get(4)?,
+                    share_sum: r.get(5)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(stmt);
+
+        for range in months {
+            let mut income_total_count = 0_i64;
+            let mut income_categorized_count = 0_i64;
+            let mut income_total_minor = 0_i64;
+            let mut income_categorized_share_minor = 0_i64;
+            let mut expense_total_count = 0_i64;
+            let mut expense_categorized_count = 0_i64;
+            let mut expense_total_minor = 0_i64;
+            let mut expense_categorized_share_minor = 0_i64;
+
+            for t in &txns {
+                if t.is_linked {
+                    continue;
+                }
+                if t.occurred_at_utc.as_str() < range.start_utc.as_str()
+                    || t.occurred_at_utc.as_str() >= range.end_utc.as_str()
+                {
+                    continue;
+                }
+                if t.credit > 0 {
+                    income_total_count += 1;
+                    income_total_minor += t.credit;
+                    if t.has_categories {
+                        income_categorized_count += 1;
+                    }
+                    // share_sum may include allocations the user has not yet
+                    // assigned a category to — but the schema invariant
+                    // (Σ share ≤ amount) is enforced at write time, so we can
+                    // trust it as the "covered amount" without extra clamping.
+                    income_categorized_share_minor += t.share_sum;
+                } else if t.debit > 0 {
+                    expense_total_count += 1;
+                    expense_total_minor += t.debit;
+                    if t.has_categories {
+                        expense_categorized_count += 1;
+                    }
+                    expense_categorized_share_minor += t.share_sum;
+                }
+            }
+
+            out.push(AccountMonthSummary {
+                account_id,
+                year_month: range.year_month.clone(),
+                income_total_count,
+                income_categorized_count,
+                income_total_minor: money::format_minor(income_total_minor),
+                income_categorized_share_minor: money::format_minor(income_categorized_share_minor),
+                expense_total_count,
+                expense_categorized_count,
+                expense_total_minor: money::format_minor(expense_total_minor),
+                expense_categorized_share_minor: money::format_minor(expense_categorized_share_minor),
             });
         }
     }
@@ -581,5 +721,167 @@ mod tests {
         for c in &r {
             assert_eq!(c.status, "no_data");
         }
+    }
+
+    fn summary<'a>(cells: &'a [AccountMonthSummary], ym: &str) -> &'a AccountMonthSummary {
+        cells.iter().find(|c| c.year_month == ym).expect(ym)
+    }
+
+    #[test]
+    fn summary_empty_month_is_all_zeroes() {
+        let f = fixture();
+        let m = ranges(&[
+            ("2026-01", "2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z"),
+        ]);
+        let r = compute_summary(&f.conn, &m).unwrap();
+        let jan = summary(&r, "2026-01");
+        assert_eq!(jan.income_total_count, 0);
+        assert_eq!(jan.expense_total_count, 0);
+        assert_eq!(jan.income_total_minor, "0.00");
+        assert_eq!(jan.expense_total_minor, "0.00");
+        assert_eq!(jan.income_categorized_count, 0);
+        assert_eq!(jan.expense_categorized_count, 0);
+        assert_eq!(jan.income_categorized_share_minor, "0.00");
+        assert_eq!(jan.expense_categorized_share_minor, "0.00");
+    }
+
+    #[test]
+    fn summary_uncategorized_txns_have_zero_categorized_counters() {
+        let f = fixture();
+        // 100.00 income, 50.00 expense — neither has any category attached.
+        insert_txn(&f, "2026-01-10T10:00:00Z", 10000, 0, 110000, false);
+        insert_txn(&f, "2026-01-15T10:00:00Z", 0, 5000, 105000, false);
+
+        let m = ranges(&[
+            ("2026-01", "2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z"),
+        ]);
+        let r = compute_summary(&f.conn, &m).unwrap();
+        let jan = summary(&r, "2026-01");
+        assert_eq!(jan.income_total_count, 1);
+        assert_eq!(jan.expense_total_count, 1);
+        assert_eq!(jan.income_total_minor, "100.00");
+        assert_eq!(jan.expense_total_minor, "50.00");
+        assert_eq!(jan.income_categorized_count, 0);
+        assert_eq!(jan.expense_categorized_count, 0);
+        assert_eq!(jan.income_categorized_share_minor, "0.00");
+        assert_eq!(jan.expense_categorized_share_minor, "0.00");
+    }
+
+    #[test]
+    fn summary_partial_share_counts_only_covered_amount() {
+        let f = fixture();
+        let cat = insert_category(&f.conn, "Groceries", "expense");
+        // 100.00 expense — only 30.00 (3000 minor) is allocated to a category.
+        let txn = insert_txn(&f, "2026-01-10T10:00:00Z", 0, 10000, 90000, false);
+        link_to_category(&f.conn, txn, cat, 3000);
+
+        let m = ranges(&[
+            ("2026-01", "2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z"),
+        ]);
+        let r = compute_summary(&f.conn, &m).unwrap();
+        let jan = summary(&r, "2026-01");
+        // The transaction has a category → categorized_count = 1.
+        assert_eq!(jan.expense_categorized_count, 1);
+        assert_eq!(jan.expense_total_count, 1);
+        // But only 30 / 100 of the amount is actually covered.
+        assert_eq!(jan.expense_total_minor, "100.00");
+        assert_eq!(jan.expense_categorized_share_minor, "30.00");
+    }
+
+    #[test]
+    fn summary_excludes_linked_transactions_from_both_numerator_and_denominator() {
+        let f = fixture();
+        // Second account so we can build a transfer pair.
+        let other_account: i64 = f.conn
+            .query_row(
+                "INSERT INTO accounts (name, bank, currency, account_number, owner_name)
+                 VALUES ('Other', 'TestBank', 'RUB', '2', 'Alice') RETURNING id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let other_batch: i64 = f.conn
+            .query_row(
+                "INSERT INTO import_batches
+                 (account_id, imported_at, source_filename, row_count, timezone_offset)
+                 VALUES (?1, '2026-04-01T00:00:00Z', NULL, 0, '+00:00') RETURNING id",
+                [other_account],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        let cat = insert_category(&f.conn, "Groceries", "expense");
+        // 50.00 real expense — categorised. Should land in the totals.
+        let real_expense = insert_txn(&f, "2026-01-05T10:00:00Z", 0, 5000, 95000, false);
+        link_to_category(&f.conn, real_expense, cat, 5000);
+        // 100.00 outgoing transfer (debit) on main account, paired with
+        // incoming 100.00 on the other account. Must drop out completely.
+        let transfer_out = insert_txn(&f, "2026-01-10T10:00:00Z", 0, 10000, 85000, false);
+        let transfer_in: i64 = f.conn
+            .query_row(
+                "INSERT INTO transactions
+                 (account_id, import_batch_id, occurred_at_utc, credit, debit, balance, is_correcting)
+                 VALUES (?1, ?2, '2026-01-10T10:00:00Z', 10000, 0, 10000, 0) RETURNING id",
+                params![other_account, other_batch],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let (a, b) = if transfer_out < transfer_in {
+            (transfer_out, transfer_in)
+        } else {
+            (transfer_in, transfer_out)
+        };
+        f.conn
+            .execute(
+                "INSERT INTO transaction_links (txn_a_id, txn_b_id) VALUES (?1, ?2)",
+                params![a, b],
+            )
+            .unwrap();
+
+        let m = ranges(&[
+            ("2026-01", "2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z"),
+        ]);
+        let r = compute_summary(&f.conn, &m).unwrap();
+        // Main account: only the 50.00 categorised expense should remain.
+        let main_jan = r
+            .iter()
+            .find(|c| c.account_id == f.account_id && c.year_month == "2026-01")
+            .unwrap();
+        assert_eq!(main_jan.expense_total_count, 1);
+        assert_eq!(main_jan.expense_total_minor, "50.00");
+        assert_eq!(main_jan.expense_categorized_count, 1);
+        assert_eq!(main_jan.expense_categorized_share_minor, "50.00");
+        // Other account: the only txn was a linked transfer → zero everything.
+        let other_jan = r
+            .iter()
+            .find(|c| c.account_id == other_account && c.year_month == "2026-01")
+            .unwrap();
+        assert_eq!(other_jan.income_total_count, 0);
+        assert_eq!(other_jan.income_total_minor, "0.00");
+    }
+
+    #[test]
+    fn summary_isolates_credit_and_debit_buckets() {
+        let f = fixture();
+        let inc_cat = insert_category(&f.conn, "Salary", "income");
+        let exp_cat = insert_category(&f.conn, "Rent", "expense");
+        let inc = insert_txn(&f, "2026-01-05T10:00:00Z", 200_00, 0, 300_00, false);
+        let exp = insert_txn(&f, "2026-01-15T10:00:00Z", 0, 80_00, 220_00, false);
+        link_to_category(&f.conn, inc, inc_cat, 200_00);
+        link_to_category(&f.conn, exp, exp_cat, 40_00);
+
+        let m = ranges(&[
+            ("2026-01", "2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z"),
+        ]);
+        let r = compute_summary(&f.conn, &m).unwrap();
+        let jan = summary(&r, "2026-01");
+        assert_eq!(jan.income_total_count, 1);
+        assert_eq!(jan.income_total_minor, "200.00");
+        assert_eq!(jan.income_categorized_count, 1);
+        assert_eq!(jan.income_categorized_share_minor, "200.00");
+        assert_eq!(jan.expense_total_count, 1);
+        assert_eq!(jan.expense_total_minor, "80.00");
+        assert_eq!(jan.expense_categorized_count, 1);
+        assert_eq!(jan.expense_categorized_share_minor, "40.00");
     }
 }

@@ -871,13 +871,14 @@ td.empty {
   padding: 0;
 }
 
-/* The strip cell is sized exactly to fit the year row + gap + months row.
-   The scrollbar leaves no trace at rest — it materialises only on hover
-   and overlays the bottom 1–2px of the months row, so nothing looks
-   "abandoned" below the strip when the cursor is elsewhere. */
+/* The strip cell hosts an absolute scroll viewport. Its height is set per
+   row via an inline style, computed from the number of "Сводка" rows the
+   user has enabled (see `stripCellHeightPx` in Accounts.tsx). Without an
+   explicit height the absolutely-positioned viewport would collapse the
+   td to zero height; with an inline-flex viewport it would blow up the
+   table's column widths to fit the strip's intrinsic content. */
 .account-strip-row td.account-strip-cell {
   position: relative;
-  height: 45px;
   /* Override the 8px padding-bottom from `.account-strip-row td`: we
      don't need a reserved gutter since the scrollbar is overlay-style. */
   padding-bottom: 0;
@@ -995,6 +996,99 @@ td.empty {
   flex-wrap: nowrap;
 }
 
+/* Labels column lives in the second `account-strip-spacer` td, right-
+   aligned so labels sit close to the strip cell that follows. Vertical
+   geometry mirrors the strip stack: 11px year row, 2px gap, 18px months
+   row (= "Наполненность"), then 18px per summary row. Both td's are
+   `vertical-align: top`, so without any extra padding the rows line up
+   automatically. */
+.account-strip-labels-cell {
+  position: relative;
+  text-align: right;
+  padding-right: 0;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+/* Position the stack absolutely so the labels float over the "Имя"
+   column area without forcing the table's auto-layout to widen it. The
+   stack hugs the right edge of the cell, just before the strip td. */
+.account-strip-labels-stack {
+  position: absolute;
+  top: 0;
+  right: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.account-strip-labels-spacer {
+  height: 11px;
+}
+
+.activity-strip-row-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 18px;
+  font-size: 11px;
+  color: #52525b;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.activity-strip-row-label-text {
+  /* Right-align the row text by pushing the info button against the right
+     edge of the cell — text takes whatever room is left to its left. */
+  text-align: right;
+}
+
+/* The main "Наполненность" row label is one step bolder/darker so it
+   visually anchors the section above its sub-metrics. */
+.activity-strip-row-label--main {
+  color: #18181b;
+  font-weight: 600;
+}
+
+/* Compact circular "i" button mirroring the previous filter-bar info
+   button: same hover treatment, but sized to fit on a 18px label row. */
+.activity-strip-row-info {
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid #d4d4d8;
+  border-radius: 50%;
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  font-style: italic;
+  line-height: 1;
+  color: #52525b;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+
+.activity-strip-row-info:hover {
+  background: #f1f1f4;
+  color: #18181b;
+  border-color: #a1a1aa;
+}
+
+/* Optional categorisation rows under the main strip — same column geometry,
+   but plain text in fixed-width 39px boxes instead of status fills. */
+.activity-strip--summary {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
 /* Spacer between calendar years — same width as one cell so the year
    break reads as a clear gap. */
 .activity-strip-year-gap {
@@ -1080,6 +1174,34 @@ button.activity-cell:focus-visible {
    anchored-black or transparent (current month). */
 .activity-cell--dashed {
   border-style: dashed;
+}
+
+/* Summary-row modifiers must come after the base `.activity-cell` rule
+   above so their `background: transparent` overrides the base's grey
+   fill (CSS cascades by document order at equal specificity). */
+.activity-cell--summary {
+  background: transparent;
+  border: 1px solid #e4e4e7;
+  font-size: 10px;
+  font-weight: 500;
+  color: #3f3f46;
+}
+
+/* "No transactions of this direction this month" — render as a fully
+   transparent placeholder. The user reads visibility as "there is data"
+   so showing a faint outlined slot here would falsely suggest activity. */
+.activity-cell--summary--empty {
+  color: transparent;
+  border-color: transparent;
+  background: transparent;
+}
+
+/* pre_account placeholder in summary rows: invisible but still takes up
+   the 39px column footprint, so percent cells on real months align with
+   the cell columns above. Mirrors the months row's `--pre_account` style. */
+.activity-cell--summary-pre {
+  border-color: transparent;
+  background: transparent;
 }
 
 /* Account transactions layout */
@@ -2164,6 +2286,25 @@ code {
      visible on the slightly lighter no_data fill. */
   .activity-cell--anchored {
     border-color: #d4d4d8;
+  }
+
+  .activity-strip-row-label {
+    color: #a1a1aa;
+  }
+
+  .activity-strip-row-label--main {
+    color: #f4f4f5;
+  }
+
+  .activity-cell--summary {
+    border-color: #3f3f46;
+    color: #d4d4d8;
+  }
+
+  .activity-cell--summary--empty {
+    color: transparent;
+    border-color: transparent;
+    background: transparent;
   }
 
   .activity-strip-years {

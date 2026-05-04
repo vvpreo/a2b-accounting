@@ -292,6 +292,35 @@ export function accountMonthlyStatus(
   return invoke<AccountMonthCell[]>("account_monthly_status", { months });
 }
 
+/// Per-account, per-month rollup that powers the optional "Сводка" strip
+/// rows on the Accounts page. All counters and amounts already exclude
+/// internal-transfer transactions (those that have a row in
+/// `transaction_links`); the frontend just turns them into percentages.
+///
+/// Money fields are formatted-decimal strings ("123.45") — same convention
+/// as `Transaction.credit` / `Transaction.debit`. Parse with `Number()` for
+/// the percent calculation.
+export interface AccountMonthSummary {
+  accountId: number;
+  yearMonth: string;
+  incomeTotalCount: number;
+  incomeCategorizedCount: number;
+  incomeTotalMinor: string;
+  incomeCategorizedShareMinor: string;
+  expenseTotalCount: number;
+  expenseCategorizedCount: number;
+  expenseTotalMinor: string;
+  expenseCategorizedShareMinor: string;
+}
+
+export function accountMonthlySummaryStats(
+  months: MonthRange[],
+): Promise<AccountMonthSummary[]> {
+  return invoke<AccountMonthSummary[]>("account_monthly_summary_stats", {
+    months,
+  });
+}
+
 export function updateTransactionComment(
   id: number,
   comment: string | null,

@@ -70,6 +70,7 @@ pub fn run() {
             accounts::update_account,
             accounts::delete_account,
             account_status::account_monthly_status,
+            account_status::account_monthly_summary_stats,
             categories::create_category,
             categories::list_categories,
             categories::update_category,
