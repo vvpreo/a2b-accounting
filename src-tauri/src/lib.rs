@@ -1,3 +1,4 @@
+mod account_status;
 mod accounts;
 mod categories;
 mod db;
@@ -68,6 +69,7 @@ pub fn run() {
             accounts::list_accounts,
             accounts::update_account,
             accounts::delete_account,
+            account_status::account_monthly_status,
             categories::create_category,
             categories::list_categories,
             categories::update_category,

@@ -253,6 +253,28 @@ export function validateBalanceChain(
   return invoke<ValidationError[]>("validate_balance_chain", { accountId });
 }
 
+export type AccountMonthStatus = "no_data" | "incomplete" | "complete";
+
+export interface AccountMonthCell {
+  accountId: number;
+  yearMonth: string;
+  status: AccountMonthStatus;
+  balanceError: boolean;
+  uncategorizedCorrecting: boolean;
+}
+
+export interface MonthRange {
+  yearMonth: string;
+  startUtc: string;
+  endUtc: string;
+}
+
+export function accountMonthlyStatus(
+  months: MonthRange[],
+): Promise<AccountMonthCell[]> {
+  return invoke<AccountMonthCell[]>("account_monthly_status", { months });
+}
+
 export function updateTransactionComment(
   id: number,
   comment: string | null,

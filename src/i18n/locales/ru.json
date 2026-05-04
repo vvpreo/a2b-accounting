@@ -45,7 +45,16 @@
     "tableCurrency": "Валюта",
     "tableNumber": "Номер",
     "tableOwner": "Владелец",
-    "tableCreated": "Создан",
+    "activityStatus": {
+      "no_data": "Нет данных",
+      "incomplete": "Неполные данные",
+      "complete": "Данные есть"
+    },
+    "activityBalanceError": "Есть расхождения в цепочке балансов",
+    "activityUncategorizedCorrecting": "Есть некатегоризированные корректирующие проводки",
+    "menuActivity": "Активность",
+    "menuMonthsValue": "{count} мес.",
+    "menuMonthsAll": "Весь период",
     "empty": "Пока нет счетов.",
     "actionDetails": "Подробнее",
     "detailsTitle": "Счёт #{id}",

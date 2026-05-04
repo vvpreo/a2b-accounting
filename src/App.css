@@ -786,6 +786,80 @@ td.empty {
   padding: 24px;
 }
 
+/* Activity strip — last N month buckets, rendered on a sub-row beneath
+   each account row. */
+
+.account-row td {
+  /* The strip-row continues this row visually; suppress the divider. */
+  border-bottom: 0;
+}
+
+.account-strip-row td {
+  padding-top: 0;
+  padding-bottom: 8px;
+}
+
+.account-strip-row .account-strip-spacer {
+  /* Leading two columns under the account stay blank; no inner padding so
+     the strip starts cleanly under the "Bank" column header. */
+  padding: 0;
+}
+
+.activity-strip {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+/* Spacer between calendar years — same width as one cell so the year
+   break reads as a clear gap. */
+.activity-strip-year-gap {
+  display: inline-block;
+  width: 24px;
+  flex-shrink: 0;
+}
+
+.activity-cell {
+  width: 24px;
+  height: 18px;
+  border-radius: 3px;
+  border: 1.5px solid transparent;
+  box-sizing: border-box;
+  background: #d4d4d8;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  color: #18181b;
+  user-select: none;
+}
+
+.activity-cell--no_data {
+  background: #d4d4d8;
+}
+
+.activity-cell--incomplete {
+  background: #facc15;
+}
+
+.activity-cell--complete {
+  background: #22c55e;
+}
+
+.activity-cell--dashed {
+  border-style: dashed;
+  border-color: #18181b;
+}
+
+/* Error overrides border-color regardless of dashed/solid. */
+.activity-cell--error {
+  border-color: #dc2626;
+}
+
 .accounts-add-row {
   margin-top: 32px;
   display: flex;
@@ -1751,6 +1825,15 @@ code {
   .modal-tab-button.active {
     color: #f4f4f5;
     border-bottom-color: #f4f4f5;
+  }
+
+  .activity-cell--no_data {
+    background: #3f3f46;
+    color: #d4d4d8;
+  }
+
+  .activity-cell--dashed {
+    border-color: #d4d4d8;
   }
 
   .file-input-label {

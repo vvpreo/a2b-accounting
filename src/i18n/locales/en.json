@@ -45,7 +45,16 @@
     "tableCurrency": "Currency",
     "tableNumber": "Number",
     "tableOwner": "Owner",
-    "tableCreated": "Created",
+    "activityStatus": {
+      "no_data": "No data",
+      "incomplete": "Incomplete",
+      "complete": "Complete"
+    },
+    "activityBalanceError": "Balance chain mismatch",
+    "activityUncategorizedCorrecting": "Uncategorized correcting entries present",
+    "menuActivity": "Activity",
+    "menuMonthsValue": "{count} mo.",
+    "menuMonthsAll": "All time",
     "empty": "No accounts yet.",
     "actionDetails": "Details",
     "detailsTitle": "Account #{id}",

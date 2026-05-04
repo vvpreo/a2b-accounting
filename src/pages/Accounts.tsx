@@ -1,21 +1,85 @@
-import { FormEvent, useEffect, useState } from "react";
+import {
+  Fragment,
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 
-import { useT, useTPlural } from "../i18n";
+import { useI18n, useT, useTPlural } from "../i18n";
 import {
   Account,
+  AccountMonthCell,
   ImportBatch,
+  MonthRange,
   ValidationError,
+  accountMonthlyStatus,
   createAccount,
   deleteAccount,
   deleteImportBatch,
+  firstTransactionDate,
+  getSetting,
   listAccounts,
   listImportBatches,
+  setSetting,
   updateAccount,
   validateBalanceChain,
 } from "../lib/api";
 import { ACCOUNT_PRESETS, findPresetByName } from "../lib/account-presets";
 import { CRYPTO_CURRENCIES, FIAT_CURRENCIES } from "../lib/currencies";
+
+const MONTH_DEPTH_OPTIONS = [3, 12, 36, "all"] as const;
+type MonthDepth = (typeof MONTH_DEPTH_OPTIONS)[number];
+const DEFAULT_MONTH_DEPTH: MonthDepth = 36;
+const SETTING_KEY_ACTIVITY_MONTHS = "accounts_activity_months";
+
+function parseDepth(value: string | null): MonthDepth | null {
+  if (value === "all") return "all";
+  const n = Number.parseInt(value ?? "", 10);
+  if (n === 3 || n === 12 || n === 36) return n;
+  return null;
+}
+
+function depthSelectValue(d: MonthDepth): string {
+  return String(d);
+}
+
+function monthsBetween(earliestLocalIso: string, now: Date): number {
+  // earliestLocalIso is "YYYY-MM-DD" in user-local time. We want the count of
+  // full month buckets from that month (inclusive) up to but not including
+  // the current month — same convention as the numeric presets.
+  const [yStr, mStr] = earliestLocalIso.split("-");
+  const earliestYear = Number(yStr);
+  const earliestMonth0 = Number(mStr) - 1;
+  const diff =
+    (now.getFullYear() - earliestYear) * 12 +
+    (now.getMonth() - earliestMonth0);
+  return Math.max(0, diff);
+}
+
+function buildLastNMonthRanges(now: Date, count: number): MonthRange[] {
+  // Start of the current month in local time. The last full bucket is the
+  // previous month; we walk back `count` months from there. Using local-time
+  // month boundaries matches how the user perceives "month" elsewhere.
+  const baseYear = now.getFullYear();
+  const baseMonth = now.getMonth(); // 0-indexed
+  const ranges: MonthRange[] = [];
+  for (let i = count; i >= 1; i--) {
+    const start = new Date(baseYear, baseMonth - i, 1, 0, 0, 0, 0);
+    const end = new Date(baseYear, baseMonth - i + 1, 1, 0, 0, 0, 0);
+    const yearMonth = `${start.getFullYear()}-${String(
+      start.getMonth() + 1,
+    ).padStart(2, "0")}`;
+    ranges.push({
+      yearMonth,
+      startUtc: start.toISOString(),
+      endUtc: end.toISOString(),
+    });
+  }
+  return ranges;
+}
 interface AccountFormValues {
   presetId: string;
   currency: string;
@@ -142,14 +206,113 @@ export function AccountsPage({ onCreateAccount, version }: Props) {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [detailAccountId, setDetailAccountId] = useState<number | null>(null);
-
-  async function refresh() {
-    setAccounts(await listAccounts());
-  }
+  const [statusCells, setStatusCells] = useState<AccountMonthCell[]>([]);
+  const [monthsDepth, setMonthsDepth] = useState<MonthDepth>(DEFAULT_MONTH_DEPTH);
+  // We don't fetch the strip until the persisted depth has been read once —
+  // otherwise we'd issue a wasted request with the default depth and then a
+  // second one with the real value.
+  const [depthLoaded, setDepthLoaded] = useState(false);
+  // null = "all" mode resolution still pending; otherwise the resolved month
+  // count from the earliest transaction up to the previous month (0 means
+  // there are no transactions at all).
+  const [allTimeCount, setAllTimeCount] = useState<number | null>(null);
+  const [filtersExpanded, setFiltersExpanded] = useState(true);
 
   useEffect(() => {
-    refresh().catch((e) => setError(String(e)));
-  }, [version]);
+    let cancelled = false;
+    getSetting(SETTING_KEY_ACTIVITY_MONTHS)
+      .then((value) => {
+        if (cancelled) return;
+        const parsed = parseDepth(value);
+        if (parsed !== null) setMonthsDepth(parsed);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setDepthLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Resolve the "all" preset to a concrete month count. Re-runs on `version`
+  // so a fresh import or batch deletion shifts the earliest-data anchor.
+  useEffect(() => {
+    if (monthsDepth !== "all") return;
+    let cancelled = false;
+    setAllTimeCount(null);
+    firstTransactionDate()
+      .then((date) => {
+        if (cancelled) return;
+        if (!date) {
+          setAllTimeCount(0);
+          return;
+        }
+        setAllTimeCount(monthsBetween(date, new Date()));
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        console.error("[accounts] failed to resolve all-time depth:", e);
+        setAllTimeCount(0);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [monthsDepth, version]);
+
+  const effectiveCount =
+    monthsDepth === "all" ? allTimeCount ?? 0 : monthsDepth;
+  const allTimeReady = monthsDepth !== "all" || allTimeCount !== null;
+
+  const monthRanges = useMemo(
+    () => buildLastNMonthRanges(new Date(), effectiveCount),
+    [effectiveCount],
+  );
+
+  function changeDepth(next: MonthDepth) {
+    setMonthsDepth(next);
+    setSetting(SETTING_KEY_ACTIVITY_MONTHS, String(next)).catch((e) =>
+      console.error("[accounts] failed to persist activity depth:", e),
+    );
+  }
+
+  const refresh = useCallback(async () => {
+    if (!depthLoaded || !allTimeReady) return;
+    try {
+      const list = await listAccounts();
+      setAccounts(list);
+      setError(null);
+      if (list.length === 0 || monthRanges.length === 0) {
+        setStatusCells([]);
+        return;
+      }
+      const cells = await accountMonthlyStatus(monthRanges);
+      setStatusCells(cells);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [depthLoaded, allTimeReady, monthRanges]);
+
+  useEffect(() => {
+    refresh();
+  }, [version, refresh]);
+
+  const cellsByAccount = useMemo(() => {
+    const map = new Map<number, AccountMonthCell[]>();
+    for (const c of statusCells) {
+      if (!map.has(c.accountId)) map.set(c.accountId, []);
+      map.get(c.accountId)!.push(c);
+    }
+    // Preserve the same chronological order we asked the backend for.
+    const order = new Map(monthRanges.map((r, i) => [r.yearMonth, i]));
+    for (const list of map.values()) {
+      list.sort(
+        (a, b) =>
+          (order.get(a.yearMonth) ?? 0) - (order.get(b.yearMonth) ?? 0),
+      );
+    }
+    return map;
+  }, [statusCells, monthRanges]);
 
   const detailAccount =
     detailAccountId !== null
@@ -158,6 +321,48 @@ export function AccountsPage({ onCreateAccount, version }: Props) {
 
   return (
     <section className="page">
+      <section
+        className={`filter-bar${filtersExpanded ? "" : " filter-bar--collapsed"}`}
+      >
+        <button
+          type="button"
+          className="filter-bar-handle"
+          onClick={() => setFiltersExpanded((v) => !v)}
+          aria-label={
+            filtersExpanded ? t("toolbar.collapse") : t("toolbar.expand")
+          }
+          title={
+            filtersExpanded ? t("toolbar.collapse") : t("toolbar.expand")
+          }
+        >
+          <span className="filter-bar-handle-grip" />
+        </button>
+        {filtersExpanded && (
+          <div className="filter-bar-row">
+            <label className="filter-field">
+              <span>{t("accounts.menuActivity")}</span>
+              <select
+                value={depthSelectValue(monthsDepth)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  changeDepth(
+                    v === "all" ? "all" : (Number(v) as 3 | 12 | 36),
+                  );
+                }}
+              >
+                {MONTH_DEPTH_OPTIONS.map((m) => (
+                  <option key={m} value={m}>
+                    {m === "all"
+                      ? t("accounts.menuMonthsAll")
+                      : t("accounts.menuMonthsValue", { count: m })}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        )}
+      </section>
+
       {error && <div className="error">{error}</div>}
 
       <table className="accounts-table">
@@ -169,37 +374,44 @@ export function AccountsPage({ onCreateAccount, version }: Props) {
             <th>{t("accounts.tableCurrency")}</th>
             <th>{t("accounts.tableNumber")}</th>
             <th>{t("accounts.tableOwner")}</th>
-            <th>{t("accounts.tableCreated")}</th>
             <th></th>
           </tr>
         </thead>
         <tbody>
           {accounts.length === 0 ? (
             <tr>
-              <td colSpan={8} className="empty">
+              <td colSpan={7} className="empty">
                 {t("accounts.empty")}
               </td>
             </tr>
           ) : (
             accounts.map((a) => (
-              <tr key={a.id}>
-                <td>{a.id}</td>
-                <td>{a.name}</td>
-                <td>{a.bank}</td>
-                <td>{a.currency}</td>
-                <td>{a.accountNumber}</td>
-                <td>{a.ownerName}</td>
-                <td>{a.createdAt}</td>
-                <td className="actions-cell">
-                  <button
-                    type="button"
-                    className="btn-ghost"
-                    onClick={() => setDetailAccountId(a.id)}
-                  >
-                    {t("accounts.actionDetails")}
-                  </button>
-                </td>
-              </tr>
+              <Fragment key={a.id}>
+                <tr className="account-row">
+                  <td>{a.id}</td>
+                  <td>{a.name}</td>
+                  <td>{a.bank}</td>
+                  <td>{a.currency}</td>
+                  <td>{a.accountNumber}</td>
+                  <td>{a.ownerName}</td>
+                  <td className="actions-cell">
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      onClick={() => setDetailAccountId(a.id)}
+                    >
+                      {t("accounts.actionDetails")}
+                    </button>
+                  </td>
+                </tr>
+                <tr className="account-strip-row">
+                  <td className="account-strip-spacer" />
+                  <td className="account-strip-spacer" />
+                  <td colSpan={5}>
+                    <ActivityStrip cells={cellsByAccount.get(a.id) ?? []} />
+                  </td>
+                </tr>
+              </Fragment>
             ))
           )}
         </tbody>
@@ -574,4 +786,78 @@ function formatInstant(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toISOString().slice(0, 19).replace("T", " ");
+}
+
+function ActivityStrip({ cells }: { cells: AccountMonthCell[] }) {
+  const t = useT();
+  const { locale } = useI18n();
+
+  const monthFormatter = useMemo(
+    () =>
+      new Intl.DateTimeFormat(locale, { month: "long", year: "numeric" }),
+    [locale],
+  );
+  // Use the long form and slice 3 alphabetic chars: this is locale-correct
+  // for both ru ("январь" → "Янв") and en ("January" → "Jan"). The "short"
+  // format is unreliable here — Russian "short" uses genitive case and
+  // sometimes adds a trailing dot.
+  const longMonthFormatter = useMemo(
+    () => new Intl.DateTimeFormat(locale, { month: "long" }),
+    [locale],
+  );
+
+  function tooltip(c: AccountMonthCell): string {
+    const [yearStr, monthStr] = c.yearMonth.split("-");
+    const monthLabel = monthFormatter.format(
+      new Date(Number(yearStr), Number(monthStr) - 1, 1),
+    );
+    const lines = [
+      `${monthLabel} — ${t(`accounts.activityStatus.${c.status}`)}`,
+    ];
+    if (c.balanceError) lines.push(t("accounts.activityBalanceError"));
+    if (c.uncategorizedCorrecting)
+      lines.push(t("accounts.activityUncategorizedCorrecting"));
+    return lines.join("\n");
+  }
+
+  function shortLabel(c: AccountMonthCell): string {
+    const [yearStr, monthStr] = c.yearMonth.split("-");
+    const raw = longMonthFormatter.format(
+      new Date(Number(yearStr), Number(monthStr) - 1, 1),
+    );
+    // Pull only the leading word (some locales prepend numbers/punctuation).
+    const word = raw.match(/^[\p{L}]+/u)?.[0] ?? raw;
+    const slice = word.slice(0, 3);
+    return slice.charAt(0).toUpperCase() + slice.slice(1).toLowerCase();
+  }
+
+  return (
+    <div className="activity-strip">
+      {cells.map((c, i) => {
+        const prev = i > 0 ? cells[i - 1] : null;
+        const yearChanged =
+          prev !== null && c.yearMonth.slice(0, 4) !== prev.yearMonth.slice(0, 4);
+        return (
+          <Fragment key={c.yearMonth}>
+            {yearChanged && (
+              <span className="activity-strip-year-gap" aria-hidden="true" />
+            )}
+            <span
+              className={[
+                "activity-cell",
+                `activity-cell--${c.status}`,
+                c.balanceError ? "activity-cell--error" : "",
+                c.uncategorizedCorrecting ? "activity-cell--dashed" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              title={tooltip(c)}
+            >
+              {shortLabel(c)}
+            </span>
+          </Fragment>
+        );
+      })}
+    </div>
+  );
 }

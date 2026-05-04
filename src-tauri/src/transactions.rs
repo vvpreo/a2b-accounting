@@ -622,7 +622,7 @@ struct ChainRow {
     comment: Option<String>,
 }
 
-fn validate_account_chain(
+pub(crate) fn validate_account_chain(
     conn: &Connection,
     account_id: i64,
 ) -> rusqlite::Result<Vec<ValidationError>> {
