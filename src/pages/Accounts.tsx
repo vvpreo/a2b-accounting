@@ -983,10 +983,10 @@ function ActivityStrip({
     return runs;
   }, [cells]);
 
-  // Run width in the months row: count * 26px (cells) + (count - 1) * 2px
-  // (inter-cell flex gap) = 28 * count - 2.
+  // Run width in the months row: count * 39px (cells) + (count - 1) * 2px
+  // (inter-cell flex gap) = 41 * count - 2.
   function runWidthPx(count: number): number {
-    return 28 * count - 2;
+    return 41 * count - 2;
   }
 
   if (!hasTransactions) {

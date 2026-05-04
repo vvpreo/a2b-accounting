@@ -851,7 +851,7 @@ td.empty {
    "abandoned" below the strip when the cursor is elsewhere. */
 .account-strip-row td.account-strip-cell {
   position: relative;
-  height: 33px;
+  height: 45px;
   /* Override the 8px padding-bottom from `.account-strip-row td`: we
      don't need a reserved gutter since the scrollbar is overlay-style. */
   padding-bottom: 0;
@@ -871,6 +871,10 @@ td.empty {
   overflow-x: auto;
   overflow-y: hidden;
   display: flex;
+  align-items: flex-start;
+  /* Reserve a gutter below the months row so the on-hover scrollbar
+     sits in this padding area instead of overlaying the cells. */
+  padding-bottom: 12px;
   /* Firefox: completely hidden at rest; on hover we re-enable the bar. */
   scrollbar-width: none;
 }
@@ -969,12 +973,12 @@ td.empty {
    break reads as a clear gap. */
 .activity-strip-year-gap {
   display: inline-block;
-  width: 26px;
+  width: 39px;
   flex-shrink: 0;
 }
 
 .activity-cell {
-  width: 26px;
+  width: 39px;
   height: 18px;
   border-radius: 3px;
   border: 1.5px solid transparent;
