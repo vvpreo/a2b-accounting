@@ -14,8 +14,10 @@
 //!     are sent out to Family / Savings / Vacation, plus a few small misc spends.
 //!   - Family  ("Семейный счёт"): receives the monthly transfer from Salary
 //!     and occasional gifts; carries the bulk of recurring household expenses.
-//!   - Savings ("Сберегательный счёт"): receive-only, gets a fixed monthly
-//!     deposit from Salary. No outgoing activity.
+//!   - Savings ("Сберегательный счёт"): receive-only, opened ~6 months
+//!     after the Family account. Funded sporadically (roughly once per
+//!     quarter) with variable amounts to mimic undisciplined saving
+//!     behaviour. No outgoing activity.
 //!   - Vacation ("На отпуск"): receive-only, opened ~8 months ago. Funded by
 //!     redistributing a slice of the Salary→Family transfer into a new
 //!     Salary→Vacation transfer of the same total magnitude — net outflow
@@ -78,10 +80,21 @@ const ACCOUNTS: &[AccountSpec] = &[
     },
 ];
 
-// Fixed monthly internal transfers — kept as plain debits/credits with no
-// category so they collapse together in the report's "Без категории" line.
+// Fixed monthly internal transfer to Family — kept as plain debits/credits
+// with no category so they collapse together in the report's "Без категории"
+// line.
 const TRANSFER_TO_FAMILY_USD: u32 = 3_500;
-const TRANSFER_TO_SAVINGS_USD: u32 = 1_000;
+// Savings transfers are deliberately irregular: each active month has a
+// 1-in-3 chance of a transfer landing, with the amount drawn from a wide
+// range. Demos undisciplined saving — sometimes nothing for a few months,
+// sometimes back-to-back contributions of varying size.
+const SAVINGS_TRANSFER_CHANCE_NUM: u32 = 1;
+const SAVINGS_TRANSFER_CHANCE_DEN: u32 = 3;
+const SAVINGS_TRANSFER_LO_USD: u32 = 500;
+const SAVINGS_TRANSFER_HI_USD: u32 = 1_500;
+// The Savings account opens this many months after the Family account.
+// Anchor month = `start + SAVINGS_AGE_OFFSET_MONTHS`.
+const SAVINGS_AGE_OFFSET_MONTHS: u32 = 6;
 // Vacation transfer: a new outflow from Salary that didn't exist before the
 // account opened. Salary inflow comfortably covers the existing transfers
 // plus this one, so adding it doesn't risk underflowing any account.
@@ -359,6 +372,13 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         .with_day(1)
         .unwrap();
 
+    // The Savings account opens `SAVINGS_AGE_OFFSET_MONTHS` after the Family
+    // account (which is anchored at `start`). Months strictly before this
+    // anchor produce no savings transfer at all.
+    let savings_start = start
+        .checked_add_months(Months::new(SAVINGS_AGE_OFFSET_MONTHS))
+        .unwrap();
+
     // Opening balance on the family account, posted on the very first day of
     // the seed range so it precedes every other transaction. Without it, the
     // family balance would briefly dip below zero whenever a month's expenses
@@ -443,28 +463,9 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             transfer_tag: Some(tag_family),
         });
 
-        // Day 3: salary → savings.
-        let tag_savings = format!("salary->savings@{y}-{m:02}");
-        out.push(TxnSpec {
-            account: AccountKind::Salary,
-            date: safe_date(y, m, 3),
-            credit_minor: 0,
-            debit_minor: usd(TRANSFER_TO_SAVINGS_USD),
-            categorization: Categorization::None,
-            peer: Some("Сберегательный счёт"),
-            bank_description: Some("Перевод на сберегательный счёт"),
-            transfer_tag: Some(tag_savings.clone()),
-        });
-        out.push(TxnSpec {
-            account: AccountKind::Savings,
-            date: safe_date(y, m, 3),
-            credit_minor: usd(TRANSFER_TO_SAVINGS_USD),
-            debit_minor: 0,
-            categorization: Categorization::None,
-            peer: Some("Зарплатный счёт"),
-            bank_description: Some("Перевод с зарплатного счёта"),
-            transfer_tag: Some(tag_savings),
-        });
+        // (Salary → Savings is now sporadic and emitted at the end of the
+        // month loop so its rng calls don't shift the existing per-month
+        // randomness for family/multi-split flows.)
 
         // Day 4: salary → vacation. Only emitted while the vacation account
         // is active; before that it didn't exist yet.
@@ -929,6 +930,41 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("Супермаркет с доставкой"),
                 bank_description: Some("Заказ + доставка"),
                 transfer_tag: None,
+            });
+        }
+
+        // Sporadic Salary → Savings transfer. Placed at the tail of the
+        // month so the new rng calls don't shift earlier per-month
+        // randomness; the eventual sort_by_date still pins it to day 3 in
+        // the chronological order downstream.
+        if month_start >= savings_start
+            && rng.chance(SAVINGS_TRANSFER_CHANCE_NUM, SAVINGS_TRANSFER_CHANCE_DEN)
+        {
+            let amount = usd_from_range(
+                &mut rng,
+                SAVINGS_TRANSFER_LO_USD,
+                SAVINGS_TRANSFER_HI_USD,
+            );
+            let tag_savings = format!("salary->savings@{y}-{m:02}");
+            out.push(TxnSpec {
+                account: AccountKind::Salary,
+                date: safe_date(y, m, 3),
+                credit_minor: 0,
+                debit_minor: amount,
+                categorization: Categorization::None,
+                peer: Some("Сберегательный счёт"),
+                bank_description: Some("Перевод на сберегательный счёт"),
+                transfer_tag: Some(tag_savings.clone()),
+            });
+            out.push(TxnSpec {
+                account: AccountKind::Savings,
+                date: safe_date(y, m, 3),
+                credit_minor: amount,
+                debit_minor: 0,
+                categorization: Categorization::None,
+                peer: Some("Зарплатный счёт"),
+                bank_description: Some("Перевод с зарплатного счёта"),
+                transfer_tag: Some(tag_savings),
             });
         }
     }
@@ -1474,15 +1510,16 @@ mod tests {
             .unwrap();
         assert_eq!(n_views, 1);
 
-        // Family + savings transfers run across the full window; the vacation
-        // transfer only fires for `VACATION_ACTIVE_MONTHS` (8) of those. So:
-        // (family + savings) × 37 months + vacation × 8 = 74 + 8 = 82.
+        // Family transfer fires every month (37); vacation fires for the
+        // last `VACATION_ACTIVE_MONTHS` (8); savings is sporadic (1-in-3
+        // chance over 31 active months — deterministic 10 with seed
+        // 0xCAFEBABE). Total: 37 + 8 + 10 = 55.
         let n_links: i64 = conn
             .query_row("SELECT COUNT(*) FROM transaction_links", [], |r| r.get(0))
             .unwrap();
         assert_eq!(
-            n_links, 82,
-            "expected 2 always-on transfer pairs × 37 months + 1 vacation pair × 8, got {n_links}"
+            n_links, 55,
+            "expected 37 family + 8 vacation + 10 sporadic savings transfer pairs, got {n_links}"
         );
 
         // Every link must connect two transactions on *different* accounts.
@@ -1534,11 +1571,13 @@ mod tests {
         // multi-splits + monthly transfer-in.
         let family = by_name.get("Семейный счёт").copied().unwrap_or(0);
         assert!(family > 700, "Семейный счёт expected lots of txns, got {family}");
-        // Savings: exactly one transfer-in per month over the full window.
+        // Savings: sporadic transfers (1-in-3 chance per active month over
+        // 31 months ≈ 10). Anchored by the deterministic seed 0xCAFEBABE
+        // to exactly 10.
         let savings = by_name.get("Сберегательный счёт").copied().unwrap_or(0);
         assert_eq!(
-            savings, 37,
-            "Сберегательный счёт expected one transfer per month over 36 months + current = 37, got {savings}"
+            savings, 10,
+            "Сберегательный счёт expected ~10 sporadic transfers (deterministic), got {savings}"
         );
         // Vacation: one transfer-in for each of the active months (8 by
         // default — see VACATION_ACTIVE_MONTHS).
