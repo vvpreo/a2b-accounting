@@ -3,6 +3,12 @@ import { createPortal } from "react-dom";
 
 import { useT, useTPlural } from "../i18n";
 import {
+  ACCOUNT_PRESETS,
+  AccountPreset,
+  ImportFormat,
+  findPresetByName,
+} from "../lib/account-presets";
+import {
   Account,
   ImportResult,
   PreviewRowIssue,
@@ -12,7 +18,7 @@ import {
   listAccounts,
   validateImportPreview,
 } from "../lib/api";
-import { parseTransactionsCsv } from "../lib/csv";
+import { DEFAULT_FORMAT_ID, parseByFormat } from "../lib/import-formats";
 import { formatMoney } from "../lib/money";
 
 type IssueFilter = "all" | PreviewRowIssueKind;
@@ -51,6 +57,9 @@ export function ImportDialog({
     initialAccountId ?? null,
   );
   const [defaultOffset, setDefaultOffset] = useState<string>(systemOffset());
+  const [formatId, setFormatId] = useState<string>(DEFAULT_FORMAT_ID);
+  const [formatTouched, setFormatTouched] = useState(false);
+  const [offsetTouched, setOffsetTouched] = useState(false);
   const [filename, setFilename] = useState<string | null>(null);
   const [rawText, setRawText] = useState<string>(() => t("import.pasteExample"));
   const [submitting, setSubmitting] = useState(false);
@@ -71,12 +80,51 @@ export function ImportDialog({
       .catch((e) => setError(String(e)));
   }, []);
 
+  const selectedAccount = useMemo(
+    () => accounts.find((a) => a.id === accountId) ?? null,
+    [accounts, accountId],
+  );
+
+  const selectedPreset: AccountPreset | null = useMemo(() => {
+    if (!selectedAccount) return null;
+    return findPresetByName(selectedAccount.bank) ?? null;
+  }, [selectedAccount]);
+
+  const availableFormats: ImportFormat[] = useMemo(() => {
+    if (selectedPreset) return selectedPreset.supportedFormats;
+    return ACCOUNT_PRESETS[0].supportedFormats;
+  }, [selectedPreset]);
+
+  // When the user picks a different account, follow that preset's defaults
+  // (preferred format + bank's local timezone) — but only until the user
+  // overrides them manually. After that we keep their explicit choice.
+  useEffect(() => {
+    if (!selectedPreset) return;
+    if (!formatTouched) {
+      const preferred = selectedPreset.supportedFormats[0]?.id;
+      if (preferred && preferred !== formatId) setFormatId(preferred);
+    }
+    if (!offsetTouched && selectedPreset.defaultTimezoneOffset) {
+      setDefaultOffset(selectedPreset.defaultTimezoneOffset);
+    }
+  }, [selectedPreset, formatTouched, offsetTouched]);
+
+  // If the current format isn't actually supported by the chosen preset
+  // (stale state after switching accounts), fall back to the preset's first
+  // format. Doesn't count as a manual override.
+  useEffect(() => {
+    if (availableFormats.length === 0) return;
+    if (!availableFormats.some((f) => f.id === formatId)) {
+      setFormatId(availableFormats[0].id);
+    }
+  }, [availableFormats, formatId]);
+
   const parsed = useMemo(() => {
     if (!rawText.trim()) {
       return { rows: [] as TxnImportRow[], errors: [] as string[] };
     }
-    return parseTransactionsCsv(rawText, t);
-  }, [rawText, t]);
+    return parseByFormat(formatId, rawText, t);
+  }, [rawText, t, formatId]);
 
   function onFileChange(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -246,7 +294,10 @@ export function ImportDialog({
                   <span>{t("import.defaultOffset")}</span>
                   <select
                     value={defaultOffset}
-                    onChange={(e) => setDefaultOffset(e.target.value)}
+                    onChange={(e) => {
+                      setOffsetTouched(true);
+                      setDefaultOffset(e.target.value);
+                    }}
                   >
                     {OFFSET_OPTIONS.map((o) => (
                       <option key={o} value={o}>
@@ -255,9 +306,32 @@ export function ImportDialog({
                     ))}
                   </select>
                 </label>
+
+                {availableFormats.length > 1 && (
+                  <label className="import-field">
+                    <span>{t("import.format")}</span>
+                    <select
+                      value={formatId}
+                      onChange={(e) => {
+                        setFormatTouched(true);
+                        setFormatId(e.target.value);
+                      }}
+                    >
+                      {availableFormats.map((f) => (
+                        <option key={f.id} value={f.id}>
+                          {formatLabel(f, t)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
               </div>
 
-              <p className="hint">{t("import.hintColumns")}</p>
+              <p className="hint">
+                {formatId === "kasikorn-csv-v1"
+                  ? t("import.hintKasikorn")
+                  : t("import.hintColumns")}
+              </p>
 
               <label className="file-input-label">
                 <input
@@ -521,4 +595,15 @@ function systemOffset(): string {
   const mm = String(abs % 60).padStart(2, "0");
   const formatted = `${sign}${hh}:${mm}`;
   return OFFSET_OPTIONS.includes(formatted) ? formatted : "+00:00";
+}
+
+function formatLabel(
+  f: ImportFormat,
+  t: (key: string, params?: Record<string, string | number>) => string,
+): string {
+  // Translations live under "import.formats.<id>"; fall back to the registry
+  // name when a translation isn't defined yet.
+  const key = `import.formats.${f.id}`;
+  const localized = t(key);
+  return localized === key ? f.name : localized;
 }

@@ -7,6 +7,11 @@ export interface AccountPreset {
   id: string;
   name: string;
   defaultCurrency: string;
+  /** Optional default UTC offset to preselect in the import wizard when the
+   *  user is importing into an account of this preset. Bank statements rarely
+   *  include the timezone explicitly, so the preset declares the bank's local
+   *  zone. ImportDialog falls back to the system offset when omitted. */
+  defaultTimezoneOffset?: string;
   supportedFormats: ImportFormat[];
 }
 
@@ -18,6 +23,10 @@ export const IMPORT_FORMATS: Record<string, ImportFormat> = {
   "bangkok-bank-csv-v1": {
     id: "bangkok-bank-csv-v1",
     name: "Bangkok Bank statement CSV",
+  },
+  "kasikorn-csv-v1": {
+    id: "kasikorn-csv-v1",
+    name: "Kasikorn statement CSV (K-DEPOSIT)",
   },
 };
 
@@ -32,8 +41,19 @@ export const ACCOUNT_PRESETS: AccountPreset[] = [
     id: "bangkok-bank",
     name: "Bangkok Bank",
     defaultCurrency: "THB",
+    defaultTimezoneOffset: "+07:00",
     supportedFormats: [
       IMPORT_FORMATS["bangkok-bank-csv-v1"],
+      IMPORT_FORMATS["generic-csv-v1"],
+    ],
+  },
+  {
+    id: "kasikorn",
+    name: "Kasikorn Bank",
+    defaultCurrency: "THB",
+    defaultTimezoneOffset: "+07:00",
+    supportedFormats: [
+      IMPORT_FORMATS["kasikorn-csv-v1"],
       IMPORT_FORMATS["generic-csv-v1"],
     ],
   },

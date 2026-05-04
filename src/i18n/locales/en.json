@@ -166,6 +166,13 @@
     "account": "Account",
     "noAccounts": "Create an account first",
     "defaultOffset": "Default UTC offset",
+    "format": "File format",
+    "formats": {
+      "generic-csv-v1": "Universal CSV",
+      "bangkok-bank-csv-v1": "Bangkok Bank statement CSV",
+      "kasikorn-csv-v1": "Kasikorn (KBank) K-DEPOSIT statement CSV"
+    },
+    "hintKasikorn": "Upload the K-DEPOSIT export (resultFile_*.csv) as-is — the account-info header is skipped automatically. Date and time are in Thailand local time; the UTC offset comes from the field above (defaults to +07:00 for the Kasikorn preset).",
     "pastePlaceholder": "Paste CSV content here — same columns as the file",
     "pasteExample": "occurred_at,credit,debit,balance,peer,bank_description,comment\n2026-04-01T10:15:00,,150.00,12340.50,Coffee shop,Morning coffee,\n",
     "buttonChooseFile": "Choose CSV file",

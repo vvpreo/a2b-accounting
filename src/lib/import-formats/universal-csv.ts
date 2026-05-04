@@ -1,16 +1,7 @@
 import Papa from "papaparse";
 
-import type { TxnImportRow } from "./api";
-
-export interface CsvParseResult {
-  rows: TxnImportRow[];
-  errors: string[];
-}
-
-type Translate = (
-  key: string,
-  params?: Record<string, string | number>,
-) => string;
+import type { TxnImportRow } from "../api";
+import type { CsvParseResult, ImportFormatPlugin, Translate } from "./types";
 
 function pickString(r: Record<string, string>, ...keys: string[]): string {
   for (const k of keys) {
@@ -40,7 +31,7 @@ function detectDelimiter(text: string): string | null {
   return null;
 }
 
-export function parseTransactionsCsv(
+export function parseUniversalCsv(
   text: string,
   t: Translate,
 ): CsvParseResult {
@@ -105,3 +96,8 @@ export function parseTransactionsCsv(
 
   return { rows, errors };
 }
+
+export const genericCsvV1: ImportFormatPlugin = {
+  id: "generic-csv-v1",
+  parse: parseUniversalCsv,
+};

@@ -170,6 +170,13 @@
     "account": "Счёт",
     "noAccounts": "Сначала создайте счёт",
     "defaultOffset": "Дефолтный offset от UTC",
+    "format": "Формат файла",
+    "formats": {
+      "generic-csv-v1": "Универсальный CSV",
+      "bangkok-bank-csv-v1": "Bangkok Bank — выписка CSV",
+      "kasikorn-csv-v1": "Kasikorn (KBank) — выписка K-DEPOSIT CSV"
+    },
+    "hintKasikorn": "Загрузите выгрузку K-DEPOSIT (resultFile_*.csv) как есть — шапка с реквизитами счёта будет пропущена автоматически. Дата и время — в локальном тайском времени; offset берётся из выбранного выше поля (по умолчанию +07:00 для пресета Kasikorn).",
     "pastePlaceholder": "Вставьте CSV-содержимое сюда — те же колонки, что и в файле",
     "pasteExample": "occurred_at,credit,debit,balance,peer,bank_description,comment\n2026-04-01T10:15:00,,150.00,12340.50,Кофейня,Утренний кофе,\n",
     "buttonChooseFile": "Выбрать CSV-файл",

@@ -16,6 +16,10 @@ dist-ssr
 /data/
 .direnv/
 
+# Real bank-statement samples — never commit (PII). Existing generic test
+# samples in samples/*.csv stay tracked; only per-bank subfolders are ignored.
+/samples/*/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

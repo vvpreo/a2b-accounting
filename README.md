@@ -91,6 +91,7 @@ open "/Applications/A2B Finances.app"
 - Привязка транзакции к категориям — `transaction_categories(transaction_id, category_id, share_minor, position)`. Сумма долей `≤` сумме транзакции; разница — виртуальная «Без категории», вычисляется на лету. Атомарная замена через `set_transaction_categories`.
 - Связи переводов между своими счетами — `transaction_links(txn_a_id, txn_b_id)`. Хранятся каноничной парой `txn_a_id < txn_b_id`, каждая транзакция участвует максимум в одной связи. Бэкенд (`link_transactions`) проверяет: разные счета, противоположное направление (одна credit, другая debit), нет других существующих связей. Категории связанной транзакции остаются как есть. Отчёт исключает транзакции из агрегации только если *обе стороны* связи попали в его выбор счетов и диапазон дат — иначе видимая сторона учитывается обычным образом.
 - Состояние окна (позиция, размер, maximized, fullscreen) сохраняется между запусками плагином `tauri-plugin-window-state`.
+- Импорт построен поверх **универсального CSV** (`occurred_at,credit,debit,balance,peer,bank_description,comment`). Под каждый банк-пресет регистрируется плагин в [src/lib/import-formats/](src/lib/import-formats/), который конвертирует свою выгрузку (CSV/XLS/PDF) в универсальный CSV — дальше работает общий конвейер валидации/превью. Это держит всю логику дубликатов и проверки цепочки балансов в одном месте и делает тесты парсеров тривиальной строковой сверкой.
 - i18n — свой Context на React + JSON-файлы в [src/i18n/locales/](src/i18n/locales/). Стартовые языки: `ru`, `en`. Default = системный язык через `navigator.language`, fallback — `en`. Новый язык = новый JSON-файл + запись в `LANGUAGES`.
 
 ## Data Model
@@ -144,11 +145,16 @@ finances-v2/
 │   │       └── en.json               английские переводы
 │   ├── lib/
 │   │   ├── api.ts                    типизированные обёртки над invoke
-│   │   ├── account-presets.ts        пресеты счетов (банк + валюта по умолчанию)
+│   │   ├── account-presets.ts        пресеты банков (валюта по умолчанию, дефолтный TZ-offset, список поддерживаемых форматов выгрузок)
 │   │   ├── colors.ts                 палитра категорий + генерация оттенков из родительского hue
 │   │   ├── category-tree.ts          buildTree/flattenTree (общая утилита для Categories.tsx и пикера)
 │   │   ├── currencies.ts             справочник валют (ISO-коды + крипта)
-│   │   ├── csv.ts                    парсер CSV через papaparse
+│   │   ├── import-formats/           реестр парсеров выгрузок (плагины формата)
+│   │   │   ├── index.ts                    реестр + parseByFormat(formatId, text, t)
+│   │   │   ├── types.ts                    общие типы (CsvParseResult, ImportFormatPlugin, Translate)
+│   │   │   ├── universal-csv.ts            generic-csv-v1: универсальный CSV через papaparse
+│   │   │   ├── kasikorn-csv-v1.ts          Kasikorn (KBank): bank CSV → universal CSV → universal-csv
+│   │   │   └── bangkok-bank-csv-v1.ts      Bangkok Bank (BBL): bank CSV → universal CSV → universal-csv
 │   │   ├── distribution.ts           equalSplit/addEqualToCategorized/setShareAt и т.д. — чистая математика долей в копейках
 │   │   └── money.ts                  formatMoney + parseMoneyToMinor + formatMinorAsMoney
 │   └── pages/
@@ -187,7 +193,9 @@ finances-v2/
 ├── scripts/
 │   ├── dev.sh                        запуск dev (проверяет FINANCES_DATA_DIR, нормализует в абсолют)
 │   └── build.sh                      релизная сборка
-├── samples/                          примеры CSV (валидная цепочка / разрыв баланса)
+├── samples/                          примеры выгрузок (для ручного теста импорта)
+│                                     структура: samples/<preset-id>/<format-id>/<filename>
+│                                     — файлы реальных банковских выгрузок не коммитятся (PII)
 ├── docs/plans/                       планы крупных фич
 ├── TODO.md                           очередь задач
 └── .envrc                            FINANCES_DATA_DIR="$(pwd)/data" (direnv)
@@ -213,10 +221,35 @@ cd src-tauri && cargo test --lib
 ```
 55 юнит-тестов покрывают: парсинг/форматирование денег, идемпотентность миграций, FK-каскад, CHECK-constraint, валидацию цепочки балансов, поведение категорий (CHECK на kind, UNIQUE сиблингов, каскадное удаление) и привязок транзакций к категориям (kind-матч, инвариант суммы, атомарная замена, оба каскада).
 
-Фронтенд — только tsc-проверка через `npm run build`.
+Фронтенд — `npm test` (Vitest) + tsc-проверка через `npm run build`. Тесты парсеров банковских выгрузок держат фикстуры **inline** в коде теста: реальные выгрузки не коммитятся, поэтому привязывать тесты к файлам в `samples/` нельзя.
 
 ### Ручная проверка импорта
-В папке `samples/` есть CSV-сэмплы — валидная цепочка и цепочка с разрывом баланса. Используй их через мастер импорта на вкладке «Транзакции».
+В папке `samples/` лежат сэмплы — валидная цепочка / разрыв баланса для generic-формата, плюс по подпапке на каждый банковский пресет (`samples/<preset-id>/<format-id>/`). Реальные банковские выгрузки в репозиторий **не комитятся** (содержат PII) — кладите свои локально, в коммит они не должны попасть.
+
+### Поддерживаемые форматы выгрузок
+
+| Пресет | Format ID | Источник |
+|---|---|---|
+| Generic | `generic-csv-v1` | Любой CSV в нашем универсальном формате |
+| Bangkok Bank | `bangkok-bank-csv-v1` | Выгрузка `MyDownLoad*.csv` из BBL iBanking / Bualuang mBanking |
+| Kasikorn Bank | `kasikorn-csv-v1` | Выгрузка K-DEPOSIT `resultFile_*.csv` из K PLUS / KBank web |
+
+Для **Kasikorn** парсер автоматически:
+- пропускает 12 строк шапки (реквизиты, период, итоги) и строку `Beginning Balance`;
+- нормализует числа `"90,000.00"` → `90000.00`;
+- разворачивает дату `DD-MM-YY` в `YYYY-MM-DD` (XXI век);
+- собирает `bank_description` из `Description · Channel · Details`;
+- извлекает `peer` из `Details` (`From <…>` / `To <…>` / `Paid for Ref X#### <…>`); для системных `Ref Code …` — `peer` пустой.
+
+Для **Bangkok Bank** парсер автоматически:
+- пропускает шапку (Account/Card numbers, Ledger/Available Balance), строку `Total` и Disclaimer;
+- нормализует числа `"12,030.00"` → `12030.00`;
+- парсит `"DD MMM YYYY HH:MM"` (англ. месяцы, e.g. `27 Apr 2026 11:50`) → `YYYY-MM-DDTHH:MM:00`;
+- разворачивает порядок строк (BBL экспортирует от новых к старым) — итоговый universal CSV в хронологическом порядке;
+- собирает `bank_description` из `Description · Channel` (e.g. `Payment for Goods /Services · MOB`);
+- `peer` оставляет пустым — выгрузка не содержит контрагента.
+
+Time-zone offset выгрузка не указывает; ImportDialog подставляет дефолт из пресета (`+07:00` для Kasikorn/Bangkok Bank).
 
 ### CSV-формат импорта
 ```
@@ -243,7 +276,7 @@ occurred_at,credit,debit,balance,peer,bank_description,comment
 ## Development
 
 - **Node.js** ≥ 20, **Rust** stable через `rustup`.
-- Тесты Rust: `cd src-tauri && cargo test --lib`. Для фронта пока только tsc-проверка через `npm run build`.
+- Тесты Rust: `cd src-tauri && cargo test --lib`. Тесты фронта: `npm test` (Vitest) + tsc-проверка через `npm run build`.
 - Нативные JS-диалоги (`window.confirm`, `window.alert`, `window.prompt`) в Tauri webview не работают — используем инлайн-подтверждения в UI.
 - Деньги никогда не ходят через `number` с плавающей точкой — только строки `"123.45"` на границе и `i64` копейки внутри.
 - Действия (создать счёт, импортировать транзакции) живут в шапке соответствующего экрана — глобального тулбара больше нет.
