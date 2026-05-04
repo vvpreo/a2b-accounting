@@ -1014,11 +1014,32 @@ td.empty {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  /* Reset button-tag defaults so a `<button class="activity-cell">` looks
+     identical to a `<span class="activity-cell">` — the strip mixes both
+     (clickable cells become buttons; pre_account placeholders stay spans). */
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  padding: 0;
+  font-family: inherit;
   font-size: 10px;
   font-weight: 600;
   line-height: 1;
   color: #18181b;
   user-select: none;
+}
+
+button.activity-cell {
+  cursor: pointer;
+}
+
+button.activity-cell:hover {
+  filter: brightness(0.92);
+}
+
+button.activity-cell:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 1px;
 }
 
 /* Months strictly before the account's first transaction: render an
@@ -1035,10 +1056,6 @@ td.empty {
   background: #d4d4d8;
 }
 
-.activity-cell--incomplete {
-  background: #facc15;
-}
-
 .activity-cell--complete {
   background: #22c55e;
 }
@@ -1049,13 +1066,18 @@ td.empty {
   border-color: #18181b;
 }
 
-/* Error border overrides anchor color (red wins regardless of state). */
+/* Error fill: month contains a balance-chain break. Overrides any
+   data-completeness fill so the broken month stands out regardless of
+   how many transactions are in it. The anchor border (if present) is
+   still visible on top. White text keeps the month label legible on
+   the red background. */
 .activity-cell--error {
-  border-color: #dc2626;
+  background: #dc2626;
+  color: #ffffff;
 }
 
 /* Dashed style is applied independently of color: the line can be
-   anchored-black, error-red or transparent (current month). */
+   anchored-black or transparent (current month). */
 .activity-cell--dashed {
   border-style: dashed;
 }
@@ -1240,6 +1262,90 @@ td.empty {
 
 .modal-footer-left {
   margin-right: auto;
+}
+
+/* Activity-strip legend modal: a how-to-read reference accessible from
+   the filter-bar info button on the Accounts page. Shows real
+   .activity-cell samples next to a description for each fill state and
+   border modifier so users can map the screenshot they're looking at
+   onto the strip in the table. */
+.modal--legend {
+  width: min(560px, 90vw);
+}
+
+.legend-intro {
+  margin: 0;
+  font-size: 13px;
+  color: #52525b;
+  line-height: 1.45;
+}
+
+.legend-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.legend-section h4 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #71717a;
+}
+
+.legend-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.legend-list li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Wraps the sample cell so the pre_account (transparent) variant still
+   has a faint outline indicating "this is a cell". Other variants
+   benefit from the wrapper too — it gives them a consistent column
+   width so descriptions align vertically. */
+.legend-cell-frame {
+  flex-shrink: 0;
+  width: 41px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed transparent;
+  border-radius: 3px;
+}
+
+.legend-list li:first-child .legend-cell-frame {
+  border-color: #d4d4d8;
+}
+
+.legend-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.legend-text strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: #18181b;
+}
+
+.legend-text span {
+  font-size: 12px;
+  color: #52525b;
+  line-height: 1.4;
 }
 
 .delete-confirm {
@@ -1585,6 +1691,31 @@ code {
   height: 32px;
 }
 
+.filter-bar-info {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid #d4d4d8;
+  border-radius: 50%;
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  font-style: italic;
+  color: #52525b;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+
+.filter-bar-info:hover {
+  background: #f1f1f4;
+  color: #18181b;
+  border-color: #a1a1aa;
+}
+
 .filter-field {
   display: flex;
   flex-direction: column;
@@ -1653,6 +1784,15 @@ code {
     background: #18181b;
     border-color: #3f3f46;
     color: inherit;
+  }
+  .filter-bar-info {
+    border-color: #3f3f46;
+    color: #a1a1aa;
+  }
+  .filter-bar-info:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: #f4f4f5;
+    border-color: #52525b;
   }
 }
 
@@ -2329,6 +2469,23 @@ code {
 
   .account-edit-btn:hover {
     background: rgba(255, 255, 255, 0.06);
+  }
+
+  .legend-intro,
+  .legend-text span {
+    color: #a1a1aa;
+  }
+
+  .legend-section h4 {
+    color: #a1a1aa;
+  }
+
+  .legend-text strong {
+    color: #f4f4f5;
+  }
+
+  .legend-list li:first-child .legend-cell-frame {
+    border-color: #3f3f46;
   }
 
   .categories-color-tab {

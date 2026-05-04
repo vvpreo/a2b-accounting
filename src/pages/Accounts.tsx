@@ -203,9 +203,13 @@ function AccountFields({
 interface Props {
   onCreateAccount: () => void;
   version: number;
+  /// Click handler for individual cells in the activity strip. When provided,
+  /// each non-`pre_account` cell becomes a button that asks the host to jump
+  /// to the Transactions tab pre-filtered to this account and month.
+  onOpenMonth?: (accountId: number, yearMonth: string) => void;
 }
 
-export function AccountsPage({ onCreateAccount, version }: Props) {
+export function AccountsPage({ onCreateAccount, version, onOpenMonth }: Props) {
   const t = useT();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -224,6 +228,7 @@ export function AccountsPage({ onCreateAccount, version }: Props) {
   // there are no transactions at all).
   const [allTimeCount, setAllTimeCount] = useState<number | null>(null);
   const [filtersExpanded, setFiltersExpanded] = useState(true);
+  const [legendOpen, setLegendOpen] = useState(false);
 
   // All ActivityStrip viewports scroll together. Each strip registers its
   // scroll-viewport DOM node here on mount; the scroll handler mirrors the
@@ -414,6 +419,15 @@ export function AccountsPage({ onCreateAccount, version }: Props) {
             </label>
             <button
               type="button"
+              className="filter-bar-info"
+              onClick={() => setLegendOpen(true)}
+              aria-label={t("accounts.menuLegend")}
+              title={t("accounts.menuLegend")}
+            >
+              i
+            </button>
+            <button
+              type="button"
               className="btn-primary filter-bar-action"
               onClick={onCreateAccount}
             >
@@ -478,11 +492,13 @@ export function AccountsPage({ onCreateAccount, version }: Props) {
                   <td className="account-strip-spacer" />
                   <td colSpan={5} className="account-strip-cell">
                     <ActivityStrip
+                      accountId={a.id}
                       cells={cellsByAccount.get(a.id) ?? []}
                       hasTransactions={latestByAccount.has(a.id)}
                       registerViewport={registerStripViewport}
                       unregisterViewport={unregisterStripViewport}
                       onScroll={handleStripScroll}
+                      onOpenMonth={onOpenMonth}
                     />
                   </td>
                 </tr>
@@ -506,7 +522,118 @@ export function AccountsPage({ onCreateAccount, version }: Props) {
           }}
         />
       )}
+
+      {legendOpen && <ActivityLegendModal onClose={() => setLegendOpen(false)} />}
     </section>
+  );
+}
+
+function ActivityLegendModal({ onClose }: { onClose: () => void }) {
+  const t = useT();
+  const fillItems: { key: string; cellClass: string; titleKey: string; bodyKey: string }[] = [
+    {
+      key: "pre_account",
+      cellClass: "activity-cell--pre_account",
+      titleKey: "accounts.activityStatus.pre_account",
+      bodyKey: "accounts.legendItems.preAccount",
+    },
+    {
+      key: "no_data",
+      cellClass: "activity-cell--no_data",
+      titleKey: "accounts.activityStatus.no_data",
+      bodyKey: "accounts.legendItems.noData",
+    },
+    {
+      key: "complete",
+      cellClass: "activity-cell--complete",
+      titleKey: "accounts.activityStatus.complete",
+      bodyKey: "accounts.legendItems.complete",
+    },
+    {
+      key: "error",
+      cellClass: "activity-cell--error",
+      titleKey: "accounts.legendItems.errorTitle",
+      bodyKey: "accounts.legendItems.error",
+    },
+  ];
+  // Border modifiers are shown layered on top of a "complete" fill — the most
+  // common base in the wild — so the legend reads like a real cell.
+  const borderItems: {
+    key: string;
+    extraClass: string;
+    titleKey: string;
+    bodyKey: string;
+  }[] = [
+    {
+      key: "anchored",
+      extraClass: "activity-cell--anchored",
+      titleKey: "accounts.legendItems.anchoredTitle",
+      bodyKey: "accounts.legendItems.anchored",
+    },
+    {
+      key: "dashed",
+      extraClass: "activity-cell--anchored activity-cell--dashed",
+      titleKey: "accounts.legendItems.dashedTitle",
+      bodyKey: "accounts.legendItems.dashed",
+    },
+  ];
+
+  return createPortal(
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal modal--legend" onClick={(e) => e.stopPropagation()}>
+        <header className="modal-header">
+          <h3>{t("accounts.legendTitle")}</h3>
+          <button
+            className="icon-btn"
+            onClick={onClose}
+            aria-label={t("common.close")}
+            type="button"
+          >
+            ×
+          </button>
+        </header>
+        <div className="modal-body">
+          <p className="legend-intro">{t("accounts.legendIntro")}</p>
+
+          <section className="legend-section">
+            <h4>{t("accounts.legendFillTitle")}</h4>
+            <ul className="legend-list">
+              {fillItems.map((item) => (
+                <li key={item.key}>
+                  <span className="legend-cell-frame">
+                    <span className={`activity-cell ${item.cellClass}`} />
+                  </span>
+                  <div className="legend-text">
+                    <strong>{t(item.titleKey)}</strong>
+                    <span>{t(item.bodyKey)}</span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          <section className="legend-section">
+            <h4>{t("accounts.legendBorderTitle")}</h4>
+            <ul className="legend-list">
+              {borderItems.map((item) => (
+                <li key={item.key}>
+                  <span className="legend-cell-frame">
+                    <span
+                      className={`activity-cell activity-cell--complete ${item.extraClass}`}
+                    />
+                  </span>
+                  <div className="legend-text">
+                    <strong>{t(item.titleKey)}</strong>
+                    <span>{t(item.bodyKey)}</span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </section>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -904,17 +1031,21 @@ function LastTransactionCell({
 }
 
 function ActivityStrip({
+  accountId,
   cells,
   hasTransactions,
   registerViewport,
   unregisterViewport,
   onScroll,
+  onOpenMonth,
 }: {
+  accountId: number;
   cells: AccountMonthCell[];
   hasTransactions: boolean;
   registerViewport: (el: HTMLDivElement) => void;
   unregisterViewport: (el: HTMLDivElement) => void;
   onScroll: (source: HTMLDivElement) => void;
+  onOpenMonth?: (accountId: number, yearMonth: string) => void;
 }) {
   const t = useT();
   const { locale } = useI18n();
@@ -1035,8 +1166,8 @@ function ActivityStrip({
                     aria-hidden="true"
                   />
                 )}
-                <span
-                  className={[
+                {(() => {
+                  const className = [
                     "activity-cell",
                     `activity-cell--${c.status}`,
                     // Anchor border (black) — only meaningful on a non-pre cell.
@@ -1047,12 +1178,28 @@ function ActivityStrip({
                     c.uncategorizedCorrecting ? "activity-cell--dashed" : "",
                   ]
                     .filter(Boolean)
-                    .join(" ")}
-                  title={isPreAccount ? undefined : tooltip(c)}
-                  aria-hidden={isPreAccount ? "true" : undefined}
-                >
-                  {isPreAccount ? "" : shortLabel(c)}
-                </span>
+                    .join(" ");
+                  if (isPreAccount) {
+                    return (
+                      <span
+                        className={className}
+                        aria-hidden="true"
+                      />
+                    );
+                  }
+                  // Real cells become buttons so a click jumps the user to
+                  // Transactions filtered to this account + month.
+                  return (
+                    <button
+                      type="button"
+                      className={className}
+                      title={tooltip(c)}
+                      onClick={() => onOpenMonth?.(accountId, c.yearMonth)}
+                    >
+                      {shortLabel(c)}
+                    </button>
+                  );
+                })()}
               </Fragment>
             );
           })}

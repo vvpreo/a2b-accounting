@@ -48,8 +48,7 @@
     "tableLastTxn": "Last transaction",
     "activityStatus": {
       "no_data": "No data",
-      "incomplete": "Incomplete",
-      "complete": "Complete",
+      "complete": "Has data",
       "pre_account": "Account did not exist yet"
     },
     "activityBalanceError": "Balance chain mismatch",
@@ -58,6 +57,22 @@
     "menuActivity": "Activity",
     "menuMonthsValue": "{count} mo.",
     "menuMonthsAll": "All time",
+    "menuLegend": "How to read the table",
+    "legendTitle": "How to read the monthly activity",
+    "legendIntro": "Each cell is one month. The fill colour reflects how complete the data is for that month; the border encodes special states.",
+    "legendFillTitle": "Cell fill",
+    "legendBorderTitle": "Cell border",
+    "legendItems": {
+      "preAccount": "Month before the account existed — the cell is empty.",
+      "noData": "No transactions for this month.",
+      "complete": "Transactions exist for this month — data is present.",
+      "anchoredTitle": "Black border — closed month",
+      "anchored": "Later transactions exist, so the chain continues past this month. The current month never gets this border.",
+      "errorTitle": "Balance chain break",
+      "error": "A transaction's balance in this month doesn't match the previous one — the chain is broken.",
+      "dashedTitle": "Dashed border — correcting entries",
+      "dashed": "Uncategorized correcting entries are present in this month and should be reviewed."
+    },
     "empty": "No accounts yet.",
     "actionDetails": "Details",
     "detailsTitle": "Account #{id}",

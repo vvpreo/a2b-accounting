@@ -16,9 +16,23 @@ function App() {
   // doesn't see a brief flash of the wrong tab.
   const [tab, setTab] = useState<Tab | null>(null);
   const [txnFilterAccountIds, setTxnFilterAccountIds] = useState<number[]>([]);
+  // One-shot navigation hint emitted when the user clicks a month cell on
+  // the Accounts tab: TransactionsPage consumes it on mount/update to apply
+  // the date range, then calls back to clear it so subsequent navigations
+  // (or manual filter changes) aren't overwritten by the same hint twice.
+  const [txnPendingMonth, setTxnPendingMonth] = useState<{
+    accountId: number;
+    yearMonth: string;
+  } | null>(null);
   const [creatingAccount, setCreatingAccount] = useState(false);
   const [importingTxns, setImportingTxns] = useState(false);
   const [accountsVersion, setAccountsVersion] = useState(0);
+
+  function openAccountMonthInTransactions(accountId: number, yearMonth: string) {
+    setTxnFilterAccountIds([accountId]);
+    setTxnPendingMonth({ accountId, yearMonth });
+    setTab("transactions");
+  }
 
   const [reportViews, setReportViews] = useState<ReportView[]>([]);
   const [reportViewsVersion, setReportViewsVersion] = useState(0);
@@ -73,6 +87,7 @@ function App() {
         <AccountsPage
           onCreateAccount={() => setCreatingAccount(true)}
           version={accountsVersion}
+          onOpenMonth={openAccountMonthInTransactions}
         />
       )}
       {tab === "transactions" && (
@@ -81,6 +96,8 @@ function App() {
           onChangeSelectedAccountIds={setTxnFilterAccountIds}
           version={accountsVersion}
           onImportTransactions={() => setImportingTxns(true)}
+          pendingMonthFilter={txnPendingMonth}
+          onPendingMonthFilterApplied={() => setTxnPendingMonth(null)}
         />
       )}
       {tab === "settings" && <SettingsPage />}

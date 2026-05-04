@@ -253,11 +253,7 @@ export function validateBalanceChain(
   return invoke<ValidationError[]>("validate_balance_chain", { accountId });
 }
 
-export type AccountMonthStatus =
-  | "pre_account"
-  | "no_data"
-  | "incomplete"
-  | "complete";
+export type AccountMonthStatus = "pre_account" | "no_data" | "complete";
 
 export interface AccountMonthCell {
   accountId: number;

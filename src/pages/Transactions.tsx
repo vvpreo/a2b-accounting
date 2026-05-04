@@ -73,6 +73,12 @@ interface Props {
   onChangeSelectedAccountIds: (ids: number[]) => void;
   version: number;
   onImportTransactions: () => void;
+  /// One-shot navigation hint. When set (typically right after the user clicks
+  /// a month cell on the Accounts tab), the page snaps its date filter to that
+  /// calendar month and then asks the host to clear the hint so the user can
+  /// freely change filters without the navigation re-applying.
+  pendingMonthFilter?: { accountId: number; yearMonth: string } | null;
+  onPendingMonthFilterApplied?: () => void;
 }
 
 function defaultDateFrom(): string {
@@ -100,6 +106,8 @@ export function TransactionsPage({
   onChangeSelectedAccountIds,
   version,
   onImportTransactions,
+  pendingMonthFilter,
+  onPendingMonthFilterApplied,
 }: Props) {
   const t = useT();
   const { locale } = useI18n();
@@ -220,6 +228,25 @@ export function TransactionsPage({
     }
     setAccountsInitialised(true);
   }, [accounts, accountsInitialised, selectedAccountIds, onChangeSelectedAccountIds]);
+
+  // Apply the one-shot month-navigation hint emitted by the Accounts tab:
+  // pin dateFrom/dateTo to the picked month, mark accounts as initialised so
+  // the auto-select-all branch above doesn't fight the host's per-account
+  // selection, then ask the host to clear the hint. The selectedAccountIds
+  // prop has already been narrowed to the clicked account on the host side.
+  useEffect(() => {
+    if (!pendingMonthFilter) return;
+    const [yStr, mStr] = pendingMonthFilter.yearMonth.split("-");
+    const y = Number(yStr);
+    const m = Number(mStr);
+    // `new Date(y, m, 0)` rolls back one day from the next month's first =
+    // last day of month m (m is 1-indexed here, which is what we need).
+    const lastDay = new Date(y, m, 0).getDate();
+    setDateFrom(`${pendingMonthFilter.yearMonth}-01`);
+    setDateTo(`${pendingMonthFilter.yearMonth}-${String(lastDay).padStart(2, "0")}`);
+    setAccountsInitialised(true);
+    onPendingMonthFilterApplied?.();
+  }, [pendingMonthFilter, onPendingMonthFilterApplied]);
 
   const scrollWrapRef = useRef<HTMLDivElement>(null);
   const theadRef = useRef<HTMLTableSectionElement>(null);

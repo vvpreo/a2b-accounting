@@ -313,6 +313,11 @@ struct TxnSpec {
     /// then verify how the report excludes such pairs without the user having
     /// to mark anything by hand. Non-transfer specs leave this `None`.
     transfer_tag: Option<String>,
+    /// Marks the row as a synthetic "correcting" entry — the kind import
+    /// produces when it can't reconcile a balance jump. Combined with
+    /// `Categorization::None` and no `transfer_tag`, this drives the dashed
+    /// border in the activity strip so the demo data exercises that visual.
+    is_correcting: bool,
 }
 
 const SHOPS: &[&str] = &["Перекрёсток", "Магнит", "Пятёрочка", "Лента", "Ашан"];
@@ -421,6 +426,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         peer: Some("Начальный остаток"),
         bank_description: Some("Начальный остаток на счёте"),
         transfer_tag: None,
+        is_correcting: false,
     });
 
     // Running total of the bachelor-period residual (paycheck minus monthly
@@ -446,6 +452,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("ООО \"Работодатель\""),
                 bank_description: Some("Заработная плата"),
                 transfer_tag: None,
+                is_correcting: false,
             });
             let expense = usd_from_range(
                 &mut bachelor_rng,
@@ -461,6 +468,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("Текущие расходы"),
                 bank_description: Some("Расходы за месяц"),
                 transfer_tag: None,
+                is_correcting: false,
             });
             bachelor_residual_minor += usd(5_000) - expense;
             continue;
@@ -479,6 +487,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             peer: Some("ООО \"Работодатель\""),
             bank_description: Some("Заработная плата"),
             transfer_tag: None,
+            is_correcting: false,
         });
 
         // Quarterly bonus on the 25th of Mar/Jun/Sep/Dec.
@@ -492,6 +501,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("ООО \"Работодатель\""),
                 bank_description: Some("Квартальная премия"),
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
 
@@ -517,6 +527,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             peer: Some("Семейный счёт"),
             bank_description: Some("Перевод на семейный счёт"),
             transfer_tag: Some(tag_family.clone()),
+            is_correcting: false,
         });
         out.push(TxnSpec {
             account: AccountKind::Family,
@@ -527,6 +538,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             peer: Some("Зарплатный счёт"),
             bank_description: Some("Перевод с зарплатного счёта"),
             transfer_tag: Some(tag_family),
+            is_correcting: false,
         });
 
         // (Salary → Savings is now sporadic and emitted at the end of the
@@ -546,6 +558,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("Счёт «На отпуск»"),
                 bank_description: Some("Перевод на отпускной счёт"),
                 transfer_tag: Some(tag_vacation.clone()),
+                is_correcting: false,
             });
             out.push(TxnSpec {
                 account: AccountKind::Vacation,
@@ -556,6 +569,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("Зарплатный счёт"),
                 bank_description: Some("Перевод с зарплатного счёта"),
                 transfer_tag: Some(tag_vacation),
+                is_correcting: false,
             });
         }
 
@@ -572,6 +586,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some(rng.pick(MISC)),
                 bank_description: None,
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
 
@@ -586,6 +601,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("Перевод от родителей"),
                 bank_description: None,
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
 
@@ -601,6 +617,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             peer: Some("Аренда квартиры"),
             bank_description: None,
             transfer_tag: None,
+            is_correcting: false,
         });
         out.push(TxnSpec {
             account: AccountKind::Family,
@@ -611,6 +628,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             peer: Some("ЖКХ"),
             bank_description: None,
             transfer_tag: None,
+            is_correcting: false,
         });
         out.push(TxnSpec {
             account: AccountKind::Family,
@@ -621,6 +639,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             peer: Some("Провайдер"),
             bank_description: None,
             transfer_tag: None,
+            is_correcting: false,
         });
         out.push(TxnSpec {
             account: AccountKind::Family,
@@ -631,6 +650,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             peer: Some("Транспортная карта"),
             bank_description: Some("Пополнение проездного"),
             transfer_tag: None,
+            is_correcting: false,
         });
         // Subscription rows alternate between "Музыка" and "Видео" so the
         // grandchild level under "Подписки" is visible in the demo report.
@@ -644,6 +664,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             peer: Some(rng.pick(SUBSCRIPTIONS)),
             bank_description: None,
             transfer_tag: None,
+            is_correcting: false,
         });
 
         // Cash withdrawal — kept *uncategorized* on purpose so every month has
@@ -657,6 +678,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             peer: Some("ATM"),
             bank_description: Some("Снятие наличных"),
             transfer_tag: None,
+            is_correcting: false,
         });
 
         // --- Variable groceries: 4 supermarket runs + maybe 1 farmer's market ---
@@ -671,6 +693,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some(rng.pick(SHOPS)),
                 bank_description: None,
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
         if rng.chance(2, 3) {
@@ -683,6 +706,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("Фермерский рынок"),
                 bank_description: None,
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
 
@@ -697,6 +721,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some(rng.pick(CAFES)),
                 bank_description: None,
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
 
@@ -711,6 +736,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some(rng.pick(DELIVERY)),
                 bank_description: None,
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
 
@@ -725,6 +751,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some(rng.pick(TAXI)),
                 bank_description: None,
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
 
@@ -739,6 +766,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some(rng.pick(PHARMACY)),
                 bank_description: None,
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
 
@@ -755,6 +783,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("Клиника"),
                 bank_description: Some("Приём врача"),
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
 
@@ -771,6 +800,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some(station),
                 bank_description: None,
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
 
@@ -785,6 +815,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some(rng.pick(CINEMAS)),
                 bank_description: None,
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
 
@@ -799,6 +830,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some(rng.pick(HOBBIES)),
                 bank_description: None,
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
 
@@ -813,6 +845,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some(rng.pick(CLOTHES)),
                 bank_description: None,
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
 
@@ -827,6 +860,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some(rng.pick(EDU)),
                 bank_description: None,
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
 
@@ -847,6 +881,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("Хозтовары для дома"),
                 bank_description: Some("Мелкий ремонт"),
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
         // Еда (group): generic food expense not fitting Магазины/Кафе/Доставка.
@@ -860,6 +895,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("Магазинчик у дома"),
                 bank_description: Some("Перекус"),
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
         // Транспорт (group): parking, tolls.
@@ -873,6 +909,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("Парковка"),
                 bank_description: None,
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
         // Здоровье (group): lab tests, supplements.
@@ -886,6 +923,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("Лаборатория"),
                 bank_description: Some("Анализы"),
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
         // Развлечения (group): a one-off event.
@@ -899,6 +937,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("Концерт"),
                 bank_description: None,
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
         // Магазины (depth-2 group): generic shopping run.
@@ -912,6 +951,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("Магазин у дома"),
                 bank_description: None,
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
         // Бензин (depth-2 group): fuel from an unbranded station.
@@ -925,6 +965,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("АЗС"),
                 bank_description: None,
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
         // Подписки (depth-2 group): bundled family plan.
@@ -938,6 +979,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("Family Plan"),
                 bank_description: None,
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
 
@@ -957,6 +999,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("Гипермаркет"),
                 bank_description: Some("Продукты + хозтовары"),
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
         // Doctor appointment — Врачи (group) + Стоматолог (leaf).
@@ -970,6 +1013,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("Стоматологическая клиника"),
                 bank_description: Some("Консультация + процедура"),
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
         // Subscription with an add-on — Подписки (group) + Музыка (leaf).
@@ -983,6 +1027,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("Family Plan + addon"),
                 bank_description: None,
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
         // Two-leaf cross-group split — Супермаркеты + Доставка (different groups).
@@ -996,6 +1041,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("Супермаркет с доставкой"),
                 bank_description: Some("Заказ + доставка"),
                 transfer_tag: None,
+                is_correcting: false,
             });
         }
 
@@ -1021,6 +1067,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("Сберегательный счёт"),
                 bank_description: Some("Перевод на сберегательный счёт"),
                 transfer_tag: Some(tag_savings.clone()),
+                is_correcting: false,
             });
             out.push(TxnSpec {
                 account: AccountKind::Savings,
@@ -1031,6 +1078,46 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("Зарплатный счёт"),
                 bank_description: Some("Перевод с зарплатного счёта"),
                 transfer_tag: Some(tag_savings),
+                is_correcting: false,
+            });
+        }
+
+        // Two uncategorized correcting entries seed the dashed-border state
+        // for the activity strip. They live on the first two months of the
+        // Savings account — typical for the kind of bridging adjustments a
+        // user posts when they start tracking an account that already
+        // existed at the bank but had a non-zero opening balance, or when
+        // they reconcile a small rounding difference after the first
+        // import. Day 1 keeps them ahead of any other Savings entry so the
+        // running balance is well-defined.
+        if month_start == savings_start {
+            out.push(TxnSpec {
+                account: AccountKind::Savings,
+                date: safe_date(y, m, 1),
+                credit_minor: usd(250),
+                debit_minor: 0,
+                categorization: Categorization::None,
+                peer: None,
+                bank_description: Some("Сверка баланса при старте учёта"),
+                transfer_tag: None,
+                is_correcting: true,
+            });
+        }
+        if month_start
+            == savings_start
+                .checked_add_months(Months::new(1))
+                .unwrap()
+        {
+            out.push(TxnSpec {
+                account: AccountKind::Savings,
+                date: safe_date(y, m, 1),
+                credit_minor: 0,
+                debit_minor: usd(7),
+                categorization: Categorization::None,
+                peer: None,
+                bank_description: Some("Округление после сверки"),
+                transfer_tag: None,
+                is_correcting: true,
             });
         }
 
@@ -1051,6 +1138,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("Сберегательный счёт"),
                 bank_description: Some("Перевод накоплений"),
                 transfer_tag: Some(tag.clone()),
+                is_correcting: false,
             });
             out.push(TxnSpec {
                 account: AccountKind::Savings,
@@ -1061,6 +1149,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 peer: Some("Зарплатный счёт"),
                 bank_description: Some("Накопления холостого периода"),
                 transfer_tag: Some(tag),
+                is_correcting: false,
             });
         }
     }
@@ -1080,6 +1169,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         peer: Some("Гипермаркет"),
         bank_description: Some("Покупка (часть без категории)"),
         transfer_tag: None,
+        is_correcting: false,
     });
     out.push(TxnSpec {
         account: AccountKind::Salary,
@@ -1090,6 +1180,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         peer: Some("Партнёр"),
         bank_description: Some("Бонус (часть без категории)"),
         transfer_tag: None,
+        is_correcting: false,
     });
 
     // Stable order by date — ties broken by insertion order, which keeps each
@@ -1194,8 +1285,9 @@ fn insert_transactions(
         let occurred_at_utc = format!("{}T09:00:00.000Z", t.date);
         let txn_id: i64 = conn.query_row(
             "INSERT INTO transactions
-             (account_id, import_batch_id, occurred_at_utc, credit, debit, balance, peer, bank_description)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) RETURNING id",
+             (account_id, import_batch_id, occurred_at_utc, credit, debit, balance,
+              peer, bank_description, is_correcting)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) RETURNING id",
             params![
                 account_id,
                 batch_id,
@@ -1205,6 +1297,7 @@ fn insert_transactions(
                 balance,
                 t.peer,
                 t.bank_description,
+                t.is_correcting as i64,
             ],
             |r| r.get(0),
         )?;
@@ -1671,11 +1764,13 @@ mod tests {
         assert!(family > 700, "Семейный счёт expected lots of txns, got {family}");
         // Savings: 10 sporadic transfers (1-in-3 chance per active month
         // over 31 months, deterministic with seed 0xCAFEBABE) plus one
-        // bachelor-residual dump on the opening day → 11 total.
+        // bachelor-residual dump on the opening day, plus two seeded
+        // uncategorized correcting entries on the first two months of the
+        // account's life (these drive the dashed-border demo state) → 13.
         let savings = by_name.get("Сберегательный счёт").copied().unwrap_or(0);
         assert_eq!(
-            savings, 11,
-            "Сберегательный счёт expected 10 sporadic + 1 bachelor dump = 11 deterministic, got {savings}"
+            savings, 13,
+            "Сберегательный счёт expected 10 sporadic + 1 bachelor dump + 2 correcting = 13 deterministic, got {savings}"
         );
         // Vacation: one transfer-in for each of the active months (8 by
         // default — see VACATION_ACTIVE_MONTHS).

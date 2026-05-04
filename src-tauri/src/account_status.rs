@@ -111,7 +111,6 @@ fn compute(
                 .collect();
 
             let total = in_range.len();
-            let correcting_count = in_range.iter().filter(|t| t.is_correcting).count();
             let uncategorized_correcting_count = in_range
                 .iter()
                 .filter(|t| t.is_correcting && !t.has_categories)
@@ -134,26 +133,19 @@ fn compute(
 
             let no_data = total == 0 || real_data == 0;
 
-            let all_correcting_categorized = correcting_count == 0
-                || in_range
-                    .iter()
-                    .filter(|t| t.is_correcting)
-                    .all(|t| t.has_categories);
-
-            // Anchor signal is independent of the fill color now: the cell is
+            // Anchor signal is independent of the fill color: the cell is
             // anchored whenever any later transaction exists for this account.
             let anchored = last_txn_utc
                 .as_deref()
                 .map(|t| t >= range.end_utc.as_str())
                 .unwrap_or(false);
 
-            let status = if no_data {
-                "no_data"
-            } else if all_correcting_categorized && !balance_error {
-                "complete"
-            } else {
-                "incomplete"
-            };
+            // Fill is binary now — either there's real data in the month or
+            // there isn't. Within-month problems (balance break, uncategorized
+            // correcting) are surfaced via the independent `balance_error` and
+            // `uncategorized_correcting` flags so the UI can paint the cell
+            // red or dash its border without polluting the fill state.
+            let status = if no_data { "no_data" } else { "complete" };
 
             out.push(AccountMonthCell {
                 account_id,
@@ -361,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn uncategorized_correcting_alongside_regular_is_incomplete_with_dashed() {
+    fn uncategorized_correcting_alongside_regular_is_complete_with_dashed() {
         let f = fixture();
         // Anchor in March
         insert_txn(&f, "2026-03-15T10:00:00Z", 0, 100, 8900, false);
@@ -376,7 +368,9 @@ mod tests {
         )]);
         let r = compute(&f.conn, &m).unwrap();
         let jan = cell(&r, "2026-01");
-        assert_eq!(jan.status, "incomplete");
+        // Fill is just `complete` now — the dashed flag carries the
+        // "needs review" signal independently.
+        assert_eq!(jan.status, "complete");
         assert!(jan.uncategorized_correcting);
         assert!(!jan.balance_error);
     }
@@ -444,8 +438,10 @@ mod tests {
             .unwrap();
         // Linked correcting does NOT raise the dashed border flag…
         assert!(!jan.uncategorized_correcting);
-        // …but it still blocks "complete" because it has no categories.
-        assert_eq!(jan.status, "incomplete");
+        // …and the fill is just `complete` — there is real data in the month.
+        // The "uncategorized" concern doesn't show up anywhere when the
+        // correcting entry is part of a linked transfer.
+        assert_eq!(jan.status, "complete");
         assert!(!jan.balance_error);
     }
 
@@ -467,8 +463,10 @@ mod tests {
 
         let jan = cell(&r, "2026-01");
         assert!(jan.balance_error);
-        // Balance error blocks "complete" status — should fall back to incomplete.
-        assert_eq!(jan.status, "incomplete");
+        // Status fill is binary — either there is real data in the month or
+        // not. The balance break is reported via the independent
+        // `balance_error` flag (rendered as a red fill in the UI).
+        assert_eq!(jan.status, "complete");
     }
 
     #[test]
