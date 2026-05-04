@@ -305,6 +305,10 @@
     "metricInternalTransferIn": "Переводы внутри (поступления)",
     "metricsSettings": "Настроить метрики",
     "metricsSettingsTitle": "Какие метрики показывать",
+    "incomeCategoriesSettings": "Настроить категории доходов",
+    "expenseCategoriesSettings": "Настроить категории расходов",
+    "incomeCategoriesTitle": "Категории доходов",
+    "expenseCategoriesTitle": "Категории расходов",
     "totalIncome": "Итого доходов",
     "totalExpense": "Итого расходов",
     "totalColumn": "Итого",
@@ -315,15 +319,12 @@
     "displayNone": "Ничего",
     "displayMany": "Опций: {count}",
     "displayApply": "Применить",
-    "categoriesLabel": "Категории",
-    "pickCategoriesValue": "Выбрано: {count}",
     "uncategorized": "Без категории",
     "groupRowName": "ГРУППА ({name})",
     "fold": "Свернуть",
     "unfold": "Развернуть",
     "loading": "Считаю...",
-    "errorLoading": "Не удалось построить отчёт: {message}",
-    "empty": "Нет данных за выбранный период."
+    "errorLoading": "Не удалось построить отчёт: {message}"
   },
   "errors": {
     "missingOccurredAt": "Строка {row}: отсутствует occurred_at",

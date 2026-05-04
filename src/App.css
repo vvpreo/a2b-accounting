@@ -2815,84 +2815,42 @@ code {
   }
 }
 
-/* "Pick categories" buttons in the report filter-bar. They look like a
-   dropdown trigger (consistent with the multi-select fields next to them)
-   but open a modal instead. */
-.report-pick-categories-btn {
-  text-align: left;
-}
-
-/* The categories picker modal hosts both expense and income trees side-by
-   side, so it's wider than the default modal. Its body delegates scroll to
-   each inner column so the modal frame stays put. */
+/* Single-kind picker modal — one tree fills the body. The modal header
+   already shows the kind in its title, so the inner section's own title is
+   suppressed to avoid duplication, and the section drops its own border
+   since the modal frame already provides one. */
 .categories-picker-modal {
-  width: min(1100px, 96vw);
+  width: min(620px, 96vw);
 }
 
 .categories-picker-modal-body {
-  padding: 0;
+  padding: 12px 16px;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
-/* Two columns inside the modal body — expense on the left, income on the
-   right. They share height with the body and each scrolls independently. */
-.categories-picker-grid {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0;
-}
-
-.categories-picker-grid > .builder-section {
+.categories-picker-modal-body > .builder-section {
   background: transparent;
   border: 0;
   border-radius: 0;
-  padding: 12px 16px;
+  padding: 0;
   min-height: 0;
+  flex: 1;
   overflow: hidden;
 }
 
-/* Vertical divider between expense and income columns. */
-.categories-picker-grid > .builder-section + .builder-section {
-  border-left: 1px solid #e4e4e7;
+.categories-picker-modal-body .builder-section-title {
+  display: none;
 }
 
-/* Inside-the-modal section title shrinks to a column header (the modal
-   header already shows the umbrella title). */
-.categories-picker-grid .builder-section-title {
-  margin: 0 0 4px;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #71717a;
-}
-
-/* The category list scrolls within its column. */
-.categories-picker-grid .builder-tree {
+.categories-picker-modal-body .builder-tree {
   flex: 1;
   min-height: 0;
   overflow: auto;
 }
 
-@media (prefers-color-scheme: dark) {
-  .categories-picker-grid > .builder-section + .builder-section {
-    border-left-color: #3f3f46;
-  }
-}
-
-@media (max-width: 640px) {
-  .categories-picker-grid {
-    grid-template-columns: 1fr;
-  }
-  .categories-picker-grid > .builder-section + .builder-section {
-    border-left: 0;
-    border-top: 1px solid #e4e4e7;
-  }
-}
-
-.report-loading,
-.report-empty {
+.report-loading {
   padding: 24px;
   text-align: center;
   color: #71717a;
@@ -3155,8 +3113,7 @@ code {
   .report-controls label,
   .builder-section-empty,
   .settings-hint,
-  .report-loading,
-  .report-empty {
+  .report-loading {
     color: #a1a1aa;
   }
 

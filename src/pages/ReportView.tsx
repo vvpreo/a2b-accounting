@@ -25,7 +25,7 @@ import {
   updateReportView,
 } from "../lib/api";
 import { formatMinorAsMoney, formatMoney, parseMoneyToMinor } from "../lib/money";
-import { CategoriesPickerModal, computeInitialOrder } from "./report/CategoryPicker";
+import { CategoryPickerModal, computeInitialOrder } from "./report/CategoryPicker";
 
 interface Props {
   view: ReportView;
@@ -201,9 +201,11 @@ export function ReportViewPage({ view, onSaved }: Props) {
   const [categoriesLoaded, setCategoriesLoaded] = useState(false);
 
   const [filtersExpanded, setFiltersExpanded] = useState(true);
-  // Toggles the combined categories picker modal. The modal owns local
-  // copies of all four selection pieces — committed back on Save only.
-  const [pickerOpen, setPickerOpen] = useState(false);
+  // One picker per kind — opened from the gear icon in the corresponding
+  // section header. Local state inside each modal owns pending edits and
+  // commits via Save; ESC/cancel discards.
+  const [expensePickerOpen, setExpensePickerOpen] = useState(false);
+  const [incomePickerOpen, setIncomePickerOpen] = useState(false);
   // Toggles the metrics-visibility settings modal opened from the section
   // header's gear icon.
   const [metricsSettingsOpen, setMetricsSettingsOpen] = useState(false);
@@ -567,42 +569,38 @@ export function ReportViewPage({ view, onSaved }: Props) {
                 showSelectAll={false}
               />
             </label>
-
-            <label className="filter-field">
-              <span>{t("report.categoriesLabel")}</span>
-              <button
-                type="button"
-                className="dropdown-button report-pick-categories-btn"
-                onClick={() => setPickerOpen(true)}
-              >
-                {t("report.pickCategoriesValue", {
-                  count: expenseSelected.size + incomeSelected.size,
-                })}
-              </button>
-            </label>
           </div>
         )}
       </section>
 
-      {pickerOpen && (
-        <CategoriesPickerModal
-          title={t("report.categoriesLabel")}
-          expenseTitle={t("builder.sectionExpense")}
-          incomeTitle={t("builder.sectionIncome")}
+      {incomePickerOpen && (
+        <CategoryPickerModal
+          title={t("report.incomeCategoriesTitle")}
+          sectionTitle={t("report.incomeCategoriesTitle")}
+          kind="income"
           categories={categories}
-          initial={{
-            expenseOrder,
-            expenseSelected,
-            incomeOrder,
-            incomeSelected,
-          }}
-          onCancel={() => setPickerOpen(false)}
+          initial={{ order: incomeOrder, selected: incomeSelected }}
+          onCancel={() => setIncomePickerOpen(false)}
           onSave={(next) => {
-            setExpenseOrder(next.expenseOrder);
-            setExpenseSelected(next.expenseSelected);
-            setIncomeOrder(next.incomeOrder);
-            setIncomeSelected(next.incomeSelected);
-            setPickerOpen(false);
+            setIncomeOrder(next.order);
+            setIncomeSelected(next.selected);
+            setIncomePickerOpen(false);
+          }}
+        />
+      )}
+
+      {expensePickerOpen && (
+        <CategoryPickerModal
+          title={t("report.expenseCategoriesTitle")}
+          sectionTitle={t("report.expenseCategoriesTitle")}
+          kind="expense"
+          categories={categories}
+          initial={{ order: expenseOrder, selected: expenseSelected }}
+          onCancel={() => setExpensePickerOpen(false)}
+          onSave={(next) => {
+            setExpenseOrder(next.order);
+            setExpenseSelected(next.selected);
+            setExpensePickerOpen(false);
           }}
         />
       )}
@@ -623,6 +621,8 @@ export function ReportViewPage({ view, onSaved }: Props) {
           showZeroRows={showZeroRows}
           visibleMetrics={visibleMetrics}
           onOpenMetricsSettings={() => setMetricsSettingsOpen(true)}
+          onOpenIncomeSettings={() => setIncomePickerOpen(true)}
+          onOpenExpenseSettings={() => setExpensePickerOpen(true)}
         />
       )}
 
@@ -645,12 +645,16 @@ interface PivotProps {
   initialExpanded: number[];
   showTotal: boolean;
   // When false, income/expense rows whose every value is zero (in minor
-  // units) are dropped before render — a whole section collapses to nothing
-  // (header included) when its grand total is also zero. When true, every
-  // row is shown verbatim. Metrics rows are unaffected.
+  // units) are dropped before render. The section header is always shown
+  // (even with all-zero totals) so the gear icon stays accessible. Metrics
+  // rows are unaffected.
   showZeroRows: boolean;
   visibleMetrics: MetricKey[];
   onOpenMetricsSettings: () => void;
+  // Open per-kind category picker modals — wired into the gear button in
+  // each section's header.
+  onOpenIncomeSettings: () => void;
+  onOpenExpenseSettings: () => void;
 }
 
 function PivotTable({
@@ -660,6 +664,8 @@ function PivotTable({
   showZeroRows,
   visibleMetrics,
   onOpenMetricsSettings,
+  onOpenIncomeSettings,
+  onOpenExpenseSettings,
 }: PivotProps) {
   const t = useT();
   const { periods, expense, income, balances, internalTransfers } = response;
@@ -701,9 +707,11 @@ function PivotTable({
   // Template carries a literal `{name}` placeholder — substituted per row in
   // renderSection. Calling t() without params returns the raw template.
   const groupNameTemplate = t("report.groupRowName");
+  const nPeriods = periods.length;
   const incomeRows = renderSection({
     section: income,
     sectionKey: "income",
+    nPeriods,
     sectionCollapsed: incomeCollapsed,
     onToggleSection: () => setIncomeCollapsed((v) => !v),
     rowCollapsed: collapsed,
@@ -715,10 +723,13 @@ function PivotTable({
     unfoldLabel: t("report.unfold"),
     showTotal,
     showZeroRows,
+    onOpenSettings: onOpenIncomeSettings,
+    settingsLabel: t("report.incomeCategoriesSettings"),
   });
   const expenseRows = renderSection({
     section: expense,
     sectionKey: "expense",
+    nPeriods,
     sectionCollapsed: expenseCollapsed,
     onToggleSection: () => setExpenseCollapsed((v) => !v),
     rowCollapsed: collapsed,
@@ -730,17 +741,9 @@ function PivotTable({
     unfoldLabel: t("report.unfold"),
     showTotal,
     showZeroRows,
+    onOpenSettings: onOpenExpenseSettings,
+    settingsLabel: t("report.expenseCategoriesSettings"),
   });
-
-  // After zero-row filtering, both rendered arrays may be empty even though
-  // the backend returned rows (e.g., every category is zero). Treat that the
-  // same as "no transactions" — show the empty placeholder rather than a
-  // bare metrics section with no context.
-  const isEmpty = incomeRows.length === 0 && expenseRows.length === 0;
-
-  if (isEmpty) {
-    return <div className="report-empty">{t("report.empty")}</div>;
-  }
 
   const metricsRows = renderMetricsSection({
     periods,
@@ -786,8 +789,8 @@ function PivotTable({
           </tr>
         </thead>
         <tbody>
-          {income.rows.length > 0 && incomeRows}
-          {expense.rows.length > 0 && expenseRows}
+          {incomeRows}
+          {expenseRows}
           {showMetrics && metricsRows}
         </tbody>
       </table>
@@ -798,6 +801,10 @@ function PivotTable({
 interface RenderSectionArgs {
   section: SectionData;
   sectionKey: string;
+  // Authoritative period count from `response.periods`. Used to size the
+  // header's per-period cells when the section has zero rows (in which case
+  // we can't infer the column count from `rows[0]`).
+  nPeriods: number;
   sectionCollapsed: boolean;
   onToggleSection: () => void;
   rowCollapsed: Set<number>;
@@ -811,9 +818,14 @@ interface RenderSectionArgs {
   unfoldLabel: string;
   showTotal: boolean;
   // When false, rows whose subtree (group) or own (leaf/own/uncat) total is
-  // zero are dropped; if the section grand total is also zero the header is
-  // skipped too. When true, everything renders.
+  // zero are dropped from the body. The header is always rendered so the
+  // gear icon stays accessible.
   showZeroRows: boolean;
+  // Wired to the gear button in the section header. When provided, the
+  // button renders next to the title and clicks open a per-kind picker
+  // modal upstream. Optional — older callers can omit both fields.
+  onOpenSettings?: () => void;
+  settingsLabel?: string;
 }
 
 // One row in the visual plan. A backend row that has selected descendants is
@@ -885,6 +897,7 @@ function buildPlan(
 function renderSection({
   section,
   sectionKey,
+  nPeriods,
   sectionCollapsed,
   onToggleSection,
   rowCollapsed,
@@ -896,6 +909,8 @@ function renderSection({
   unfoldLabel,
   showTotal,
   showZeroRows,
+  onOpenSettings,
+  settingsLabel,
 }: RenderSectionArgs): React.ReactElement[] {
   const { rows } = section;
   const { parents, hasDescendants, subtreeValues, subtreeMinor, subtreeTotal, subtreeTotalMinor } =
@@ -904,7 +919,6 @@ function renderSection({
   // Section totals are the sum of *root rows only* — every selected category
   // either lands directly in its row (leaf) or is rolled into its group row,
   // so summing roots covers the section without double-counting.
-  const nPeriods = rows[0]?.values.length ?? 0;
   const sectionPerPeriodMinor = new Array<number>(nPeriods).fill(0);
   let sectionTotalMinor = 0;
   for (let i = 0; i < rows.length; i++) {
@@ -917,17 +931,11 @@ function renderSection({
   const sectionPerPeriod = sectionPerPeriodMinor.map((m) => formatMinorAsMoney(m));
   const sectionTotalStr = formatMinorAsMoney(sectionTotalMinor);
 
-  // When the user opts out of zero rows and the section grand total is
-  // zero, every row underneath is also zero (income/expense values are
-  // non-negative, so 0 sum implies 0 rows) — no point showing the header
-  // either.
-  if (!showZeroRows && sectionTotalMinor === 0) {
-    return [];
-  }
-
   const out: React.ReactElement[] = [];
-  // Section header row: title on the left + section totals across all periods.
-  // Click anywhere on the title cell to collapse/expand the whole section.
+  // Section header — always rendered so the gear icon for category settings
+  // stays reachable even when the section has zero data. Clicking the title
+  // cell toggles the section fold. The gear sits inside the title cell and
+  // stops click propagation to avoid triggering the fold toggle.
   out.push(
     <tr
       key={`header-${sectionKey}`}
@@ -942,6 +950,20 @@ function renderSection({
           {sectionCollapsed ? "▸" : "▾"}
         </span>
         <span className="pivot-name-text">{sectionTitle}</span>
+        {onOpenSettings && (
+          <button
+            type="button"
+            className="pivot-section-settings-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenSettings();
+            }}
+            aria-label={settingsLabel}
+            title={settingsLabel}
+          >
+            ⚙
+          </button>
+        )}
       </td>
       {sectionPerPeriod.map((v, idx) => (
         <td key={idx} className="pivot-value-cell">

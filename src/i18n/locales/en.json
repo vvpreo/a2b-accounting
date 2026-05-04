@@ -295,6 +295,10 @@
     "metricInternalTransferIn": "Internal transfers (inflows)",
     "metricsSettings": "Configure metrics",
     "metricsSettingsTitle": "Which metrics to show",
+    "incomeCategoriesSettings": "Configure income categories",
+    "expenseCategoriesSettings": "Configure expense categories",
+    "incomeCategoriesTitle": "Income categories",
+    "expenseCategoriesTitle": "Expense categories",
     "totalIncome": "Total income",
     "totalExpense": "Total expense",
     "totalColumn": "Total",
@@ -305,15 +309,12 @@
     "displayNone": "None",
     "displayMany": "{count} options",
     "displayApply": "Apply",
-    "categoriesLabel": "Categories",
-    "pickCategoriesValue": "Selected: {count}",
     "uncategorized": "Uncategorized",
     "groupRowName": "GROUP ({name})",
     "fold": "Collapse",
     "unfold": "Expand",
     "loading": "Computing...",
-    "errorLoading": "Failed to build the report: {message}",
-    "empty": "No data for the selected range."
+    "errorLoading": "Failed to build the report: {message}"
   },
   "errors": {
     "missingOccurredAt": "Row {row}: missing occurred_at",

@@ -310,44 +310,41 @@ function moveSubtree(
   return [...without.slice(0, insertAt), ...subtree, ...without.slice(insertAt)];
 }
 
-export interface CategoriesPickerSelection {
-  expenseOrder: number[];
-  expenseSelected: Set<number>;
-  incomeOrder: number[];
-  incomeSelected: Set<number>;
+export interface CategoryPickerSelection {
+  order: number[];
+  selected: Set<number>;
 }
 
-interface CategoriesPickerModalProps {
+interface CategoryPickerModalProps {
+  // Modal heading shown in the header row.
   title: string;
-  expenseTitle: string;
-  incomeTitle: string;
+  // Heading for the embedded `CategorySection`. In practice we set this to
+  // the same string as `title`; kept separate for symmetry with the section
+  // component's own API.
+  sectionTitle: string;
+  kind: CategoryKind;
   categories: Category[];
-  initial: CategoriesPickerSelection;
+  initial: CategoryPickerSelection;
   onCancel: () => void;
-  onSave: (next: CategoriesPickerSelection) => void;
+  onSave: (next: CategoryPickerSelection) => void;
 }
 
-// Single modal that hosts both the expense and income pickers side-by-side.
-// All four pieces of state (orders + selected sets for each kind) live
-// locally so edits are discardable — only "Save" propagates them upstream,
-// which triggers the parent's autosave path.
-export function CategoriesPickerModal({
+// Single-kind picker modal — one instance per income/expense set. Local
+// state captures pending edits so cancel/ESC discards them; Save commits
+// upstream and the parent's autosave kicks in.
+export function CategoryPickerModal({
   title,
-  expenseTitle,
-  incomeTitle,
+  sectionTitle,
+  kind,
   categories,
   initial,
   onCancel,
   onSave,
-}: CategoriesPickerModalProps) {
+}: CategoryPickerModalProps) {
   const t = useT();
-  const [expenseOrder, setExpenseOrder] = useState<number[]>(initial.expenseOrder);
-  const [expenseSelected, setExpenseSelected] = useState<Set<number>>(
-    new Set(initial.expenseSelected),
-  );
-  const [incomeOrder, setIncomeOrder] = useState<number[]>(initial.incomeOrder);
-  const [incomeSelected, setIncomeSelected] = useState<Set<number>>(
-    new Set(initial.incomeSelected),
+  const [order, setOrder] = useState<number[]>(initial.order);
+  const [selected, setSelected] = useState<Set<number>>(
+    new Set(initial.selected),
   );
 
   // ESC closes the modal as a no-op (same as Cancel).
@@ -377,26 +374,15 @@ export function CategoriesPickerModal({
           </button>
         </header>
         <div className="modal-body categories-picker-modal-body">
-          <div className="categories-picker-grid">
-            <CategorySection
-              title={expenseTitle}
-              kind="expense"
-              categories={categories}
-              order={expenseOrder}
-              setOrder={setExpenseOrder}
-              selected={expenseSelected}
-              setSelected={setExpenseSelected}
-            />
-            <CategorySection
-              title={incomeTitle}
-              kind="income"
-              categories={categories}
-              order={incomeOrder}
-              setOrder={setIncomeOrder}
-              selected={incomeSelected}
-              setSelected={setIncomeSelected}
-            />
-          </div>
+          <CategorySection
+            title={sectionTitle}
+            kind={kind}
+            categories={categories}
+            order={order}
+            setOrder={setOrder}
+            selected={selected}
+            setSelected={setSelected}
+          />
         </div>
         <footer className="modal-footer">
           <button type="button" className="btn-ghost" onClick={onCancel}>
@@ -405,14 +391,7 @@ export function CategoriesPickerModal({
           <button
             type="button"
             className="btn-primary"
-            onClick={() =>
-              onSave({
-                expenseOrder,
-                expenseSelected,
-                incomeOrder,
-                incomeSelected,
-              })
-            }
+            onClick={() => onSave({ order, selected })}
           >
             {t("common.save")}
           </button>
