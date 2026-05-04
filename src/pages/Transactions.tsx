@@ -698,12 +698,46 @@ export function TransactionsPage({
                         data-anchor={isPendingAnchor ? "true" : "false"}
                         onClick={() => onLinkCellClick(x)}
                         onMouseEnter={(e) => {
+                          let text: string | null = null;
                           if (iconKind === "invalid" && invalidReason) {
+                            text = invalidReason;
+                          } else if (
+                            isLinked &&
+                            partnerId !== undefined &&
+                            pendingLinkTxnId === null
+                          ) {
+                            // Linked-row hover: surface the partner's
+                            // basic facts so the user can identify which
+                            // transaction this row is paired with even
+                            // when the account/date filter hides the
+                            // other side from the table.
+                            const partner = txns.find(
+                              (tt) => tt.id === partnerId,
+                            );
+                            if (partner) {
+                              const pa = accountById.get(partner.accountId);
+                              const accLabelP = pa
+                                ? `${pa.name || pa.accountNumber} · ${pa.currency}`
+                                : `#${partner.accountId}`;
+                              const dateP = formatInstantLocal(
+                                partner.occurredAtUtc,
+                              );
+                              const isIncoming = partner.credit !== "0.00";
+                              const amountP = isIncoming
+                                ? formatMoney(partner.credit)
+                                : formatMoney(partner.debit);
+                              const typeLabel = isIncoming
+                                ? t("transactions.tableCredit")
+                                : t("transactions.tableDebit");
+                              text = `${accLabelP}\n${dateP}\n${typeLabel}: ${amountP}`;
+                            }
+                          }
+                          if (text !== null) {
                             const r = e.currentTarget.getBoundingClientRect();
                             setTooltip({
                               x: r.left + r.width / 2,
                               y: r.top,
-                              text: invalidReason,
+                              text,
                             });
                           }
                         }}

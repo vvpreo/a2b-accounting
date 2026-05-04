@@ -594,11 +594,14 @@ tbody tr.is-link-partner {
   padding: 6px 10px;
   border-radius: 6px;
   font-size: 12px;
-  line-height: 1.35;
+  line-height: 1.45;
   max-width: 280px;
   pointer-events: none;
   z-index: 200;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  /* Linked-partner tooltips ship multi-line text via \n — preserve the
+     line breaks while still wrapping long account names. */
+  white-space: pre-line;
 }
 
 /* Bottom-of-screen toast overlay used to surface pending state and link
