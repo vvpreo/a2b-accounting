@@ -301,6 +301,8 @@
     "metricNetCumulative": "Доходы − Расходы (кумулятивно)",
     "metricOpeningBalance": "Входящий остаток по счетам",
     "metricClosingBalance": "Исходящий остаток по счетам",
+    "metricInternalTransferOut": "Переводы внутри (списания)",
+    "metricInternalTransferIn": "Переводы внутри (поступления)",
     "metricsSettings": "Настроить метрики",
     "metricsSettingsTitle": "Какие метрики показывать",
     "totalIncome": "Итого доходов",

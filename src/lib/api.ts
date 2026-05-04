@@ -316,14 +316,25 @@ export type ReportRange =
 
 // Metric rows the user can toggle on/off in the report's "Метрики" section.
 // Persisted in ReportConfig.visibleMetrics; missing field falls back to all
-// four enabled (matching the default UX for both new and legacy reports).
-export type MetricKey = "net" | "cumulative" | "opening" | "closing";
+// keys enabled (matching the default UX for both new and legacy reports).
+// Adding a new key is backwards-compatible: legacy configs that listed only
+// the original four keys keep their selection literally — the new metrics
+// stay hidden until the user opts in via the gear-modal.
+export type MetricKey =
+  | "net"
+  | "cumulative"
+  | "opening"
+  | "closing"
+  | "internalTransferOut"
+  | "internalTransferIn";
 
 export const ALL_METRIC_KEYS: MetricKey[] = [
   "net",
   "cumulative",
   "opening",
   "closing",
+  "internalTransferOut",
+  "internalTransferIn",
 ];
 
 export interface ReportConfig {
@@ -408,11 +419,20 @@ export interface BalanceMetrics {
   closing: string[];
 }
 
+export interface InternalTransferMetrics {
+  // Per-period money strings for transactions that the paired-link rule
+  // removed from income/expense — outflows = debit side, inflows = credit
+  // side. Both arrays have one entry per period.
+  outflows: string[];
+  inflows: string[];
+}
+
 export interface ReportResponse {
   periods: PeriodColumn[];
   expense: SectionData;
   income: SectionData;
   balances: BalanceMetrics;
+  internalTransfers: InternalTransferMetrics;
 }
 
 export function computeReport(request: ReportRequest): Promise<ReportResponse> {

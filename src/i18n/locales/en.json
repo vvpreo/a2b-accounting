@@ -291,6 +291,8 @@
     "metricNetCumulative": "Income − Expense (cumulative)",
     "metricOpeningBalance": "Opening balance across accounts",
     "metricClosingBalance": "Closing balance across accounts",
+    "metricInternalTransferOut": "Internal transfers (outflows)",
+    "metricInternalTransferIn": "Internal transfers (inflows)",
     "metricsSettings": "Configure metrics",
     "metricsSettingsTitle": "Which metrics to show",
     "totalIncome": "Total income",

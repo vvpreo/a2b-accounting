@@ -69,11 +69,26 @@ pub struct BalanceMetrics {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct InternalTransferMetrics {
+    /// Per-period sum of `debit` from transactions excluded by paired-link
+    /// matching (the "outflow" side of an internal transfer between own
+    /// accounts). Surfaces what the report ignored from the expense side so
+    /// the user can see the gap between cash-flow numbers and the bank's
+    /// actual movement.
+    pub outflows: Vec<String>,
+    /// Per-period sum of `credit` from transactions excluded by paired-link
+    /// matching (the "inflow" side of the same internal transfers).
+    pub inflows: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReportResponse {
     pub periods: Vec<PeriodColumn>,
     pub expense: SectionData,
     pub income: SectionData,
     pub balances: BalanceMetrics,
+    pub internal_transfers: InternalTransferMetrics,
 }
 
 // ---------- Pure helpers (covered by unit tests) ----------
@@ -665,6 +680,11 @@ pub(crate) fn compute_report_inner(
         vec![vec![0_i64; n_periods]; income_layout.len() + 1];
     let expense_uncat = expense_layout.len();
     let income_uncat = income_layout.len();
+    // Per-period buckets for the "internal transfers" metric rows. Populated
+    // from txns that the paired-link rule kicks out of income/expense — that
+    // way the user can see exactly what was netted out.
+    let mut transfer_outflows: Vec<i64> = vec![0_i64; n_periods];
+    let mut transfer_inflows: Vec<i64> = vec![0_i64; n_periods];
 
     let txns = load_transactions(conn, &req.account_ids, from, to)?;
     let txn_ids: Vec<i64> = txns.iter().map(|t| t.id).collect();
@@ -683,9 +703,6 @@ pub(crate) fn compute_report_inner(
     }
 
     for txn in &txns {
-        if excluded_by_link.contains(&txn.id) {
-            continue;
-        }
         let local = local_date(&txn.occurred_at_utc, &txn.timezone_offset)?;
         if local < from || local > to {
             continue;
@@ -695,6 +712,19 @@ pub(crate) fn compute_report_inner(
             Some(i) => *i,
             None => continue,
         };
+
+        // Excluded by a paired link: don't aggregate into income/expense, but
+        // do feed the "internal transfers" metric so the user sees the volume
+        // that was netted out instead of guessing why income/expense is short.
+        if excluded_by_link.contains(&txn.id) {
+            if txn.credit > 0 {
+                transfer_inflows[p_idx] += txn.credit;
+            }
+            if txn.debit > 0 {
+                transfer_outflows[p_idx] += txn.debit;
+            }
+            continue;
+        }
 
         let direction_is_income = txn.credit > 0;
         let total_minor = txn.credit + txn.debit;
@@ -786,11 +816,17 @@ pub(crate) fn compute_report_inner(
         closing: closing_minor.iter().copied().map(format_minor).collect(),
     };
 
+    let internal_transfers = InternalTransferMetrics {
+        outflows: transfer_outflows.iter().copied().map(format_minor).collect(),
+        inflows: transfer_inflows.iter().copied().map(format_minor).collect(),
+    };
+
     Ok(ReportResponse {
         periods,
         expense: expense_section,
         income: income_section,
         balances,
+        internal_transfers,
     })
 }
 
@@ -1675,5 +1711,95 @@ mod tests {
         assert_eq!(resp.expense.rows.len(), 1, "outgoing side surfaces as uncategorized");
         assert_eq!(resp.expense.rows[0].total, "1000.00");
         assert!(resp.income.rows.is_empty());
+        // Single-sided pair — partner is out of scope, so the in-scope side
+        // surfaces normally and the internal-transfer metric stays zero.
+        assert_eq!(resp.internal_transfers.outflows, vec!["0.00"]);
+        assert_eq!(resp.internal_transfers.inflows, vec!["0.00"]);
+    }
+
+    #[test]
+    fn linked_pair_in_scope_feeds_internal_transfer_metrics() {
+        // Both sides of a $1000 transfer are in scope: nothing lands in
+        // income/expense, but the new metric rows record the volume per side
+        // for the period the side falls into.
+        let (_dir, conn, a1, a2, b1, b2) = fixture_two_accounts_for_transfers();
+        let out: i64 = conn
+            .query_row(
+                "INSERT INTO transactions
+                 (account_id, import_batch_id, occurred_at_utc, credit, debit, balance)
+                 VALUES (?1, ?2, '2026-04-10T10:00:00Z', 0, 1000_00, 0) RETURNING id",
+                params![a1, b1],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let inc: i64 = conn
+            .query_row(
+                "INSERT INTO transactions
+                 (account_id, import_batch_id, occurred_at_utc, credit, debit, balance)
+                 VALUES (?1, ?2, '2026-04-10T10:00:00Z', 1000_00, 0, 0) RETURNING id",
+                params![a2, b2],
+                |r| r.get(0),
+            )
+            .unwrap();
+        raw_insert_link(&conn, out, inc);
+        let resp = compute_report_inner(
+            &conn,
+            &ReportRequest {
+                account_ids: vec![a1, a2],
+                expense_category_ids: vec![],
+                income_category_ids: vec![],
+                from: "2026-04-01".to_string(),
+                to: "2026-04-30".to_string(),
+                granularity: "month".to_string(),
+            },
+        )
+        .unwrap();
+        assert_eq!(resp.internal_transfers.outflows, vec!["1000.00"]);
+        assert_eq!(resp.internal_transfers.inflows, vec!["1000.00"]);
+    }
+
+    #[test]
+    fn internal_transfer_metric_splits_pair_across_periods() {
+        // Transfer with a settlement delay: outgoing on Apr 30, incoming on
+        // May 2. With monthly granularity each side lands in its own period,
+        // even though they belong to the same link.
+        let (_dir, conn, a1, a2, b1, b2) = fixture_two_accounts_for_transfers();
+        let out: i64 = conn
+            .query_row(
+                "INSERT INTO transactions
+                 (account_id, import_batch_id, occurred_at_utc, credit, debit, balance)
+                 VALUES (?1, ?2, '2026-04-30T10:00:00Z', 0, 500_00, 0) RETURNING id",
+                params![a1, b1],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let inc: i64 = conn
+            .query_row(
+                "INSERT INTO transactions
+                 (account_id, import_batch_id, occurred_at_utc, credit, debit, balance)
+                 VALUES (?1, ?2, '2026-05-02T10:00:00Z', 500_00, 0, 0) RETURNING id",
+                params![a2, b2],
+                |r| r.get(0),
+            )
+            .unwrap();
+        raw_insert_link(&conn, out, inc);
+        let resp = compute_report_inner(
+            &conn,
+            &ReportRequest {
+                account_ids: vec![a1, a2],
+                expense_category_ids: vec![],
+                income_category_ids: vec![],
+                from: "2026-04-01".to_string(),
+                to: "2026-05-31".to_string(),
+                granularity: "month".to_string(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            resp.periods.iter().map(|p| &p.key).collect::<Vec<_>>(),
+            vec!["2026-04", "2026-05"]
+        );
+        assert_eq!(resp.internal_transfers.outflows, vec!["500.00", "0.00"]);
+        assert_eq!(resp.internal_transfers.inflows, vec!["0.00", "500.00"]);
     }
 }

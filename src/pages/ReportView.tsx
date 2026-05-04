@@ -11,6 +11,7 @@ import {
   computeReport,
   firstTransactionDate,
   Granularity,
+  InternalTransferMetrics,
   listAccounts,
   listCategories,
   MetricKey,
@@ -365,6 +366,7 @@ export function ReportViewPage({ view, onSaved }: Props) {
       defaultGranularity: granularity,
       expandedCategoryIds: initialConfig.expandedCategoryIds,
       showTotalColumn: showTotal,
+      visibleMetrics,
     };
     const payload = JSON.stringify(config);
     const trimmedName = name.trim() || view.name;
@@ -613,7 +615,7 @@ function PivotTable({
   onOpenMetricsSettings,
 }: PivotProps) {
   const t = useT();
-  const { periods, expense, income, balances } = response;
+  const { periods, expense, income, balances, internalTransfers } = response;
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
   const [incomeCollapsed, setIncomeCollapsed] = useState(false);
   const [expenseCollapsed, setExpenseCollapsed] = useState(false);
@@ -692,12 +694,15 @@ function PivotTable({
     income,
     expense,
     balances,
+    internalTransfers,
     visibleMetrics,
     sectionTitle: t("report.sectionMetrics"),
     netLabel: t("report.metricNet"),
     cumulativeLabel: t("report.metricNetCumulative"),
     openingLabel: t("report.metricOpeningBalance"),
     closingLabel: t("report.metricClosingBalance"),
+    internalTransferOutLabel: t("report.metricInternalTransferOut"),
+    internalTransferInLabel: t("report.metricInternalTransferIn"),
     settingsLabel: t("report.metricsSettings"),
     onOpenSettings: onOpenMetricsSettings,
     showTotal,
@@ -1055,6 +1060,10 @@ interface RenderMetricsArgs {
   // Backend-provided per-period running balances. Already aggregated across
   // selected accounts and currency-summed 1:1; rendered straight through.
   balances: BalanceMetrics;
+  // Per-period sums of transactions netted out by paired internal-transfer
+  // links. Surfaced as two informational metric rows so the user sees the
+  // volume that didn't reach income/expense.
+  internalTransfers: InternalTransferMetrics;
   // Subset of metric keys (in canonical order) the user wants to see. Order
   // here is informational — the renderer follows ALL_METRIC_KEYS for stable
   // visual ordering regardless of selection order.
@@ -1064,6 +1073,8 @@ interface RenderMetricsArgs {
   cumulativeLabel: string;
   openingLabel: string;
   closingLabel: string;
+  internalTransferOutLabel: string;
+  internalTransferInLabel: string;
   // Tooltip + aria-label for the gear icon in the section header that opens
   // the metrics-visibility modal.
   settingsLabel: string;
@@ -1099,12 +1110,15 @@ function renderMetricsSection({
   income,
   expense,
   balances,
+  internalTransfers,
   visibleMetrics,
   sectionTitle,
   netLabel,
   cumulativeLabel,
   openingLabel,
   closingLabel,
+  internalTransferOutLabel,
+  internalTransferInLabel,
   settingsLabel,
   onOpenSettings,
   showTotal,
@@ -1143,6 +1157,18 @@ function renderMetricsSection({
   );
   const openingTotal = openingPerPeriod[0] ?? 0;
   const closingTotal = closingPerPeriod[closingPerPeriod.length - 1] ?? 0;
+
+  // Internal transfer metrics are presented as positive amounts (matching the
+  // unsigned formatting used in income/expense rows), since they're volume
+  // indicators rather than a financial result.
+  const transferOutflows = internalTransfers.outflows.map(
+    (s) => parseMoneyToMinor(s) ?? 0,
+  );
+  const transferInflows = internalTransfers.inflows.map(
+    (s) => parseMoneyToMinor(s) ?? 0,
+  );
+  const transferOutflowsTotal = transferOutflows.reduce((a, b) => a + b, 0);
+  const transferInflowsTotal = transferInflows.reduce((a, b) => a + b, 0);
 
   const visibleSet = new Set(visibleMetrics);
 
@@ -1206,6 +1232,34 @@ function renderMetricsSection({
       {showTotal && <td className="pivot-value-cell pivot-value-cell--total" />}
     </tr>,
   ];
+  // Volume metrics (internal transfers) — same row layout as renderRow but
+  // skip signClass: these are non-negative volumes, not a financial result,
+  // so green tinting on every cell would be visual noise. Mirrors how
+  // income/expense rows render plain unsigned numbers.
+  const renderVolumeRow = (
+    key: string,
+    label: string,
+    values: number[],
+    total: number,
+  ): React.ReactElement => (
+    <tr key={key} className="pivot-row pivot-row--metric">
+      <td className="pivot-name-cell">
+        <span className="pivot-fold-spacer" aria-hidden />
+        <span className="pivot-name-text">{label}</span>
+      </td>
+      {values.map((m, idx) => (
+        <td key={idx} className="pivot-value-cell">
+          {formatMoney(formatMinorAsMoney(m))}
+        </td>
+      ))}
+      {showTotal && (
+        <td className="pivot-value-cell pivot-value-cell--total">
+          {formatMoney(formatMinorAsMoney(total))}
+        </td>
+      )}
+    </tr>
+  );
+
   if (!sectionCollapsed) {
     if (visibleSet.has("net")) {
       out.push(renderRow("metric-net", netLabel, netPerPeriod, netTotal));
@@ -1230,6 +1284,26 @@ function renderMetricsSection({
         renderRow("metric-closing", closingLabel, closingPerPeriod, closingTotal),
       );
     }
+    if (visibleSet.has("internalTransferOut")) {
+      out.push(
+        renderVolumeRow(
+          "metric-internal-transfer-out",
+          internalTransferOutLabel,
+          transferOutflows,
+          transferOutflowsTotal,
+        ),
+      );
+    }
+    if (visibleSet.has("internalTransferIn")) {
+      out.push(
+        renderVolumeRow(
+          "metric-internal-transfer-in",
+          internalTransferInLabel,
+          transferInflows,
+          transferInflowsTotal,
+        ),
+      );
+    }
   }
   return out;
 }
@@ -1243,6 +1317,8 @@ const METRIC_LABEL_KEYS: Record<MetricKey, string> = {
   cumulative: "report.metricNetCumulative",
   opening: "report.metricOpeningBalance",
   closing: "report.metricClosingBalance",
+  internalTransferOut: "report.metricInternalTransferOut",
+  internalTransferIn: "report.metricInternalTransferIn",
 };
 
 interface MetricsSettingsModalProps {
