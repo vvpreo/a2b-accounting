@@ -10,18 +10,22 @@
 //!
 //! Four accounts are seeded to mirror a realistic household setup and to lay
 //! groundwork for a future "mark transfer between own accounts" feature:
-//!   - Salary  ("Зарплатный счёт"): salary lands here, fixed monthly transfers
-//!     are sent out to Family / Savings / Vacation, plus a few small misc spends.
+//!   - Salary  ("Зарплатный счёт"): 10 years of history. The earliest 7 years
+//!     are a "bachelor" period — just one paycheck and one uncategorized
+//!     monthly expense, leaving a small residual every month. After that the
+//!     Family account opens and the usual transfers (Family / Savings /
+//!     Vacation) and small misc spends start.
 //!   - Family  ("Семейный счёт"): receives the monthly transfer from Salary
 //!     and occasional gifts; carries the bulk of recurring household expenses.
-//!   - Savings ("Сберегательный счёт"): receive-only, opened ~6 months
-//!     after the Family account. Funded sporadically (roughly once per
-//!     quarter) with variable amounts to mimic undisciplined saving
-//!     behaviour. No outgoing activity.
+//!     Opens 36 months ago.
+//!   - Savings ("Сберегательный счёт"): receive-only, opens 6 months after
+//!     the Family account. On that opening day the entire bachelor-period
+//!     residual is dumped from Salary into Savings as a single transfer.
+//!     Subsequent funding is sporadic (roughly once per quarter) with
+//!     variable amounts to mimic undisciplined saving behaviour.
 //!   - Vacation ("На отпуск"): receive-only, opened ~8 months ago. Funded by
-//!     redistributing a slice of the Salary→Family transfer into a new
-//!     Salary→Vacation transfer of the same total magnitude — net outflow
-//!     from Salary is unchanged.
+//!     a fixed monthly Salary→Vacation transfer added on top of the existing
+//!     transfers — Salary income comfortably covers it.
 //! Transfers between accounts are emitted as paired uncategorized transactions
 //! (debit on the source, credit on the destination) so a future feature can
 //! link the two sides without changing the schema.
@@ -105,6 +109,20 @@ const TRANSFER_TO_VACATION_USD: u32 = 400;
 // `today`, that means the vacation account effectively appeared ~8 months
 // before today.
 const VACATION_ACTIVE_MONTHS: u32 = 8;
+// Total salary history. The Family account is anchored at month
+// `today - 36`, so the first 84 months (= SALARY_AGE_MONTHS - 36) are the
+// "bachelor" period: a single paycheck and a single uncategorized expense
+// per month, with the difference accumulating until Savings opens.
+const SALARY_AGE_MONTHS: u32 = 120;
+const FAMILY_AGE_MONTHS: u32 = 36;
+// Bachelor monthly expense range. Tuned so each month leaves a few hundred
+// dollars of residual on the salary account; summed across 84 months this
+// becomes a meaningful one-shot deposit when Savings opens.
+const BACHELOR_EXPENSE_LO_USD: u32 = 4_200;
+const BACHELOR_EXPENSE_HI_USD: u32 = 4_800;
+// Separate seed for the bachelor period so its rng calls don't shift the
+// existing per-month randomness used by the family/savings/vacation flows.
+const BACHELOR_RNG_SEED: u64 = 0xBACE_5EED;
 
 // Opening balance for the Family account, posted on the first seed day so the
 // running balance can absorb month-to-month variance in expenses without
@@ -350,10 +368,18 @@ fn iter_months(start: NaiveDate, end: NaiveDate) -> impl Iterator<Item = NaiveDa
 
 fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
     let mut rng = Rng::new(0xCAFEBABE);
+    let mut bachelor_rng = Rng::new(BACHELOR_RNG_SEED);
     let mut out: Vec<TxnSpec> = Vec::new();
 
-    let start = today
-        .checked_sub_months(Months::new(36))
+    // Bachelor period reaches back the full salary history; the Family,
+    // Savings and Vacation accounts only become active later.
+    let bachelor_start = today
+        .checked_sub_months(Months::new(SALARY_AGE_MONTHS))
+        .unwrap()
+        .with_day(1)
+        .unwrap();
+    let family_start = today
+        .checked_sub_months(Months::new(FAMILY_AGE_MONTHS))
         .unwrap()
         .with_day(1)
         .unwrap();
@@ -373,21 +399,22 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         .unwrap();
 
     // The Savings account opens `SAVINGS_AGE_OFFSET_MONTHS` after the Family
-    // account (which is anchored at `start`). Months strictly before this
-    // anchor produce no savings transfer at all.
-    let savings_start = start
+    // account. Months strictly before this anchor produce no savings transfer
+    // at all (and the bachelor-residual dump fires on the very first one).
+    let savings_start = family_start
         .checked_add_months(Months::new(SAVINGS_AGE_OFFSET_MONTHS))
         .unwrap();
 
-    // Opening balance on the family account, posted on the very first day of
-    // the seed range so it precedes every other transaction. Without it, the
-    // family balance would briefly dip below zero whenever a month's expenses
-    // happen to exceed the fixed transfer-in (the rent alone is $2k right at
-    // the start of each month). Pushed first → stable sort places it at the
-    // head of the chain.
+    // Opening balance on the family account, posted on the very first day
+    // the family account exists (NOT the bachelor period — Family didn't
+    // exist back then). Without it, the family balance would briefly dip
+    // below zero whenever a month's expenses happen to exceed the fixed
+    // transfer-in (the rent alone is $2k right at the start of each month).
+    // Pushed early → stable sort places it ahead of any other Family entry
+    // on the same date.
     out.push(TxnSpec {
         account: AccountKind::Family,
-        date: start,
+        date: family_start,
         credit_minor: usd(OPENING_BALANCE_FAMILY_USD),
         debit_minor: 0,
         categorization: Categorization::None,
@@ -396,9 +423,48 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         transfer_tag: None,
     });
 
-    for month_start in iter_months(start, end) {
+    // Running total of the bachelor-period residual (paycheck minus monthly
+    // expense). Drained into Savings as a single transfer on the day Savings
+    // opens.
+    let mut bachelor_residual_minor: i64 = 0;
+
+    for month_start in iter_months(bachelor_start, end) {
         let y = month_start.year();
         let m = month_start.month();
+
+        if month_start < family_start {
+            // ----- Bachelor period -----
+            // Just a paycheck and one uncategorized expense per month.
+            // Residual accumulates and lands on Savings as a single dump
+            // when that account opens.
+            out.push(TxnSpec {
+                account: AccountKind::Salary,
+                date: safe_date(y, m, 1),
+                credit_minor: usd(5_000),
+                debit_minor: 0,
+                categorization: Categorization::Full("Зарплата"),
+                peer: Some("ООО \"Работодатель\""),
+                bank_description: Some("Заработная плата"),
+                transfer_tag: None,
+            });
+            let expense = usd_from_range(
+                &mut bachelor_rng,
+                BACHELOR_EXPENSE_LO_USD,
+                BACHELOR_EXPENSE_HI_USD,
+            );
+            out.push(TxnSpec {
+                account: AccountKind::Salary,
+                date: safe_date(y, m, 15),
+                credit_minor: 0,
+                debit_minor: expense,
+                categorization: Categorization::None,
+                peer: Some("Текущие расходы"),
+                bank_description: Some("Расходы за месяц"),
+                transfer_tag: None,
+            });
+            bachelor_residual_minor += usd(5_000) - expense;
+            continue;
+        }
 
         // ----- Salary account -----
 
@@ -967,6 +1033,36 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 transfer_tag: Some(tag_savings),
             });
         }
+
+        // One-shot bachelor-savings dump on the day Savings opens: drain the
+        // residual accumulated across the bachelor period into Savings as a
+        // single internal transfer. Day 5 keeps it clear of the day-2 family
+        // transfer and the day-3 sporadic savings emission. The pair shares
+        // a `transfer_tag` so it surfaces in `transaction_links` like every
+        // other internal transfer.
+        if month_start == savings_start && bachelor_residual_minor > 0 {
+            let tag = format!("salary->savings-bachelor@{y}-{m:02}");
+            out.push(TxnSpec {
+                account: AccountKind::Salary,
+                date: safe_date(y, m, 5),
+                credit_minor: 0,
+                debit_minor: bachelor_residual_minor,
+                categorization: Categorization::None,
+                peer: Some("Сберегательный счёт"),
+                bank_description: Some("Перевод накоплений"),
+                transfer_tag: Some(tag.clone()),
+            });
+            out.push(TxnSpec {
+                account: AccountKind::Savings,
+                date: safe_date(y, m, 5),
+                credit_minor: bachelor_residual_minor,
+                debit_minor: 0,
+                categorization: Categorization::None,
+                peer: Some("Зарплатный счёт"),
+                bank_description: Some("Накопления холостого периода"),
+                transfer_tag: Some(tag),
+            });
+        }
     }
 
     // Two illustrative split transactions in the most recent month: half goes
@@ -1513,13 +1609,14 @@ mod tests {
         // Family transfer fires every month (37); vacation fires for the
         // last `VACATION_ACTIVE_MONTHS` (8); savings is sporadic (1-in-3
         // chance over 31 active months — deterministic 10 with seed
-        // 0xCAFEBABE). Total: 37 + 8 + 10 = 55.
+        // 0xCAFEBABE) plus a one-shot bachelor-residual dump on the day
+        // Savings opens (1). Total: 37 + 8 + 10 + 1 = 56.
         let n_links: i64 = conn
             .query_row("SELECT COUNT(*) FROM transaction_links", [], |r| r.get(0))
             .unwrap();
         assert_eq!(
-            n_links, 55,
-            "expected 37 family + 8 vacation + 10 sporadic savings transfer pairs, got {n_links}"
+            n_links, 56,
+            "expected 37 family + 8 vacation + 10 sporadic savings + 1 bachelor dump transfer pairs, got {n_links}"
         );
 
         // Every link must connect two transactions on *different* accounts.
@@ -1559,25 +1656,26 @@ mod tests {
             .unwrap();
 
         let by_name: HashMap<String, i64> = rows.into_iter().collect();
-        // 37 months × (1 salary + 0..1 quarterly + 2..3 transfers + 0..1 misc)
-        // + 1 half-cat bonus → ~110-200 baseline; vacation transfers add 8 to
-        // the upper bound. Generous range absorbs PRNG drift.
+        // Bachelor period: 84 months × 2 (paycheck + uncategorized expense)
+        // = 168. Post-family: 37 months × (1 salary + 0..1 quarterly + 2..3
+        // transfers + 0..1 misc) ≈ 110-200. Plus 1 half-cat bonus and 1
+        // bachelor dump on Salary side. Generous range absorbs PRNG drift.
         let salary = by_name.get("Зарплатный счёт").copied().unwrap_or(0);
         assert!(
-            (100..=300).contains(&salary),
-            "Зарплатный счёт expected ~120-220 txns, got {salary}"
+            (260..=500).contains(&salary),
+            "Зарплатный счёт expected ~280-380 txns, got {salary}"
         );
         // Family carries the lion's share — recurring + variable + groups +
         // multi-splits + monthly transfer-in.
         let family = by_name.get("Семейный счёт").copied().unwrap_or(0);
         assert!(family > 700, "Семейный счёт expected lots of txns, got {family}");
-        // Savings: sporadic transfers (1-in-3 chance per active month over
-        // 31 months ≈ 10). Anchored by the deterministic seed 0xCAFEBABE
-        // to exactly 10.
+        // Savings: 10 sporadic transfers (1-in-3 chance per active month
+        // over 31 months, deterministic with seed 0xCAFEBABE) plus one
+        // bachelor-residual dump on the opening day → 11 total.
         let savings = by_name.get("Сберегательный счёт").copied().unwrap_or(0);
         assert_eq!(
-            savings, 10,
-            "Сберегательный счёт expected ~10 sporadic transfers (deterministic), got {savings}"
+            savings, 11,
+            "Сберегательный счёт expected 10 sporadic + 1 bachelor dump = 11 deterministic, got {savings}"
         );
         // Vacation: one transfer-in for each of the active months (8 by
         // default — see VACATION_ACTIVE_MONTHS).
