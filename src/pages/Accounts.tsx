@@ -16,6 +16,7 @@ import {
   AccountLatestTransaction,
   AccountMonthCell,
   AccountMonthSummary,
+  Currency,
   ImportBatch,
   MonthRange,
   ValidationError,
@@ -28,13 +29,13 @@ import {
   getSetting,
   latestTransactions,
   listAccounts,
+  listCurrencies,
   listImportBatches,
   setSetting,
   updateAccount,
   validateBalanceChain,
 } from "../lib/api";
 import { ACCOUNT_PRESETS, findPresetByName } from "../lib/account-presets";
-import { CRYPTO_CURRENCIES, FIAT_CURRENCIES } from "../lib/currencies";
 import {
   MultiSelectDropdown,
   MultiSelectItem,
@@ -210,6 +211,18 @@ function AccountFields({
   onChange: (v: AccountFormValues) => void;
 }) {
   const t = useT();
+  const [currencies, setCurrencies] = useState<Currency[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    listCurrencies()
+      .then((rows) => {
+        if (!cancelled) setCurrencies(rows);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   return (
     <>
       <label>
@@ -240,20 +253,15 @@ function AccountFields({
           value={value.currency}
           onChange={(e) => onChange({ ...value, currency: e.target.value })}
         >
-          <optgroup label={t("accounts.fieldCurrencyFiat")}>
-            {FIAT_CURRENCIES.map((c) => (
-              <option key={c.code} value={c.code}>
-                {c.code} — {c.name}
-              </option>
-            ))}
-          </optgroup>
-          <optgroup label={t("accounts.fieldCurrencyCrypto")}>
-            {CRYPTO_CURRENCIES.map((c) => (
-              <option key={c.code} value={c.code}>
-                {c.code} — {c.name}
-              </option>
-            ))}
-          </optgroup>
+          {value.currency &&
+            !currencies.some((c) => c.code === value.currency) && (
+              <option value={value.currency}>{value.currency}</option>
+            )}
+          {currencies.map((c) => (
+            <option key={c.code} value={c.code}>
+              {c.code} — {c.name}
+            </option>
+          ))}
         </select>
       </label>
       <label>

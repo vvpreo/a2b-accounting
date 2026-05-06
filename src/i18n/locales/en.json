@@ -33,8 +33,6 @@
     "fieldBank": "Bank",
     "fieldPreset": "Preset",
     "fieldCurrency": "Currency",
-    "fieldCurrencyFiat": "Fiat",
-    "fieldCurrencyCrypto": "Crypto",
     "fieldAccountNumber": "Account number",
     "fieldAccountNumberOptional": "Account number (optional)",
     "fieldOwner": "Owner name",

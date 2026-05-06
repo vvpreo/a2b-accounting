@@ -1,6 +1,7 @@
 mod account_status;
 mod accounts;
 mod categories;
+mod currencies;
 mod db;
 mod exchange_rates;
 mod money;
@@ -75,6 +76,7 @@ pub fn run() {
             categories::list_categories,
             categories::update_category,
             categories::delete_category,
+            currencies::list_currencies,
             transaction_categories::set_transaction_categories,
             transaction_categories::list_transactions_categories,
             transaction_links::link_transactions,

@@ -344,6 +344,19 @@ export function setSetting(key: string, value: string): Promise<void> {
   return invoke<void>("set_setting", { key, value });
 }
 
+export interface Currency {
+  code: string;
+  name: string;
+  symbol: string;
+  /// Source of conversion rates for this currency (e.g. "frankfurter").
+  /// `null` means no automatic rate feed is wired up.
+  rateSource: string | null;
+}
+
+export function listCurrencies(): Promise<Currency[]> {
+  return invoke<Currency[]>("list_currencies");
+}
+
 export interface ExchangeRate {
   id: number;
   currency: string;

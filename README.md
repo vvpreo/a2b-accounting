@@ -121,6 +121,7 @@ transaction_links        (id, txn_a_id → transactions, txn_b_id → transactio
                           CHECK (txn_a_id < txn_b_id)
                           UNIQUE (txn_a_id), UNIQUE (txn_b_id)
                           ON DELETE CASCADE (обе FK)
+currencies               (code PK, name, symbol, rate_source)
 app_settings             (key, value)
 schema_migrations        (version, name, applied_at)
 ```
@@ -148,7 +149,6 @@ finances-v2/
 │   │   ├── account-presets.ts        пресеты банков (валюта по умолчанию, дефолтный TZ-offset, список поддерживаемых форматов выгрузок)
 │   │   ├── colors.ts                 палитра категорий + генерация оттенков из родительского hue
 │   │   ├── category-tree.ts          buildTree/flattenTree (общая утилита для Categories.tsx и пикера)
-│   │   ├── currencies.ts             справочник валют (ISO-коды + крипта)
 │   │   ├── import-formats/           реестр парсеров выгрузок (плагины формата)
 │   │   │   ├── index.ts                    реестр + parseByFormat(formatId, text, t)
 │   │   │   ├── types.ts                    общие типы (CsvParseResult, ImportFormatPlugin, Translate)
@@ -178,7 +178,8 @@ finances-v2/
 │   │   ├── 006_replace_description_columns.sql  transactions.bank_description + transactions.comment
 │   │   ├── 007_add_transaction_is_correcting.sql  transactions.is_correcting
 │   │   ├── 008_add_categories.sql    таблица categories (kind, parent_id, color)
-│   │   └── 009_add_transaction_categories.sql  таблица transaction_categories
+│   │   ├── 009_add_transaction_categories.sql  таблица transaction_categories
+│   │   └── 013_add_currencies.sql    справочник валют + seed Frankfurter snapshot (rate_source)
 │   ├── .taurignore                   защита от dev-watcher лупа на файлах БД
 │   └── src/
 │       ├── main.rs                   точка входа
@@ -189,6 +190,7 @@ finances-v2/
 │       ├── transactions.rs           import/list (с фильтром по account_ids)/delete_batch/validate/preview
 │       ├── categories.rs             create/list/update/delete + наследование kind + тесты
 │       ├── transaction_categories.rs set/list с проверкой kind, инварианта суммы и каскадов + тесты
+│       ├── currencies.rs             list_currencies (справочник валют + rate_source) + тесты
 │       └── settings.rs               get_setting / set_setting (UPSERT в app_settings)
 ├── scripts/
 │   ├── dev.sh                        запуск dev (проверяет FINANCES_DATA_DIR, нормализует в абсолют)
