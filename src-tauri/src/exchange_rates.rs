@@ -394,6 +394,51 @@ pub fn list_rate_entries_for_currency(
         .map_err(|e| e.to_string())
 }
 
+/// Look up the EUR-base rate for `currency` plus the actual `rate_date` row
+/// that backed the answer. Same fallback strategy as [`rate_at`]:
+/// most recent ≤ requested, then earliest ≥ requested. Returns `None` when no
+/// row matches (e.g. the currency hasn't been downloaded yet). For the EUR
+/// base itself the rate is `1` and the date is `None` — there is no row to
+/// point at; callers that need a tooltip date should pick the other side's
+/// date or fall back to the requested one.
+pub(crate) fn lookup_rate_at(
+    conn: &Connection,
+    currency: &str,
+    date_yyyy_mm_dd: &str,
+) -> Option<(Decimal, Option<String>)> {
+    if currency.eq_ignore_ascii_case("EUR") {
+        return Some((Decimal::ONE, None));
+    }
+    let cur_upper = currency.to_ascii_uppercase();
+    let before: Option<(String, String)> = conn
+        .query_row(
+            "SELECT rate_date, rate_to_base FROM exchange_rates
+             WHERE currency = ?1 AND rate_date <= ?2
+             ORDER BY rate_date DESC LIMIT 1",
+            params![cur_upper, date_yyyy_mm_dd],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    let (rate_date, raw) = match before {
+        Some(v) => v,
+        None => conn
+            .query_row(
+                "SELECT rate_date, rate_to_base FROM exchange_rates
+                 WHERE currency = ?1 AND rate_date >= ?2
+                 ORDER BY rate_date ASC LIMIT 1",
+                params![cur_upper, date_yyyy_mm_dd],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .ok()
+            .flatten()?,
+    };
+    let val = Decimal::from_str(&raw).ok()?;
+    Some((val, Some(rate_date)))
+}
+
 /// Look up a conversion rate from `currency` into `base_currency` for a given calendar date.
 ///
 /// Strategy:

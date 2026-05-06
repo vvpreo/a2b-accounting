@@ -582,6 +582,65 @@ tbody tr.is-link-partner {
   position: relative;
 }
 
+/* FX-conversion delta column ("Δ"). Same fixed-width treatment as the money
+   columns; only populated for rows that participate in a transfer link. The
+   header is a clickable button that toggles between percent and absolute
+   display modes — centred so it visually anchors the column the way the
+   data cells (right-aligned numbers) cannot. */
+.col-delta {
+  width: 92px;
+  min-width: 92px;
+  white-space: nowrap;
+}
+
+th.col-delta {
+  text-align: center;
+}
+
+.col-delta-toggle {
+  background: transparent;
+  border: none;
+  padding: 2px 6px;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.12s ease;
+}
+
+.col-delta-toggle:hover {
+  background: #e2e8f0;
+}
+
+.txn-delta {
+  font-variant-numeric: tabular-nums;
+  cursor: help;
+}
+
+/* Gain — green. */
+.txn-delta.is-pos {
+  color: #15803d;
+}
+
+/* Loss — red. */
+.txn-delta.is-neg {
+  color: #b91c1c;
+}
+
+/* Exact match against the dictionary rate — neutral black so it doesn't
+   compete visually with rows that actually moved. */
+.txn-delta.is-zero {
+  color: #111827;
+}
+
+/* No rate available yet (background download still pending or the currency
+   has no feed). Bold red dash matches the "something's missing here" cue
+   used elsewhere in the app. */
+.txn-delta.is-missing {
+  color: #b91c1c;
+  font-weight: 700;
+}
+
 .txn-link-btn {
   /* Filling the cell makes the entire 🔗 column clickable, not just a
      small button surface — important for "start pending" cells where

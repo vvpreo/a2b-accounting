@@ -214,6 +214,26 @@ export function unlinkTransaction(transactionId: number): Promise<void> {
   return invoke<void>("unlink_transaction", { transactionId });
 }
 
+/// FX-conversion gain/loss for one side of an inter-account transfer.
+/// `deltaMinor` is the signed amount in the transaction's own currency, in
+/// minor units (cents/satang/...). `null` when the dictionary rate isn't
+/// available yet — the UI then renders a red dash. `expectedMinor` is the
+/// absolute amount this side *should* have moved at the fair cross-rate;
+/// it acts as the percentage base in the UI's % display. `rateDate` is the
+/// actual date of the rate row that backed the calculation; `null` for
+/// EUR/EUR transfers (EUR is the base — no row to point at).
+export interface TransferDelta {
+  transactionId: number;
+  deltaMinor: number | null;
+  expectedMinor: number | null;
+  currency: string;
+  rateDate: string | null;
+}
+
+export function listTransferDeltas(): Promise<TransferDelta[]> {
+  return invoke<TransferDelta[]>("list_transfer_deltas");
+}
+
 export function importTransactions(args: {
   accountId: number;
   sourceFilename: string | null;

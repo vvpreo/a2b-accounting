@@ -13,6 +13,7 @@ mod settings;
 mod transaction_categories;
 mod transaction_links;
 mod transactions;
+mod transfer_deltas;
 
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -90,6 +91,7 @@ pub fn run() {
             transaction_links::link_transactions,
             transaction_links::unlink_transaction,
             transaction_links::list_transaction_links,
+            transfer_deltas::list_transfer_deltas,
             transactions::import_transactions,
             transactions::list_transactions,
             transactions::first_transaction_date,

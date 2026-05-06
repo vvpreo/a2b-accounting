@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { useI18n, useT } from "../i18n";
@@ -17,12 +18,16 @@ import {
   LinkErrorCode,
   Transaction,
   TransactionCategoryView,
+  TransferDelta,
   TxnLink,
+  getSetting,
   linkTransactions,
   listAccounts,
   listTransactionLinks,
   listTransactions,
   listTransactionsCategories,
+  listTransferDeltas,
+  setSetting,
   unlinkTransaction,
   updateTransactionComment,
 } from "../lib/api";
@@ -43,6 +48,18 @@ const ROW_KINDS: RowKind[] = [
   "with_bank_description",
   "with_comment",
 ];
+
+/// Two display modes for the Δ column. "percent" is the default:
+///   - Only the credit (incoming) row of each linked pair shows a value, as
+///     a signed percentage of the dictionary-fair amount; the debit row is
+///     blank. Reads as "we lost / gained X% on this conversion."
+///   - "absolute" mirrors the older behaviour and shows the signed delta in
+///     each side's own currency on both rows.
+/// Toggled via a click on the column header; the choice is persisted in
+/// `app_settings` under DELTA_MODE_SETTING_KEY.
+type DeltaMode = "percent" | "absolute";
+const DELTA_MODES: DeltaMode[] = ["percent", "absolute"];
+const DELTA_MODE_SETTING_KEY = "transactions.delta_display_mode";
 
 type ColumnKey = "category" | "comment" | "peer" | "bank_description";
 const COLUMN_KEYS: ColumnKey[] = [
@@ -142,6 +159,19 @@ export function TransactionsPage({
   const [pendingLinkTxnId, setPendingLinkTxnId] = useState<number | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
   const [unlinkConfirm, setUnlinkConfirm] = useState<number | null>(null);
+  // FX-conversion deltas for every linked pair, keyed by txnId. Reloaded
+  // alongside `links` and again whenever a background rate download finishes
+  // — newly arrived rates can flip a row from "—" to a real number.
+  const [deltas, setDeltas] = useState<Map<number, TransferDelta>>(
+    () => new Map(),
+  );
+  // Δ-column display mode + the persistence flag. We start in "percent" and
+  // upgrade to whatever's stored in app_settings on first effect tick — that
+  // tiny flash on cold load is preferable to blocking the page render until
+  // the setting comes back. Once `deltaModeLoaded` flips, subsequent toggles
+  // get persisted; we don't write back the initial fetch result.
+  const [deltaMode, setDeltaMode] = useState<DeltaMode>("percent");
+  const [deltaModeLoaded, setDeltaModeLoaded] = useState(false);
   // Floating tooltip rendered via a portal so it isn't clipped by the
   // scrollable .txns-wrap. Coordinates are captured in viewport space at
   // mouseenter time and placed directly over document.body.
@@ -193,6 +223,78 @@ export function TransactionsPage({
       cancelled = true;
     };
   }, [version]);
+
+  // Restore the persisted Δ-column display mode once on mount.
+  useEffect(() => {
+    let cancelled = false;
+    getSetting(DELTA_MODE_SETTING_KEY)
+      .then((v) => {
+        if (cancelled) return;
+        if (v === "percent" || v === "absolute") setDeltaMode(v);
+        setDeltaModeLoaded(true);
+      })
+      .catch(() => {
+        if (!cancelled) setDeltaModeLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function toggleDeltaMode() {
+    setDeltaMode((cur) => {
+      const idx = DELTA_MODES.indexOf(cur);
+      const next = DELTA_MODES[(idx + 1) % DELTA_MODES.length];
+      // Only persist user-initiated changes — the initial restore above
+      // doesn't bounce a write back to settings.
+      if (deltaModeLoaded) {
+        void setSetting(DELTA_MODE_SETTING_KEY, next).catch(() => {
+          // Persist failures are silent — the in-memory toggle still works
+          // for the rest of the session.
+        });
+      }
+      return next;
+    });
+  }
+
+  // Pull FX deltas for all linked pairs. Re-run whenever links change (new
+  // pair created / broken) and whenever a background rate download finishes
+  // — both can affect the answer. Errors are swallowed: a missing rate is
+  // already represented by a `null` deltaMinor, so the page stays usable.
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: UnlistenFn | undefined;
+
+    const refresh = () => {
+      listTransferDeltas()
+        .then((ds) => {
+          if (cancelled) return;
+          const next = new Map<number, TransferDelta>();
+          for (const d of ds) next.set(d.transactionId, d);
+          setDeltas(next);
+        })
+        .catch(() => {
+          // Don't surface — the column simply stays empty / dashed and the
+          // user can still see / break links.
+        });
+    };
+
+    refresh();
+    listen("rates:download:completed", refresh)
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {
+        // Tauri event subsystem unavailable (shouldn't happen in production)
+        // — we just lose the live refresh; the next mount cycle will fetch.
+      });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [version, links]);
 
   // Map of txn id → partner txn id. A transaction is part of at most one
   // link, so this lookup is unambiguous.
@@ -267,8 +369,9 @@ export function TransactionsPage({
   const showComment = visibleColumns.includes("comment");
   const showPeer = visibleColumns.includes("peer");
   const showBankDescription = visibleColumns.includes("bank_description");
-  // 5 fixed money/date columns + always-visible 🔗 column + optional togglables.
-  const visibleColCount = 5 + 1 + visibleColumns.length;
+  // 5 fixed money/date columns + always-visible 🔗 and Δ columns + optional
+  // togglables.
+  const visibleColCount = 5 + 2 + visibleColumns.length;
 
   const visibleTxns = useMemo(() => {
     const fromMs = dateFrom ? Date.parse(dateFrom + "T00:00:00Z") : null;
@@ -558,6 +661,27 @@ export function TransactionsPage({
               >
                 🔗
               </th>
+              <th
+                className="col-delta"
+                title={
+                  deltaMode === "percent"
+                    ? t("transactions.tableDeltaTitlePercent")
+                    : t("transactions.tableDeltaTitleAbsolute")
+                }
+              >
+                <button
+                  type="button"
+                  className="col-delta-toggle"
+                  onClick={toggleDeltaMode}
+                  aria-label={
+                    deltaMode === "percent"
+                      ? t("transactions.tableDeltaTitlePercent")
+                      : t("transactions.tableDeltaTitleAbsolute")
+                  }
+                >
+                  {deltaMode === "percent" ? "Δ%" : "Δ"}
+                </button>
+              </th>
               {showCategory && (
                 <th className="col-category">{t("transactions.tableCategory")}</th>
               )}
@@ -779,6 +903,32 @@ export function TransactionsPage({
                         )}
                       </button>
                     </td>
+                    <td className="col-delta num">
+                      {(() => {
+                        const delta = deltas.get(x.id);
+                        if (!delta) return "";
+                        const isCredit = x.credit !== "0.00";
+                        // Default ("%") mode shows nothing on the debit side
+                        // — the percentage on the incoming row alone is the
+                        // canonical "how much we lost on this conversion".
+                        if (deltaMode === "percent" && !isCredit) return "";
+                        return (
+                          <DeltaCell
+                            delta={delta}
+                            mode={deltaMode}
+                            t={t}
+                            onShowTooltip={(text, rect) =>
+                              setTooltip({
+                                x: rect.left + rect.width / 2,
+                                y: rect.top,
+                                text,
+                              })
+                            }
+                            onHideTooltip={() => setTooltip(null)}
+                          />
+                        );
+                      })()}
+                    </td>
                     {showCategory && (() => {
                       const totalMinor =
                         (parseMoneyToMinor(x.credit) ?? 0) +
@@ -947,6 +1097,111 @@ function CrossIcon() {
       <line x1="5" y1="5" x2="19" y2="19" />
       <line x1="19" y1="5" x2="5" y2="19" />
     </svg>
+  );
+}
+
+/// Format a signed minor amount for the Δ column. Positive values get an
+/// explicit "+" prefix so a quick visual scan distinguishes gains from the
+/// losses that share the row with the Debit column. Zero is rendered as plain
+/// "0.00" — no sign, no plus.
+function formatSignedDeltaMinor(minor: number): string {
+  if (minor === 0) return "0.00";
+  const sign = minor > 0 ? "+" : "-";
+  const abs = Math.abs(minor);
+  const major = Math.trunc(abs / 100);
+  const cents = abs % 100;
+  const grouped = String(major).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return `${sign}${grouped}.${cents.toString().padStart(2, "0")}`;
+}
+
+/// Signed percentage of the dictionary-fair amount, rounded to two decimals.
+/// Returns null when the percentage can't be computed — defensively handles
+/// `expectedMinor === 0`, which would only happen on a degenerate link with
+/// a near-zero partner amount and isn't worth surfacing as a number.
+function formatSignedPercent(
+  deltaMinor: number,
+  expectedMinor: number | null,
+): string | null {
+  if (expectedMinor === null || expectedMinor === 0) return null;
+  const pct = (deltaMinor / expectedMinor) * 100;
+  // Round to two decimals so the displayed value matches the comparison
+  // we use for the zero case (avoid "+0.00%" when the underlying float is
+  // 0.0001 — we want the neutral colour and no sign in that case).
+  const rounded = Math.round(pct * 100) / 100;
+  if (rounded === 0) return "0.00%";
+  const sign = rounded > 0 ? "+" : "-";
+  return `${sign}${Math.abs(rounded).toFixed(2)}%`;
+}
+
+/// Renders one Δ cell for a linked transaction. Encapsulates the two display
+/// modes and the cross-mode tooltip composition so the table-row JSX stays
+/// focused on layout. The caller decides whether to render this at all (in
+/// "percent" mode the debit side of every pair is just an empty cell).
+function DeltaCell({
+  delta,
+  mode,
+  t,
+  onShowTooltip,
+  onHideTooltip,
+}: {
+  delta: TransferDelta;
+  mode: DeltaMode;
+  t: (key: string, vars?: Record<string, string | number>) => string;
+  onShowTooltip: (text: string, rect: DOMRect) => void;
+  onHideTooltip: () => void;
+}) {
+  // Missing rate — same red bold dash regardless of mode. Tooltip explains.
+  if (delta.deltaMinor === null) {
+    const text = t("transactions.deltaNoRateTooltip");
+    return (
+      <span
+        className="txn-delta is-missing"
+        onMouseEnter={(e) =>
+          onShowTooltip(text, e.currentTarget.getBoundingClientRect())
+        }
+        onMouseLeave={onHideTooltip}
+      >
+        —
+      </span>
+    );
+  }
+
+  const polarityCls =
+    delta.deltaMinor > 0
+      ? "is-pos"
+      : delta.deltaMinor < 0
+      ? "is-neg"
+      : "is-zero";
+
+  // Pre-compute both representations: the active mode goes into the cell,
+  // the other one rides along in the tooltip so the user can see what the
+  // alternative mode would show without flipping the toggle.
+  const absText = formatSignedDeltaMinor(delta.deltaMinor);
+  const pctText = formatSignedPercent(delta.deltaMinor, delta.expectedMinor);
+
+  const primary = mode === "percent" ? pctText : absText;
+  const alternate =
+    mode === "percent" ? `${absText} ${delta.currency}` : pctText;
+
+  const lines: string[] = [];
+  if (delta.rateDate !== null) {
+    lines.push(t("transactions.deltaRateDateTooltip", { date: delta.rateDate }));
+  }
+  if (alternate !== null && alternate !== "") {
+    lines.push(alternate);
+  }
+  const tooltip = lines.join("\n");
+
+  return (
+    <span
+      className={`txn-delta ${polarityCls}`}
+      onMouseEnter={(e) =>
+        onShowTooltip(tooltip, e.currentTarget.getBoundingClientRect())
+      }
+      onMouseLeave={onHideTooltip}
+    >
+      {primary ?? ""}
+    </span>
   );
 }
 
