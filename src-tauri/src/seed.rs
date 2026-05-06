@@ -9,26 +9,31 @@
 //! next launch.
 //!
 //! Four accounts are seeded to mirror a realistic household setup and to lay
-//! groundwork for a future "mark transfer between own accounts" feature:
-//!   - Salary  ("Зарплатный счёт"): 10 years of history. The earliest 7 years
-//!     are a "bachelor" period — just one paycheck and one uncategorized
-//!     monthly expense, leaving a small residual every month. After that the
-//!     Family account opens and the usual transfers (Family / Savings /
-//!     Vacation) and small misc spends start.
-//!   - Family  ("Семейный счёт"): receives the monthly transfer from Salary
-//!     and occasional gifts; carries the bulk of recurring household expenses.
-//!     Opens 36 months ago.
-//!   - Savings ("Сберегательный счёт"): receive-only, opens 6 months after
-//!     the Family account. On that opening day the entire bachelor-period
-//!     residual is dumped from Salary into Savings as a single transfer.
-//!     Subsequent funding is sporadic (roughly once per quarter) with
-//!     variable amounts to mimic undisciplined saving behaviour.
-//!   - Vacation ("На отпуск"): receive-only, opened ~8 months ago. Funded by
-//!     a fixed monthly Salary→Vacation transfer added on top of the existing
-//!     transfers — Salary income comfortably covers it.
+//! groundwork for the multi-currency report. Each account lives in its own
+//! currency so the report has to convert across three different bases:
+//!   - Salary  ("Зарплатный счёт", EUR): 10 years of history. The earliest
+//!     7 years are a "bachelor" period — just one paycheck and one
+//!     uncategorized monthly expense, leaving a small residual every month.
+//!     After that the Family account opens and the usual transfers (Family /
+//!     Savings / Vacation) and small misc spends start.
+//!   - Family  ("Семейный счёт", THB): receives the monthly transfer from
+//!     Salary (EUR → THB) and occasional gifts; carries the bulk of recurring
+//!     life expenses. Opens 36 months ago.
+//!   - Savings ("Сберегательный счёт", USD): receive-only, opens 6 months
+//!     after the Family account. On that opening day the entire
+//!     bachelor-period residual is dumped from Salary (EUR) into Savings (USD)
+//!     as a single FX-converted transfer. Subsequent funding is sporadic
+//!     (roughly once per quarter) with variable amounts to mimic undisciplined
+//!     saving behaviour.
+//!   - Vacation ("На отпуск", THB): receive-only, opened ~8 months ago.
+//!     Funded by a fixed monthly Salary (EUR) → Vacation (THB) transfer added
+//!     on top of the existing transfers — Salary income comfortably covers
+//!     it.
 //! Transfers between accounts are emitted as paired uncategorized transactions
 //! (debit on the source, credit on the destination) so a future feature can
-//! link the two sides without changing the schema.
+//! link the two sides without changing the schema. When the two sides live in
+//! different currencies, the credit amount is the FX-converted value of the
+//! debit using the rates listed in the FX section below.
 
 use std::collections::HashMap;
 
@@ -41,9 +46,33 @@ use crate::db::DbState;
 const DEMO_FLAG_KEY: &str = "demo_seeded";
 const DEMO_ACCOUNT_BANK: &str = "Demo Bank";
 const DEMO_ACCOUNT_OWNER: &str = "Демо";
-const DEMO_ACCOUNT_CURRENCY: &str = "USD";
 const DEMO_ACCOUNT_TIMEZONE: &str = "+03:00";
 const DEMO_REPORT_NAME: &str = "Отчёт учёта";
+// Default display currency on the seeded report. EUR is the FX base in the
+// app and matches the salary account's currency, so the multi-currency demo
+// shows a converted view without picking sides between THB and USD.
+const DEMO_REPORT_CURRENCY: &str = "EUR";
+
+// ---- FX rates (Frankfurter, 2026-05-05) ----
+//
+// EUR is the base — that matches what the app's exchange_rates table stores.
+// The cross-currency transfers in the seed (Salary EUR → Family THB,
+// Salary EUR → Vacation THB, Salary EUR → Savings USD) use these rates to
+// derive the destination-side amount from the source-side debit.
+//
+// Fixed monthly transfers use pre-rounded readable constants (e.g.
+// 3 000 EUR ≈ 115 000 THB). The dynamic ones (sporadic Salary→Savings,
+// bachelor-residual dump) call `eur_minor_to_usd_minor` so the credit value
+// tracks whatever EUR amount the RNG / accumulator produced.
+//
+//   1 EUR = 1.1686  USD
+//   1 EUR = 38.143  THB
+//
+// Integer math (no f64) keeps the seed fully deterministic across runs and
+// platforms; rounding is half-up to the nearest minor unit (scale 2).
+fn eur_minor_to_usd_minor(eur_minor: i64) -> i64 {
+    (eur_minor * 11686 + 5000) / 10000
+}
 
 // ---- Accounts ----
 
@@ -59,6 +88,7 @@ struct AccountSpec {
     kind: AccountKind,
     name: &'static str,
     account_number: &'static str,
+    currency: &'static str,
 }
 
 const ACCOUNTS: &[AccountSpec] = &[
@@ -66,43 +96,55 @@ const ACCOUNTS: &[AccountSpec] = &[
         kind: AccountKind::Salary,
         name: "Зарплатный счёт",
         account_number: "DEMO-SAL-0001",
+        currency: "EUR",
     },
     AccountSpec {
         kind: AccountKind::Family,
         name: "Семейный счёт",
         account_number: "DEMO-FAM-0001",
+        currency: "THB",
     },
     AccountSpec {
         kind: AccountKind::Savings,
         name: "Сберегательный счёт",
         account_number: "DEMO-SAV-0001",
+        currency: "USD",
     },
     AccountSpec {
         kind: AccountKind::Vacation,
         name: "На отпуск",
         account_number: "DEMO-VAC-0001",
+        currency: "THB",
     },
 ];
 
 // Fixed monthly internal transfer to Family — kept as plain debits/credits
 // with no category so they collapse together in the report's "Без категории"
-// line.
-const TRANSFER_TO_FAMILY_USD: u32 = 3_500;
+// line. Salary is in EUR, Family in THB, so the two sides differ in both
+// amount and currency; both are pre-rounded to readable demo values that
+// approximate the FX conversion (3 000 EUR ≈ 114 429 THB at 38.143).
+const TRANSFER_TO_FAMILY_DEBIT_EUR: u32 = 3_000;
+const TRANSFER_TO_FAMILY_CREDIT_THB: u32 = 115_000;
 // Savings transfers are deliberately irregular: each active month has a
 // 1-in-3 chance of a transfer landing, with the amount drawn from a wide
 // range. Demos undisciplined saving — sometimes nothing for a few months,
-// sometimes back-to-back contributions of varying size.
+// sometimes back-to-back contributions of varying size. Salary is EUR,
+// Savings is USD, so the EUR amount is sampled and the USD credit derived
+// via `eur_minor_to_usd_minor`.
 const SAVINGS_TRANSFER_CHANCE_NUM: u32 = 1;
 const SAVINGS_TRANSFER_CHANCE_DEN: u32 = 3;
-const SAVINGS_TRANSFER_LO_USD: u32 = 500;
-const SAVINGS_TRANSFER_HI_USD: u32 = 1_500;
+const SAVINGS_TRANSFER_LO_EUR: u32 = 430;
+const SAVINGS_TRANSFER_HI_EUR: u32 = 1_300;
 // The Savings account opens this many months after the Family account.
 // Anchor month = `start + SAVINGS_AGE_OFFSET_MONTHS`.
 const SAVINGS_AGE_OFFSET_MONTHS: u32 = 6;
-// Vacation transfer: a new outflow from Salary that didn't exist before the
-// account opened. Salary inflow comfortably covers the existing transfers
-// plus this one, so adding it doesn't risk underflowing any account.
-const TRANSFER_TO_VACATION_USD: u32 = 400;
+// Vacation transfer: a new outflow from Salary (EUR) into Vacation (THB)
+// that didn't exist before the account opened. Salary inflow comfortably
+// covers the existing transfers plus this one, so adding it doesn't risk
+// underflowing any account. Source debit and destination credit are
+// pre-rounded around the FX conversion (350 EUR ≈ 13 350 THB).
+const TRANSFER_TO_VACATION_DEBIT_EUR: u32 = 350;
+const TRANSFER_TO_VACATION_CREDIT_THB: u32 = 13_000;
 // Number of monthly contributions the vacation account has accumulated.
 // Anchored to `today`, the first contribution lands in the month
 // `today - (VACATION_ACTIVE_MONTHS - 1)`. With the typical mid-/late-month
@@ -115,20 +157,22 @@ const VACATION_ACTIVE_MONTHS: u32 = 8;
 // per month, with the difference accumulating until Savings opens.
 const SALARY_AGE_MONTHS: u32 = 120;
 const FAMILY_AGE_MONTHS: u32 = 36;
-// Bachelor monthly expense range. Tuned so each month leaves a few hundred
-// dollars of residual on the salary account; summed across 84 months this
-// becomes a meaningful one-shot deposit when Savings opens.
-const BACHELOR_EXPENSE_LO_USD: u32 = 4_200;
-const BACHELOR_EXPENSE_HI_USD: u32 = 4_800;
+// Bachelor monthly expense range, in EUR (Salary's currency). Tuned so each
+// month leaves a few hundred euros of residual on the salary account;
+// summed across 84 months this becomes a meaningful one-shot deposit when
+// Savings opens (after FX conversion to USD).
+const BACHELOR_EXPENSE_LO_EUR: u32 = 3_600;
+const BACHELOR_EXPENSE_HI_EUR: u32 = 4_100;
 // Separate seed for the bachelor period so its rng calls don't shift the
 // existing per-month randomness used by the family/savings/vacation flows.
 const BACHELOR_RNG_SEED: u64 = 0xBACE_5EED;
 
-// Opening balance for the Family account, posted on the first seed day so the
-// running balance can absorb month-to-month variance in expenses without
-// dipping below zero. Salary and Savings accounts start at zero — Salary is
-// continually replenished by the day-1 paycheck, and Savings is receive-only.
-const OPENING_BALANCE_FAMILY_USD: u32 = 10_000;
+// Opening balance for the Family account (THB), posted on the first seed day
+// so the running balance can absorb month-to-month variance in expenses
+// without dipping below zero. Salary and Savings accounts start at zero —
+// Salary is continually replenished by the day-1 paycheck, and Savings is
+// receive-only.
+const OPENING_BALANCE_FAMILY_THB: u32 = 325_000;
 
 // ---- Categories ----
 
@@ -280,23 +324,24 @@ fn multi_total(parts: &[(&'static str, i64)]) -> i64 {
     parts.iter().map(|(_, s)| *s).sum()
 }
 
-// Splits used by Categorization::Multi. Amounts are in minor units (cents).
-// Each tuple is (category_name, share_minor); sum equals the txn debit.
+// Splits used by Categorization::Multi. Amounts are in minor units (THB
+// satang — Family lives in THB). Each tuple is (category_name, share_minor);
+// sum equals the txn debit.
 const MULTI_HYPERMARKET: &[(&str, i64)] = &[
-    ("Магазины", 40_00),       // group: stuff that didn't fit a leaf
-    ("Супермаркеты", 90_00),   // leaf: groceries
+    ("Магазины", 1_300_00),       // group: stuff that didn't fit a leaf
+    ("Супермаркеты", 2_900_00),   // leaf: groceries
 ];
 const MULTI_DOCTOR_VISIT: &[(&str, i64)] = &[
-    ("Врачи", 50_00),          // group: consult
-    ("Стоматолог", 80_00),     // leaf: procedure
+    ("Врачи", 1_600_00),          // group: consult
+    ("Стоматолог", 2_600_00),     // leaf: procedure
 ];
 const MULTI_SUB_BUNDLE: &[(&str, i64)] = &[
-    ("Подписки", 5_00),        // group: base family plan
-    ("Музыка", 8_00),          // leaf: add-on
+    ("Подписки", 200_00),         // group: base family plan
+    ("Музыка", 300_00),           // leaf: add-on
 ];
 const MULTI_GROCERY_DELIVERY: &[(&str, i64)] = &[
-    ("Супермаркеты", 100_00),  // leaf under one group
-    ("Доставка", 25_00),       // leaf under another — cross-group split
+    ("Супермаркеты", 3_300_00),   // leaf under one group
+    ("Доставка", 800_00),         // leaf under another — cross-group split
 ];
 
 #[derive(Debug)]
@@ -332,14 +377,24 @@ const CLOTHES: &[&str] = &["Uniqlo", "Zara", "H&M", "Lamoda"];
 const EDU: &[&str] = &["Курсы английского", "Онлайн-школа", "Книжный магазин"];
 const MISC: &[&str] = &["Хозтовары", "Подарок", "Сувенир", "Канцелярия"];
 
+// Each currency we use here has scale 2, so the helpers all share the same
+// `× 100` shape; named distinctly to keep the call sites self-documenting
+// about which currency a given amount lives in.
 fn usd(amount: u32) -> i64 {
     amount as i64 * 100
 }
+fn eur(amount: u32) -> i64 {
+    amount as i64 * 100
+}
+fn thb(amount: u32) -> i64 {
+    amount as i64 * 100
+}
 
-fn usd_from_range(rng: &mut Rng, lo: u32, hi: u32) -> i64 {
-    let v = rng.range(lo, hi);
-    // Round to whole dollars for tidy demo values.
-    usd(v)
+fn eur_from_range(rng: &mut Rng, lo: u32, hi: u32) -> i64 {
+    eur(rng.range(lo, hi))
+}
+fn thb_from_range(rng: &mut Rng, lo: u32, hi: u32) -> i64 {
+    thb(rng.range(lo, hi))
 }
 
 fn safe_date(y: i32, m: u32, d: u32) -> NaiveDate {
@@ -420,7 +475,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
     out.push(TxnSpec {
         account: AccountKind::Family,
         date: family_start,
-        credit_minor: usd(OPENING_BALANCE_FAMILY_USD),
+        credit_minor: thb(OPENING_BALANCE_FAMILY_THB),
         debit_minor: 0,
         categorization: Categorization::None,
         peer: Some("Начальный остаток"),
@@ -430,8 +485,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
     });
 
     // Running total of the bachelor-period residual (paycheck minus monthly
-    // expense). Drained into Savings as a single transfer on the day Savings
-    // opens.
+    // expense), in EUR minor units (Salary's currency). Drained into Savings
+    // as a single FX-converted transfer on the day Savings opens.
     let mut bachelor_residual_minor: i64 = 0;
 
     for month_start in iter_months(bachelor_start, end) {
@@ -446,7 +501,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             out.push(TxnSpec {
                 account: AccountKind::Salary,
                 date: safe_date(y, m, 1),
-                credit_minor: usd(5_000),
+                credit_minor: eur(4_300),
                 debit_minor: 0,
                 categorization: Categorization::Full("Зарплата"),
                 peer: Some("ООО \"Работодатель\""),
@@ -454,10 +509,10 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 transfer_tag: None,
                 is_correcting: false,
             });
-            let expense = usd_from_range(
+            let expense = eur_from_range(
                 &mut bachelor_rng,
-                BACHELOR_EXPENSE_LO_USD,
-                BACHELOR_EXPENSE_HI_USD,
+                BACHELOR_EXPENSE_LO_EUR,
+                BACHELOR_EXPENSE_HI_EUR,
             );
             out.push(TxnSpec {
                 account: AccountKind::Salary,
@@ -470,18 +525,18 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 transfer_tag: None,
                 is_correcting: false,
             });
-            bachelor_residual_minor += usd(5_000) - expense;
+            bachelor_residual_minor += eur(4_300) - expense;
             continue;
         }
 
         // ----- Salary account -----
 
-        // Paycheck on the 1st: $5,000 net. Lands first in the month so the
+        // Paycheck on the 1st: 4 300 EUR net. Lands first in the month so the
         // outgoing transfers on day 2 / day 3 always have funds to draw from.
         out.push(TxnSpec {
             account: AccountKind::Salary,
             date: safe_date(y, m, 1),
-            credit_minor: usd(5_000),
+            credit_minor: eur(4_300),
             debit_minor: 0,
             categorization: Categorization::Full("Зарплата"),
             peer: Some("ООО \"Работодатель\""),
@@ -495,7 +550,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             out.push(TxnSpec {
                 account: AccountKind::Salary,
                 date: safe_date(y, m, 25),
-                credit_minor: usd(1_500),
+                credit_minor: eur(1_300),
                 debit_minor: 0,
                 categorization: Categorization::Full("Зарплата"),
                 peer: Some("ООО \"Работодатель\""),
@@ -514,15 +569,17 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
 
         let vacation_active = month_start >= vacation_start;
 
-        // Day 2: salary → family. Same `transfer_tag` on both sides → seeded
-        // as a transaction_links row so the demo report excludes the pair as
-        // an internal transfer.
+        // Day 2: salary (EUR) → family (THB). Same `transfer_tag` on both
+        // sides → seeded as a transaction_links row so the demo report
+        // excludes the pair as an internal transfer. Debit and credit live in
+        // different currencies — the values are pre-rounded around the FX
+        // conversion (see TRANSFER_TO_FAMILY_*).
         let tag_family = format!("salary->family@{y}-{m:02}");
         out.push(TxnSpec {
             account: AccountKind::Salary,
             date: safe_date(y, m, 2),
             credit_minor: 0,
-            debit_minor: usd(TRANSFER_TO_FAMILY_USD),
+            debit_minor: eur(TRANSFER_TO_FAMILY_DEBIT_EUR),
             categorization: Categorization::None,
             peer: Some("Семейный счёт"),
             bank_description: Some("Перевод на семейный счёт"),
@@ -532,7 +589,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         out.push(TxnSpec {
             account: AccountKind::Family,
             date: safe_date(y, m, 2),
-            credit_minor: usd(TRANSFER_TO_FAMILY_USD),
+            credit_minor: thb(TRANSFER_TO_FAMILY_CREDIT_THB),
             debit_minor: 0,
             categorization: Categorization::None,
             peer: Some("Зарплатный счёт"),
@@ -545,15 +602,15 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // month loop so its rng calls don't shift the existing per-month
         // randomness for family/multi-split flows.)
 
-        // Day 4: salary → vacation. Only emitted while the vacation account
-        // is active; before that it didn't exist yet.
+        // Day 4: salary (EUR) → vacation (THB). Only emitted while the
+        // vacation account is active; before that it didn't exist yet.
         if vacation_active {
             let tag_vacation = format!("salary->vacation@{y}-{m:02}");
             out.push(TxnSpec {
                 account: AccountKind::Salary,
                 date: safe_date(y, m, 4),
                 credit_minor: 0,
-                debit_minor: usd(TRANSFER_TO_VACATION_USD),
+                debit_minor: eur(TRANSFER_TO_VACATION_DEBIT_EUR),
                 categorization: Categorization::None,
                 peer: Some("Счёт «На отпуск»"),
                 bank_description: Some("Перевод на отпускной счёт"),
@@ -563,7 +620,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             out.push(TxnSpec {
                 account: AccountKind::Vacation,
                 date: safe_date(y, m, 4),
-                credit_minor: usd(TRANSFER_TO_VACATION_USD),
+                credit_minor: thb(TRANSFER_TO_VACATION_CREDIT_THB),
                 debit_minor: 0,
                 categorization: Categorization::None,
                 peer: Some("Зарплатный счёт"),
@@ -581,7 +638,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 account: AccountKind::Salary,
                 date: safe_date(y, m, rng.range(10, 28)),
                 credit_minor: 0,
-                debit_minor: usd_from_range(&mut rng, 10, 70),
+                debit_minor: eur_from_range(&mut rng, 10, 60),
                 categorization: Categorization::Full("Прочее"),
                 peer: Some(rng.pick(MISC)),
                 bank_description: None,
@@ -595,7 +652,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             out.push(TxnSpec {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
-                credit_minor: usd_from_range(&mut rng, 50, 200),
+                credit_minor: thb_from_range(&mut rng, 1_500, 6_500),
                 debit_minor: 0,
                 categorization: Categorization::Full("Подарки"),
                 peer: Some("Перевод от родителей"),
@@ -612,7 +669,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             account: AccountKind::Family,
             date: safe_date(y, m, 4),
             credit_minor: 0,
-            debit_minor: usd(2_000),
+            debit_minor: thb(65_000),
             categorization: Categorization::Full("Аренда"),
             peer: Some("Аренда квартиры"),
             bank_description: None,
@@ -623,7 +680,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             account: AccountKind::Family,
             date: safe_date(y, m, 10),
             credit_minor: 0,
-            debit_minor: usd_from_range(&mut rng, 100, 200),
+            debit_minor: thb_from_range(&mut rng, 3_000, 7_000),
             categorization: Categorization::Full("Коммуналка"),
             peer: Some("ЖКХ"),
             bank_description: None,
@@ -634,7 +691,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             account: AccountKind::Family,
             date: safe_date(y, m, 15),
             credit_minor: 0,
-            debit_minor: usd(30),
+            debit_minor: thb(1_000),
             categorization: Categorization::Full("Интернет"),
             peer: Some("Провайдер"),
             bank_description: None,
@@ -645,7 +702,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             account: AccountKind::Family,
             date: safe_date(y, m, 5),
             credit_minor: 0,
-            debit_minor: usd(80),
+            debit_minor: thb(2_500),
             categorization: Categorization::Full("Общественный"),
             peer: Some("Транспортная карта"),
             bank_description: Some("Пополнение проездного"),
@@ -659,7 +716,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             account: AccountKind::Family,
             date: safe_date(y, m, 5),
             credit_minor: 0,
-            debit_minor: usd_from_range(&mut rng, 8, 25),
+            debit_minor: thb_from_range(&mut rng, 300, 800),
             categorization: Categorization::Full(sub_leaf),
             peer: Some(rng.pick(SUBSCRIPTIONS)),
             bank_description: None,
@@ -673,7 +730,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             account: AccountKind::Family,
             date: safe_date(y, m, 20),
             credit_minor: 0,
-            debit_minor: usd_from_range(&mut rng, 80, 250),
+            debit_minor: thb_from_range(&mut rng, 2_500, 8_000),
             categorization: Categorization::None,
             peer: Some("ATM"),
             bank_description: Some("Снятие наличных"),
@@ -688,7 +745,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, days_in_month(y, m))),
                 credit_minor: 0,
-                debit_minor: usd_from_range(&mut rng, 40, 150),
+                debit_minor: thb_from_range(&mut rng, 1_300, 4_900),
                 categorization: Categorization::Full("Супермаркеты"),
                 peer: Some(rng.pick(SHOPS)),
                 bank_description: None,
@@ -701,7 +758,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, days_in_month(y, m))),
                 credit_minor: 0,
-                debit_minor: usd_from_range(&mut rng, 30, 90),
+                debit_minor: thb_from_range(&mut rng, 1_000, 3_000),
                 categorization: Categorization::Full("Фермерский рынок"),
                 peer: Some("Фермерский рынок"),
                 bank_description: None,
@@ -716,7 +773,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, days_in_month(y, m))),
                 credit_minor: 0,
-                debit_minor: usd_from_range(&mut rng, 20, 80),
+                debit_minor: thb_from_range(&mut rng, 700, 2_600),
                 categorization: Categorization::Full("Кафе и рестораны"),
                 peer: Some(rng.pick(CAFES)),
                 bank_description: None,
@@ -731,7 +788,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, days_in_month(y, m))),
                 credit_minor: 0,
-                debit_minor: usd_from_range(&mut rng, 25, 70),
+                debit_minor: thb_from_range(&mut rng, 800, 2_300),
                 categorization: Categorization::Full("Доставка"),
                 peer: Some(rng.pick(DELIVERY)),
                 bank_description: None,
@@ -746,7 +803,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, days_in_month(y, m))),
                 credit_minor: 0,
-                debit_minor: usd_from_range(&mut rng, 10, 30),
+                debit_minor: thb_from_range(&mut rng, 300, 1_000),
                 categorization: Categorization::Full("Такси"),
                 peer: Some(rng.pick(TAXI)),
                 bank_description: None,
@@ -761,7 +818,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(5, 28)),
                 credit_minor: 0,
-                debit_minor: usd_from_range(&mut rng, 15, 60),
+                debit_minor: thb_from_range(&mut rng, 500, 2_000),
                 categorization: Categorization::Full("Аптека"),
                 peer: Some(rng.pick(PHARMACY)),
                 bank_description: None,
@@ -778,7 +835,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(5, 28)),
                 credit_minor: 0,
-                debit_minor: usd_from_range(&mut rng, 80, 200),
+                debit_minor: thb_from_range(&mut rng, 2_500, 6_500),
                 categorization: Categorization::Full(doctor),
                 peer: Some("Клиника"),
                 bank_description: Some("Приём врача"),
@@ -795,7 +852,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(3, 28)),
                 credit_minor: 0,
-                debit_minor: usd_from_range(&mut rng, 30, 90),
+                debit_minor: thb_from_range(&mut rng, 1_000, 3_000),
                 categorization: Categorization::Full(station),
                 peer: Some(station),
                 bank_description: None,
@@ -810,7 +867,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(7, 27)),
                 credit_minor: 0,
-                debit_minor: usd_from_range(&mut rng, 15, 50),
+                debit_minor: thb_from_range(&mut rng, 500, 1_600),
                 categorization: Categorization::Full("Кино и театр"),
                 peer: Some(rng.pick(CINEMAS)),
                 bank_description: None,
@@ -825,7 +882,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(5, 28)),
                 credit_minor: 0,
-                debit_minor: usd_from_range(&mut rng, 40, 130),
+                debit_minor: thb_from_range(&mut rng, 1_300, 4_200),
                 categorization: Categorization::Full("Хобби"),
                 peer: Some(rng.pick(HOBBIES)),
                 bank_description: None,
@@ -840,7 +897,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(7, 27)),
                 credit_minor: 0,
-                debit_minor: usd_from_range(&mut rng, 80, 300),
+                debit_minor: thb_from_range(&mut rng, 2_600, 9_800),
                 categorization: Categorization::Full("Одежда"),
                 peer: Some(rng.pick(CLOTHES)),
                 bank_description: None,
@@ -855,7 +912,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(7, 27)),
                 credit_minor: 0,
-                debit_minor: usd_from_range(&mut rng, 50, 200),
+                debit_minor: thb_from_range(&mut rng, 1_600, 6_500),
                 categorization: Categorization::Full("Образование"),
                 peer: Some(rng.pick(EDU)),
                 bank_description: None,
@@ -876,7 +933,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: 0,
-                debit_minor: usd_from_range(&mut rng, 30, 80),
+                debit_minor: thb_from_range(&mut rng, 1_000, 2_600),
                 categorization: Categorization::Full("Жильё"),
                 peer: Some("Хозтовары для дома"),
                 bank_description: Some("Мелкий ремонт"),
@@ -890,7 +947,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: 0,
-                debit_minor: usd_from_range(&mut rng, 20, 50),
+                debit_minor: thb_from_range(&mut rng, 700, 1_600),
                 categorization: Categorization::Full("Еда"),
                 peer: Some("Магазинчик у дома"),
                 bank_description: Some("Перекус"),
@@ -904,7 +961,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: 0,
-                debit_minor: usd_from_range(&mut rng, 10, 30),
+                debit_minor: thb_from_range(&mut rng, 300, 1_000),
                 categorization: Categorization::Full("Транспорт"),
                 peer: Some("Парковка"),
                 bank_description: None,
@@ -918,7 +975,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: 0,
-                debit_minor: usd_from_range(&mut rng, 30, 100),
+                debit_minor: thb_from_range(&mut rng, 1_000, 3_300),
                 categorization: Categorization::Full("Здоровье"),
                 peer: Some("Лаборатория"),
                 bank_description: Some("Анализы"),
@@ -932,7 +989,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: 0,
-                debit_minor: usd_from_range(&mut rng, 20, 80),
+                debit_minor: thb_from_range(&mut rng, 700, 2_600),
                 categorization: Categorization::Full("Развлечения"),
                 peer: Some("Концерт"),
                 bank_description: None,
@@ -946,7 +1003,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: 0,
-                debit_minor: usd_from_range(&mut rng, 20, 60),
+                debit_minor: thb_from_range(&mut rng, 700, 2_000),
                 categorization: Categorization::Full("Магазины"),
                 peer: Some("Магазин у дома"),
                 bank_description: None,
@@ -960,7 +1017,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: 0,
-                debit_minor: usd_from_range(&mut rng, 30, 70),
+                debit_minor: thb_from_range(&mut rng, 1_000, 2_300),
                 categorization: Categorization::Full("Бензин"),
                 peer: Some("АЗС"),
                 bank_description: None,
@@ -974,7 +1031,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: 0,
-                debit_minor: usd_from_range(&mut rng, 10, 25),
+                debit_minor: thb_from_range(&mut rng, 300, 800),
                 categorization: Categorization::Full("Подписки"),
                 peer: Some("Family Plan"),
                 bank_description: None,
@@ -1045,24 +1102,27 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             });
         }
 
-        // Sporadic Salary → Savings transfer. Placed at the tail of the
-        // month so the new rng calls don't shift earlier per-month
+        // Sporadic Salary (EUR) → Savings (USD) transfer. Placed at the tail
+        // of the month so the new rng calls don't shift earlier per-month
         // randomness; the eventual sort_by_date still pins it to day 3 in
-        // the chronological order downstream.
+        // the chronological order downstream. The salary side debits an EUR
+        // amount; the savings side credits the USD equivalent at the fixed
+        // demo FX rate.
         if month_start >= savings_start
             && rng.chance(SAVINGS_TRANSFER_CHANCE_NUM, SAVINGS_TRANSFER_CHANCE_DEN)
         {
-            let amount = usd_from_range(
+            let debit_eur = eur_from_range(
                 &mut rng,
-                SAVINGS_TRANSFER_LO_USD,
-                SAVINGS_TRANSFER_HI_USD,
+                SAVINGS_TRANSFER_LO_EUR,
+                SAVINGS_TRANSFER_HI_EUR,
             );
+            let credit_usd = eur_minor_to_usd_minor(debit_eur);
             let tag_savings = format!("salary->savings@{y}-{m:02}");
             out.push(TxnSpec {
                 account: AccountKind::Salary,
                 date: safe_date(y, m, 3),
                 credit_minor: 0,
-                debit_minor: amount,
+                debit_minor: debit_eur,
                 categorization: Categorization::None,
                 peer: Some("Сберегательный счёт"),
                 bank_description: Some("Перевод на сберегательный счёт"),
@@ -1072,7 +1132,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             out.push(TxnSpec {
                 account: AccountKind::Savings,
                 date: safe_date(y, m, 3),
-                credit_minor: amount,
+                credit_minor: credit_usd,
                 debit_minor: 0,
                 categorization: Categorization::None,
                 peer: Some("Зарплатный счёт"),
@@ -1084,10 +1144,10 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
 
         // Two uncategorized correcting entries seed the dashed-border state
         // for the activity strip. They live on the first two months of the
-        // Savings account — typical for the kind of bridging adjustments a
-        // user posts when they start tracking an account that already
-        // existed at the bank but had a non-zero opening balance, or when
-        // they reconcile a small rounding difference after the first
+        // Savings (USD) account — typical for the kind of bridging
+        // adjustments a user posts when they start tracking an account that
+        // already existed at the bank but had a non-zero opening balance, or
+        // when they reconcile a small rounding difference after the first
         // import. Day 1 keeps them ahead of any other Savings entry so the
         // running balance is well-defined.
         if month_start == savings_start {
@@ -1122,8 +1182,9 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         }
 
         // One-shot bachelor-savings dump on the day Savings opens: drain the
-        // residual accumulated across the bachelor period into Savings as a
-        // single internal transfer. Day 5 keeps it clear of the day-2 family
+        // EUR residual accumulated across the bachelor period out of Salary
+        // (EUR) and credit the USD equivalent into Savings (USD) as a single
+        // internal transfer. Day 5 keeps it clear of the day-2 family
         // transfer and the day-3 sporadic savings emission. The pair shares
         // a `transfer_tag` so it surfaces in `transaction_links` like every
         // other internal transfer.
@@ -1143,7 +1204,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             out.push(TxnSpec {
                 account: AccountKind::Savings,
                 date: safe_date(y, m, 5),
-                credit_minor: bachelor_residual_minor,
+                credit_minor: eur_minor_to_usd_minor(bachelor_residual_minor),
                 debit_minor: 0,
                 categorization: Categorization::None,
                 peer: Some("Зарплатный счёт"),
@@ -1164,7 +1225,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         account: AccountKind::Family,
         date: safe_date(last_month.year(), last_month.month(), 12),
         credit_minor: 0,
-        debit_minor: usd(200),
+        debit_minor: thb(6_500),
         categorization: Categorization::Half("Магазины"),
         peer: Some("Гипермаркет"),
         bank_description: Some("Покупка (часть без категории)"),
@@ -1174,7 +1235,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
     out.push(TxnSpec {
         account: AccountKind::Salary,
         date: safe_date(last_month.year(), last_month.month(), 13),
-        credit_minor: usd(1_000),
+        credit_minor: eur(850),
         debit_minor: 0,
         categorization: Categorization::Half("Зарплата"),
         peer: Some("Партнёр"),
@@ -1236,7 +1297,7 @@ fn insert_accounts(conn: &Connection) -> rusqlite::Result<HashMap<AccountKind, i
             params![
                 spec.name,
                 DEMO_ACCOUNT_BANK,
-                DEMO_ACCOUNT_CURRENCY,
+                spec.currency,
                 spec.account_number,
                 DEMO_ACCOUNT_OWNER,
             ],
@@ -1381,7 +1442,7 @@ fn insert_report_view(
         "incomeCategoryIds": income_ids,
         "defaultRange": { "kind": "preset", "preset": "last_12_months", "from": null, "to": null },
         "defaultGranularity": "month",
-        "defaultCurrency": DEMO_ACCOUNT_CURRENCY,
+        "defaultCurrency": DEMO_REPORT_CURRENCY,
         "expandedCategoryIds": []
     });
     let config_str = config.to_string();
