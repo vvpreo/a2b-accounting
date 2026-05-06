@@ -381,6 +381,35 @@ export function deleteExchangeRate(id: number): Promise<void> {
   return invoke<void>("delete_exchange_rate", { id });
 }
 
+export interface CurrencyRateSummary {
+  code: string;
+  name: string;
+  symbol: string;
+  rateSource: string | null;
+  rateCount: number;
+  earliestDate: string;
+  latestDate: string;
+}
+
+export function listCurrencyRateSummaries(): Promise<CurrencyRateSummary[]> {
+  return invoke<CurrencyRateSummary[]>("list_currency_rate_summaries");
+}
+
+export interface RateEntry {
+  rateDate: string;
+  rateToBase: string;
+}
+
+export function listRateEntriesForCurrency(
+  currency: string,
+): Promise<RateEntry[]> {
+  return invoke<RateEntry[]>("list_rate_entries_for_currency", { currency });
+}
+
+export function downloadRatesForCurrency(currency: string): Promise<number> {
+  return invoke<number>("download_rates_for_currency", { currency });
+}
+
 export type Granularity = "year" | "quarter" | "month";
 
 export type RangePreset =

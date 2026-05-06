@@ -2,29 +2,60 @@ import { useState } from "react";
 
 import { clearAllData, seedDemoData } from "../lib/api";
 import { LANGUAGES, LocaleCode, useI18n, useT } from "../i18n";
+import { CurrenciesTab } from "./settings/CurrenciesTab";
+
+type SettingsTab = "general" | "currencies";
 
 export function SettingsPage() {
   const { t, locale, setLocale } = useI18n();
+  const [tab, setTab] = useState<SettingsTab>("general");
 
   return (
     <section className="page">
-      <div className="settings-row">
-        <label htmlFor="settings-language">{t("settings.language")}</label>
-        <select
-          id="settings-language"
-          value={locale}
-          onChange={(e) => setLocale(e.target.value as LocaleCode)}
+      <div className="settings-tabs">
+        <button
+          type="button"
+          className={
+            "settings-tab-button" + (tab === "general" ? " active" : "")
+          }
+          onClick={() => setTab("general")}
         >
-          {LANGUAGES.map((l) => (
-            <option key={l.code} value={l.code}>
-              {l.name}
-            </option>
-          ))}
-        </select>
+          {t("settings.tabs.general")}
+        </button>
+        <button
+          type="button"
+          className={
+            "settings-tab-button" + (tab === "currencies" ? " active" : "")
+          }
+          onClick={() => setTab("currencies")}
+        >
+          {t("settings.tabs.currencies")}
+        </button>
       </div>
 
-      <DemoDataSection />
-      <DangerZoneSection />
+      {tab === "general" && (
+        <>
+          <div className="settings-row">
+            <label htmlFor="settings-language">{t("settings.language")}</label>
+            <select
+              id="settings-language"
+              value={locale}
+              onChange={(e) => setLocale(e.target.value as LocaleCode)}
+            >
+              {LANGUAGES.map((l) => (
+                <option key={l.code} value={l.code}>
+                  {l.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <DemoDataSection />
+          <DangerZoneSection />
+        </>
+      )}
+
+      {tab === "currencies" && <CurrenciesTab />}
     </section>
   );
 }

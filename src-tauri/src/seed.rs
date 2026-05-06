@@ -1571,13 +1571,19 @@ fn today_local() -> NaiveDate {
 // ---- Tauri commands ----
 
 #[tauri::command]
-pub fn seed_demo_data(state: State<'_, DbState>) -> Result<(), String> {
-    let conn = state.lock().map_err(|e| e.to_string())?;
-    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    wipe(&tx).map_err(|e| e.to_string())?;
-    seed_full(&tx, today_local()).map_err(|e| e.to_string())?;
-    set_flag(&tx).map_err(|e| e.to_string())?;
-    tx.commit().map_err(|e| e.to_string())?;
+pub fn seed_demo_data(
+    app: tauri::AppHandle,
+    state: State<'_, DbState>,
+) -> Result<(), String> {
+    {
+        let conn = state.lock().map_err(|e| e.to_string())?;
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        wipe(&tx).map_err(|e| e.to_string())?;
+        seed_full(&tx, today_local()).map_err(|e| e.to_string())?;
+        set_flag(&tx).map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+    } // db lock released before we spawn background fetches
+    crate::exchange_rates::spawn_missing_rate_downloads(app)?;
     Ok(())
 }
 

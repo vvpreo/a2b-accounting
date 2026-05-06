@@ -299,6 +299,19 @@
       "confirmYes": "Yes, delete everything",
       "clearing": "Clearing...",
       "errorClearing": "Failed to clear data: {message}"
+    },
+    "tabs": {
+      "general": "General",
+      "currencies": "Currencies"
+    },
+    "currencies": {
+      "empty": "No exchange rates downloaded yet. Create an account in any currency — rates will be downloaded automatically.",
+      "source": "Source",
+      "refresh": "Re-download",
+      "loading": "Loading...",
+      "summaryLine": "{count} records · {earliest} → {latest}",
+      "baseHint": "Rates are stored as \"1 EUR = X {code}\" (Frankfurter base is EUR).",
+      "downloadFailed": "Failed to download rates for {currency}: {error}"
     }
   },
   "builder": {

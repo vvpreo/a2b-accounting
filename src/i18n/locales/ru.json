@@ -309,6 +309,19 @@
       "confirmYes": "Да, удалить всё",
       "clearing": "Удаляю...",
       "errorClearing": "Не удалось очистить данные: {message}"
+    },
+    "tabs": {
+      "general": "Общие",
+      "currencies": "Валюты"
+    },
+    "currencies": {
+      "empty": "Пока нет загруженных курсов. Создайте счёт в любой валюте — курсы скачаются автоматически.",
+      "source": "Источник",
+      "refresh": "Загрузить заново",
+      "loading": "Загружаю...",
+      "summaryLine": "{count} записей · {earliest} → {latest}",
+      "baseHint": "Курсы хранятся как «1 EUR = X {code}» (база Frankfurter — EUR).",
+      "downloadFailed": "Не удалось загрузить курсы для {currency}: {error}"
     }
   },
   "builder": {

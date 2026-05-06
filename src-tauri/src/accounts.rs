@@ -1,8 +1,9 @@
 use rusqlite::{params, Row};
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::db::DbState;
+use crate::exchange_rates;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,6 +34,7 @@ const SELECT_COLUMNS: &str =
 
 #[tauri::command]
 pub fn create_account(
+    app: AppHandle,
     state: State<'_, DbState>,
     name: String,
     bank: String,
@@ -40,33 +42,74 @@ pub fn create_account(
     account_number: String,
     owner_name: String,
 ) -> Result<Account, String> {
-    let conn = state.lock().map_err(|e| e.to_string())?;
+    let (account, should_fetch_rates) = {
+        let conn = state.lock().map_err(|e| e.to_string())?;
 
-    let id: i64 = conn
-        .query_row(
-            "INSERT INTO accounts (name, bank, currency, account_number, owner_name)
-             VALUES (?1, ?2, ?3, ?4, ?5)
-             RETURNING id",
-            params![name, bank, currency, account_number, owner_name],
-            |row| row.get(0),
-        )
-        .map_err(|e| match &e {
-            rusqlite::Error::SqliteFailure(err, _)
-                if err.code == rusqlite::ErrorCode::ConstraintViolation =>
+        let id: i64 = conn
+            .query_row(
+                "INSERT INTO accounts (name, bank, currency, account_number, owner_name)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 RETURNING id",
+                params![name, bank, currency, account_number, owner_name],
+                |row| row.get(0),
+            )
+            .map_err(|e| match &e {
+                rusqlite::Error::SqliteFailure(err, _)
+                    if err.code == rusqlite::ErrorCode::ConstraintViolation =>
+                {
+                    format!(
+                        "Account with bank '{bank}' and number '{account_number}' already exists"
+                    )
+                }
+                _ => e.to_string(),
+            })?;
+
+        let account = conn
+            .query_row(
+                &format!("SELECT {SELECT_COLUMNS} FROM accounts WHERE id = ?1"),
+                [id],
+                from_row,
+            )
+            .map_err(|e| e.to_string())?;
+
+        // First account in this currency? (We just inserted, so 1 means first.)
+        // Also require that no rates have been downloaded yet for this currency —
+        // avoids re-downloading when the user removes all accounts in a currency
+        // and then creates one again.
+        let account_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM accounts WHERE currency = ?1",
+                params![&account.currency],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        let rate_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM exchange_rates WHERE currency = ?1",
+                params![&account.currency],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+
+        let should_fetch = account_count == 1
+            && rate_count == 0
+            && !account.currency.eq_ignore_ascii_case("EUR");
+        (account, should_fetch)
+    }; // db lock released here
+
+    if should_fetch_rates {
+        let app_clone = app.clone();
+        let cur = account.currency.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(err) =
+                exchange_rates::download_rates_for_currency_internal(app_clone, cur.clone()).await
             {
-                format!(
-                    "Account with bank '{bank}' and number '{account_number}' already exists"
-                )
+                eprintln!("rate download for {cur} failed: {err}");
             }
-            _ => e.to_string(),
-        })?;
+        });
+    }
 
-    conn.query_row(
-        &format!("SELECT {SELECT_COLUMNS} FROM accounts WHERE id = ?1"),
-        [id],
-        from_row,
-    )
-    .map_err(|e| e.to_string())
+    Ok(account)
 }
 
 #[tauri::command]

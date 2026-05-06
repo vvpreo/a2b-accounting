@@ -3391,6 +3391,223 @@ code {
   max-width: 720px;
 }
 
+/* ===== Settings tabs ===== */
+
+.settings-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid #e4e4e7;
+}
+
+.settings-tab-button {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 8px 14px;
+  margin-bottom: -1px;
+  color: #52525b;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font: inherit;
+  transition: color 0.1s ease, border-color 0.1s ease;
+}
+
+.settings-tab-button:hover {
+  color: #18181b;
+}
+
+.settings-tab-button.active {
+  color: #18181b;
+  font-weight: 500;
+  border-bottom-color: #1f2937;
+}
+
+/* ===== Settings → Currencies ===== */
+
+.currencies-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 24px;
+  align-items: start;
+}
+
+.currencies-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 75vh;
+  overflow-y: auto;
+}
+
+.currency-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: #ffffff;
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+  padding: 10px 12px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  transition: border-color 0.1s ease, background 0.1s ease;
+}
+
+.currency-card:hover {
+  border-color: #a1a1aa;
+}
+
+.currency-card--active {
+  border-color: #1f2937;
+  background: #f4f4f5;
+}
+
+.currency-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.currency-card-code {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.currency-card-symbol {
+  color: #71717a;
+  font-size: 13px;
+}
+
+.currency-card-name {
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+.currency-card-meta {
+  font-size: 11px;
+  color: #71717a;
+  margin-top: 2px;
+}
+
+.currencies-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.currencies-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.currencies-detail-head h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/* ===== Rate weekly table =====
+ *
+ * Grid-based instead of <table>: position:sticky on plain block elements
+ * is rock-solid in WebKit, whereas multi-stop sticky on <th>/<td> is buggy
+ * across versions. The container is the scroll context; header and year
+ * rows stick to its top edge. */
+
+.rate-weeks {
+  --rate-weeks-header-h: 30px;
+  max-height: 70vh;
+  overflow-y: auto;
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+  background: #ffffff;
+  font-size: 11px;
+  /* New stacking context so sticky z-index is contained within the table. */
+  isolation: isolate;
+}
+
+.rate-weeks-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  height: var(--rate-weeks-header-h);
+  background: #ffffff;
+  box-shadow: inset 0 -1px 0 #e4e4e7;
+}
+
+.rate-weeks-header-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-transform: uppercase;
+  font-weight: 500;
+  color: #71717a;
+}
+
+.rate-weeks-year {
+  position: sticky;
+  top: var(--rate-weeks-header-h);
+  z-index: 2;
+  background: #f4f4f5;
+  padding: 6px 8px;
+  font-weight: 600;
+  font-size: 12px;
+  color: #18181b;
+  border-top: 1px solid #d4d4d8;
+  box-shadow: inset 0 -1px 0 #d4d4d8;
+}
+
+.rate-weeks-week {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+}
+
+.rate-weeks-cell {
+  padding: 4px;
+  border-right: 1px solid #f4f4f5;
+  border-bottom: 1px solid #f4f4f5;
+  background: #ffffff;
+  color: #a1a1aa;
+  min-height: 36px;
+}
+
+.rate-weeks-cell:last-child {
+  border-right: none;
+}
+
+.rate-weeks-cell--has-data {
+  background: #ecfdf5;
+  color: #064e3b;
+}
+
+.rate-weeks-cell--off-year {
+  background: #f4f4f5;
+  color: #d4d4d8;
+}
+
+.rate-weeks-cell-date {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.rate-weeks-cell-rate {
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
 /* ===== Report view (pivot) ===== */
 
 .report-page {

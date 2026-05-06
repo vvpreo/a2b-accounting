@@ -4,6 +4,7 @@ mod categories;
 mod currencies;
 mod db;
 mod exchange_rates;
+mod frankfurter;
 mod money;
 mod report_views;
 mod reports;
@@ -62,6 +63,13 @@ pub fn run() {
             });
             app.manage::<db::DbState>(Mutex::new(conn));
             DATA_DIR.set(dir).expect("data dir already initialized");
+            // After managed state is in place: spawn background rate fetches
+            // for any currency that has accounts but no rates yet (covers both
+            // first-launch demo seeding and pre-existing user data that
+            // pre-dates this feature).
+            if let Err(err) = exchange_rates::spawn_missing_rate_downloads(app.handle().clone()) {
+                eprintln!("startup rate prefill failed: {err}");
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -96,6 +104,9 @@ pub fn run() {
             exchange_rates::list_exchange_rates,
             exchange_rates::upsert_exchange_rate,
             exchange_rates::delete_exchange_rate,
+            exchange_rates::download_rates_for_currency,
+            exchange_rates::list_currency_rate_summaries,
+            exchange_rates::list_rate_entries_for_currency,
             report_views::list_report_views,
             report_views::create_report_view,
             report_views::update_report_view,
