@@ -18,7 +18,11 @@ import {
   listAccounts,
   validateImportPreview,
 } from "../lib/api";
-import { DEFAULT_FORMAT_ID, parseByFormat } from "../lib/import-formats";
+import {
+  DEFAULT_FORMAT_ID,
+  getFormatPlugin,
+  parseByFormat,
+} from "../lib/import-formats";
 import { formatMoney } from "../lib/money";
 
 type IssueFilter = "all" | PreviewRowIssueKind;
@@ -62,12 +66,21 @@ export function ImportDialog({
   const [offsetTouched, setOffsetTouched] = useState(false);
   const [filename, setFilename] = useState<string | null>(null);
   const [rawText, setRawText] = useState<string>(() => t("import.pasteExample"));
+  const [rawBinary, setRawBinary] = useState<ArrayBuffer | null>(null);
+  const [pdfPassword, setPdfPassword] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
   const [validating, setValidating] = useState(false);
+  const [parsing, setParsing] = useState(false);
+  const [parsed, setParsed] = useState<{
+    rows: TxnImportRow[];
+    errors: string[];
+  }>({ rows: [], errors: [] });
   const [result, setResult] = useState<ImportResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [previewIssues, setPreviewIssues] = useState<PreviewRowIssue[]>([]);
   const [issueFilter, setIssueFilter] = useState<IssueFilter>("all");
+
+  const plugin = useMemo(() => getFormatPlugin(formatId), [formatId]);
 
   useEffect(() => {
     listAccounts()
@@ -119,12 +132,37 @@ export function ImportDialog({
     }
   }, [availableFormats, formatId]);
 
-  const parsed = useMemo(() => {
-    if (!rawText.trim()) {
-      return { rows: [] as TxnImportRow[], errors: [] as string[] };
+  // Re-parse whenever input or format changes. parseByFormat is async (PDF
+  // extraction runs in a worker), so we run it in an effect with a cancel
+  // flag instead of useMemo.
+  useEffect(() => {
+    let cancelled = false;
+    const hasInput =
+      plugin.inputKind === "binary" ? rawBinary !== null : rawText.trim() !== "";
+    if (!hasInput) {
+      setParsed({ rows: [], errors: [] });
+      setParsing(false);
+      return;
     }
-    return parseByFormat(formatId, rawText, t);
-  }, [rawText, t, formatId]);
+    setParsing(true);
+    const input =
+      plugin.inputKind === "binary"
+        ? ({ kind: "binary", data: rawBinary!, password: pdfPassword } as const)
+        : ({ kind: "text", text: rawText } as const);
+    parseByFormat(formatId, input, t)
+      .then((res) => {
+        if (!cancelled) setParsed(res);
+      })
+      .catch((e) => {
+        if (!cancelled) setParsed({ rows: [], errors: [String(e)] });
+      })
+      .finally(() => {
+        if (!cancelled) setParsing(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [plugin, formatId, rawText, rawBinary, pdfPassword, t]);
 
   function onFileChange(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -132,15 +170,37 @@ export function ImportDialog({
     setResult(null);
     setError(null);
     setFilename(file.name);
-    file.text().then(setRawText).catch((err) => setError(String(err)));
+    if (plugin.inputKind === "binary") {
+      setRawText("");
+      file
+        .arrayBuffer()
+        .then(setRawBinary)
+        .catch((err) => setError(String(err)));
+    } else {
+      setRawBinary(null);
+      file.text().then(setRawText).catch((err) => setError(String(err)));
+    }
   }
 
   function onPasteChange(e: ChangeEvent<HTMLTextAreaElement>) {
     setResult(null);
     setError(null);
     setFilename(null);
+    setRawBinary(null);
     setRawText(e.target.value);
   }
+
+  // Clear leftover input when the user switches between text- and binary
+  // formats so a previously-loaded CSV doesn't confuse a PDF parse (and
+  // vice versa).
+  useEffect(() => {
+    if (plugin.inputKind === "binary") {
+      setRawText("");
+    } else {
+      setRawBinary(null);
+      setPdfPassword("");
+    }
+  }, [plugin.inputKind]);
 
   const issuesByRow = useMemo(() => {
     const map = new Map<number, PreviewRowIssue[]>();
@@ -240,7 +300,8 @@ export function ImportDialog({
     accountId !== null &&
     parsed.rows.length > 0 &&
     parsed.errors.length === 0 &&
-    !validating;
+    !validating &&
+    !parsing;
   const importableCount = parsed.rows.length - skipRowIndices.size;
 
   return createPortal(
@@ -328,7 +389,9 @@ export function ImportDialog({
               </div>
 
               <p className="hint">
-                {formatId === "kasikorn-csv-v1"
+                {formatId === "kasikorn-pdf-v1"
+                  ? t("import.hintKasikornPdf")
+                  : formatId === "kasikorn-csv-v1"
                   ? t("import.hintKasikorn")
                   : t("import.hintColumns")}
               </p>
@@ -336,22 +399,42 @@ export function ImportDialog({
               <label className="file-input-label">
                 <input
                   type="file"
-                  accept=".csv,text/csv"
+                  accept={plugin.fileAccept}
                   onChange={onFileChange}
                 />
                 {filename
                   ? t("import.buttonChosen", { filename })
+                  : plugin.inputKind === "binary"
+                  ? t("import.buttonChoosePdfFile")
                   : t("import.buttonChooseFile")}
               </label>
 
-              <p className="import-or">{t("import.orPasteHere")}</p>
+              {plugin.mayBeEncrypted && (
+                <label className="import-field">
+                  <span>{t("import.pdfPassword")}</span>
+                  <input
+                    type="password"
+                    value={pdfPassword}
+                    placeholder={t("import.pdfPasswordPlaceholder")}
+                    onChange={(e) => setPdfPassword(e.target.value)}
+                    autoComplete="off"
+                  />
+                </label>
+              )}
 
-              <textarea
-                className="import-paste"
-                value={rawText}
-                placeholder={t("import.pastePlaceholder")}
-                onChange={onPasteChange}
-              />
+              {plugin.inputKind === "text" && (
+                <>
+                  <p className="import-or">{t("import.orPasteHere")}</p>
+                  <textarea
+                    className="import-paste"
+                    value={rawText}
+                    placeholder={t("import.pastePlaceholder")}
+                    onChange={onPasteChange}
+                  />
+                </>
+              )}
+
+              {parsing && <p className="hint">{t("import.pdfParsing")}</p>}
 
               {parsed.errors.length > 0 && (
                 <div className="errors-block">

@@ -226,16 +226,22 @@
     "formats": {
       "generic-csv-v1": "Universal CSV",
       "bangkok-bank-csv-v1": "Bangkok Bank statement CSV",
-      "kasikorn-csv-v1": "Kasikorn (KBank) K-DEPOSIT statement CSV"
+      "kasikorn-csv-v1": "Kasikorn (KBank) K-DEPOSIT statement CSV",
+      "kasikorn-pdf-v1": "Kasikorn (KBank) statement PDF"
     },
     "hintKasikorn": "Upload the K-DEPOSIT export (resultFile_*.csv) as-is — the account-info header is skipped automatically. Date and time are in Thailand local time; the UTC offset comes from the field above (defaults to +07:00 for the Kasikorn preset).",
+    "hintKasikornPdf": "Upload the PDF statement from K PLUS / Statement Request. The file is usually encrypted — the password is the account owner's date of birth as DDMMYYYY (e.g. 07081988). Credit/debit direction is inferred from balance change between rows.",
+    "pdfPassword": "PDF password",
+    "pdfPasswordPlaceholder": "leave empty for unencrypted PDFs",
+    "pdfParsing": "Extracting transactions from PDF…",
     "pastePlaceholder": "Paste CSV content here — same columns as the file",
     "pasteExample": "occurred_at,credit,debit,balance,peer,bank_description,comment\n2026-04-01T10:15:00,,150.00,12340.50,Coffee shop,Morning coffee,\n",
     "buttonChooseFile": "Choose CSV file",
+    "buttonChoosePdfFile": "Choose PDF file",
     "buttonChosen": "Chosen: {filename}",
     "orPasteHere": "OR paste the file contents here:",
     "hintColumns": "Expected columns: occurred_at, credit, debit, balance, peer, bank_description, comment. Required: occurred_at and balance; the rest may be empty. Supported delimiters: comma, tab, semicolon. Date in ISO-8601 with offset (e.g. 2026-04-01T10:15:00+03:00) or without offset — the default will apply.",
-    "parseErrorsTitle": "CSV parsing problems:",
+    "parseErrorsTitle": "Parsing problems:",
     "titlePreviewSuffix": {
       "one": "(preview of {count} row)",
       "other": "(preview of {count} rows)"
@@ -406,6 +412,11 @@
     "missingOccurredAt": "Row {row}: missing occurred_at",
     "missingBalance": "Row {row}: missing balance",
     "csvParse": "CSV parse error at row {row}: {message}",
-    "unknownDelimiter": "Could not determine column delimiter in the header. Supported: comma, tab, semicolon."
+    "unknownDelimiter": "Could not determine column delimiter in the header. Supported: comma, tab, semicolon.",
+    "binaryNotSupported": "This format only accepts text files — binary input is not supported.",
+    "textNotSupported": "This format only accepts binary files — text input is not supported.",
+    "pdfPasswordRequired": "PDF is encrypted — enter the password and try again.",
+    "pdfPasswordIncorrect": "Incorrect PDF password.",
+    "pdfReadFailed": "Failed to read PDF: {message}"
   }
 }

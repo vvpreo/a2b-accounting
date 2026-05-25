@@ -154,7 +154,9 @@ finances-v2/
 │   │   │   ├── types.ts                    общие типы (CsvParseResult, ImportFormatPlugin, Translate)
 │   │   │   ├── universal-csv.ts            generic-csv-v1: универсальный CSV через papaparse
 │   │   │   ├── kasikorn-csv-v1.ts          Kasikorn (KBank): bank CSV → universal CSV → universal-csv
+│   │   │   ├── kasikorn-pdf-v1.ts          Kasikorn PDF: позиционный текст → universal CSV (pdfjs-dist, балансная дельта)
 │   │   │   └── bangkok-bank-csv-v1.ts      Bangkok Bank (BBL): bank CSV → universal CSV → universal-csv
+│   │   ├── pdf-extract.ts                  pdfjs-dist обёртка: ArrayBuffer + пароль → PdfLine[] (динамический import, worker через ?url)
 │   │   ├── distribution.ts           equalSplit/addEqualToCategorized/setShareAt и т.д. — чистая математика долей в копейках
 │   │   └── money.ts                  formatMoney + parseMoneyToMinor + formatMinorAsMoney
 │   └── pages/
@@ -235,6 +237,7 @@ cd src-tauri && cargo test --lib
 | Generic | `generic-csv-v1` | Любой CSV в нашем универсальном формате |
 | Bangkok Bank | `bangkok-bank-csv-v1` | Выгрузка `MyDownLoad*.csv` из BBL iBanking / Bualuang mBanking |
 | Kasikorn Bank | `kasikorn-csv-v1` | Выгрузка K-DEPOSIT `resultFile_*.csv` из K PLUS / KBank web |
+| Kasikorn Bank | `kasikorn-pdf-v1` | PDF-выписка `STM_*.pdf` из K PLUS / Statement Request (зашифрованный, пароль обычно — дата рождения владельца в формате DDMMYYYY) |
 
 Для **Kasikorn** парсер автоматически:
 - пропускает 12 строк шапки (реквизиты, период, итоги) и строку `Beginning Balance`;
@@ -242,6 +245,13 @@ cd src-tauri && cargo test --lib
 - разворачивает дату `DD-MM-YY` в `YYYY-MM-DD` (XXI век);
 - собирает `bank_description` из `Description · Channel · Details`;
 - извлекает `peer` из `Details` (`From <…>` / `To <…>` / `Paid for Ref X#### <…>`); для системных `Ref Code …` — `peer` пустой.
+
+Для **Kasikorn PDF** парсер (`kasikorn-pdf-v1`) дополнительно:
+- расшифровывает PDF паролем, который вводится в мастере импорта (для KBank это обычно дата рождения владельца счёта в формате `DDMMYYYY`); пароль не сохраняется в БД;
+- работает по позиционному текстовому слою через `pdfjs-dist` (динамически подгружается отдельным chunk-ом ~1.6 MB);
+- определяет колонку каждого фрагмента текста по X-координате (фиксированные пороги под банковский PDF-шаблон), что позволяет корректно склеивать переносы как в `Details` (`Paid for Ref X3001 PTTST.D CHUTIVAT (A/C` + `Name: CHUTIWAT PART.,LTD.)`), так и в `Channel` (`ATM Mai Khaolak Beach` + `Resort & Spa (Takua ++`);
+- определяет направление операции (credit/debit) по знаку изменения `Outstanding Balance` между строками (банк сводит Withdrawal и Deposit в одну визуальную полосу, X не различает их);
+- валидирует целостность цепочки балансов на стыке страниц через `Beginning Balance` каждой страницы.
 
 Для **Bangkok Bank** парсер автоматически:
 - пропускает шапку (Account/Card numbers, Ledger/Available Balance), строку `Total` и Disclaimer;

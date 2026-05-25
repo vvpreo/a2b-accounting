@@ -13,6 +13,7 @@
 - [ ] CI: rolling macOS DMG release on push to `main` (no signing, arm64 only)
 - [ ] Categories CRUD (income/expense, hierarchical tree, palette + shade-derived colors)
 - [ ] [Data model & import mechanism (accounts, transactions, import batches)](docs/plans/data-model-and-import.md)
+- [ ] Kasikorn PDF statement import (`kasikorn-pdf-v1`): расшифровка пароля через мастер импорта, позиционный парсер на pdfjs-dist, balance-delta для credit/debit, склейка переносов Channel/Details
 
 # DONE
 

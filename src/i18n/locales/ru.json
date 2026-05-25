@@ -230,16 +230,22 @@
     "formats": {
       "generic-csv-v1": "Универсальный CSV",
       "bangkok-bank-csv-v1": "Bangkok Bank — выписка CSV",
-      "kasikorn-csv-v1": "Kasikorn (KBank) — выписка K-DEPOSIT CSV"
+      "kasikorn-csv-v1": "Kasikorn (KBank) — выписка K-DEPOSIT CSV",
+      "kasikorn-pdf-v1": "Kasikorn (KBank) — PDF-выписка"
     },
     "hintKasikorn": "Загрузите выгрузку K-DEPOSIT (resultFile_*.csv) как есть — шапка с реквизитами счёта будет пропущена автоматически. Дата и время — в локальном тайском времени; offset берётся из выбранного выше поля (по умолчанию +07:00 для пресета Kasikorn).",
+    "hintKasikornPdf": "Загрузите PDF-выписку из K PLUS / Statement Request. Файл обычно зашифрован — пароль это дата рождения владельца счёта в формате DDMMYYYY (например, 07081988). Направление операции (credit/debit) парсер определяет по изменению баланса.",
+    "pdfPassword": "Пароль PDF",
+    "pdfPasswordPlaceholder": "оставьте пустым, если файл не зашифрован",
+    "pdfParsing": "Извлекаем транзакции из PDF…",
     "pastePlaceholder": "Вставьте CSV-содержимое сюда — те же колонки, что и в файле",
     "pasteExample": "occurred_at,credit,debit,balance,peer,bank_description,comment\n2026-04-01T10:15:00,,150.00,12340.50,Кофейня,Утренний кофе,\n",
     "buttonChooseFile": "Выбрать CSV-файл",
+    "buttonChoosePdfFile": "Выбрать PDF-файл",
     "buttonChosen": "Выбран: {filename}",
     "orPasteHere": "ИЛИ вставьте текст файла сюда:",
     "hintColumns": "Ожидаемые колонки: occurred_at, credit, debit, balance, peer, bank_description, comment. Обязательные — occurred_at и balance; остальные могут быть пустыми. Поддерживаются разделители: запятая, табуляция, точка с запятой. Дата в формате ISO-8601 с offset (например, 2026-04-01T10:15:00+03:00) или без offset — тогда применится дефолтный.",
-    "parseErrorsTitle": "Проблемы при парсинге CSV:",
+    "parseErrorsTitle": "Проблемы при парсинге:",
     "titlePreviewSuffix": {
       "one": "(предпросмотр {count} строки)",
       "few": "(предпросмотр {count} строк)",
@@ -416,6 +422,11 @@
     "missingOccurredAt": "Строка {row}: отсутствует occurred_at",
     "missingBalance": "Строка {row}: отсутствует balance",
     "csvParse": "Ошибка парсинга CSV в строке {row}: {message}",
-    "unknownDelimiter": "Не удалось определить разделитель колонок в шапке. Поддерживаются: запятая, табуляция, точка с запятой."
+    "unknownDelimiter": "Не удалось определить разделитель колонок в шапке. Поддерживаются: запятая, табуляция, точка с запятой.",
+    "binaryNotSupported": "Этот формат принимает только текстовые файлы — двоичный ввод не поддерживается.",
+    "textNotSupported": "Этот формат принимает только двоичные файлы — текстовый ввод не поддерживается.",
+    "pdfPasswordRequired": "PDF зашифрован — введите пароль и попробуйте ещё раз.",
+    "pdfPasswordIncorrect": "Неверный пароль PDF.",
+    "pdfReadFailed": "Не удалось прочитать PDF: {message}"
   }
 }

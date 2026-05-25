@@ -1,6 +1,6 @@
 import Papa from "papaparse";
 
-import type { CsvParseResult, ImportFormatPlugin, Translate } from "./types";
+import type { ImportFormatPlugin } from "./types";
 import { parseUniversalCsv } from "./universal-csv";
 
 const UNIVERSAL_HEADER = [
@@ -169,8 +169,13 @@ export function bankCsvToUniversal(text: string): ConvertResult {
 
 export const bangkokBankCsvV1: ImportFormatPlugin = {
   id: "bangkok-bank-csv-v1",
-  parse(text: string, t: Translate): CsvParseResult {
-    const { universalCsv, errors: convertErrors } = bankCsvToUniversal(text);
+  inputKind: "text",
+  fileAccept: ".csv,text/csv",
+  async parse(input, t) {
+    if (input.kind !== "text") {
+      return { rows: [], errors: [t("errors.binaryNotSupported")] };
+    }
+    const { universalCsv, errors: convertErrors } = bankCsvToUniversal(input.text);
     if (universalCsv === "") {
       return { rows: [], errors: convertErrors };
     }

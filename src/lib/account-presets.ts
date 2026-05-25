@@ -32,6 +32,10 @@ export const IMPORT_FORMATS: Record<string, ImportFormat> = {
     id: "kasikorn-csv-v1",
     name: "Kasikorn statement CSV (K-DEPOSIT)",
   },
+  "kasikorn-pdf-v1": {
+    id: "kasikorn-pdf-v1",
+    name: "Kasikorn statement PDF",
+  },
 };
 
 export const ACCOUNT_PRESETS: AccountPreset[] = [
@@ -57,6 +61,7 @@ export const ACCOUNT_PRESETS: AccountPreset[] = [
     defaultCurrency: "THB",
     defaultTimezoneOffset: "+07:00",
     supportedFormats: [
+      IMPORT_FORMATS["kasikorn-pdf-v1"],
       IMPORT_FORMATS["kasikorn-csv-v1"],
       IMPORT_FORMATS["generic-csv-v1"],
     ],

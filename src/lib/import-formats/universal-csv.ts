@@ -99,5 +99,12 @@ export function parseUniversalCsv(
 
 export const genericCsvV1: ImportFormatPlugin = {
   id: "generic-csv-v1",
-  parse: parseUniversalCsv,
+  inputKind: "text",
+  fileAccept: ".csv,text/csv",
+  async parse(input, t) {
+    if (input.kind !== "text") {
+      return { rows: [], errors: [t("errors.binaryNotSupported")] };
+    }
+    return parseUniversalCsv(input.text, t);
+  },
 };
