@@ -17,12 +17,14 @@
     "saving": "Сохраняю...",
     "delete": "Удалить",
     "deleting": "Удаляю...",
+    "edit": "Изменить",
     "close": "Закрыть",
     "back": "Назад",
     "loading": "Загружаю...",
     "yes": "Да",
     "no": "Нет",
-    "all": "Все"
+    "all": "Все",
+    "actions": "Действия"
   },
   "accounts": {
     "title": "Счета",
@@ -115,7 +117,25 @@
       "other": "{count} строк"
     },
     "detailsBatchDeleteConfirm": "Удалить загрузку? Все её транзакции пропадут.",
-    "detailsBatchDeleteYes": "Да, удалить"
+    "detailsBatchDeleteYes": "Да, удалить",
+    "detailsTabCash": "Записи",
+    "cash": {
+      "addEntry": "Добавить запись",
+      "editEntry": "Редактировать запись",
+      "empty": "Пока нет записей. Добавьте первую вручную.",
+      "fieldOccurredAt": "Дата и время",
+      "fieldAmountIn": "Приход ({currency})",
+      "fieldAmountOut": "Расход ({currency})",
+      "errorAmountRequired": "Заполните «Приход» или «Расход».",
+      "fieldPeerOptional": "Контрагент (необязательно)",
+      "fieldCommentOptional": "Комментарий (необязательно)",
+      "colDate": "Дата",
+      "colAmount": "Сумма",
+      "colBalance": "Баланс",
+      "colPeer": "Контрагент",
+      "colComment": "Комментарий",
+      "deleteConfirmYes": "Удалить"
+    }
   },
   "transactions": {
     "title": "Транзакции",

@@ -1,19 +1,28 @@
 import { invoke } from "@tauri-apps/api/core";
 
+export type AccountKind = "bank" | "cash";
+
 export interface Account {
   id: number;
   name: string;
+  /** Distinguishes statement-imported accounts ("bank") from manually-entered
+   *  ones ("cash"). Optional in the type for forward-compat with payloads
+   *  produced before the field was added; treat missing as "bank". */
+  kind: AccountKind;
   bank: string;
   currency: string;
-  accountNumber: string;
-  ownerName: string;
+  /** Nullable: cash accounts have no real account number. */
+  accountNumber: string | null;
+  /** Nullable: cash accounts have no owner-name field. */
+  ownerName: string | null;
   createdAt: string;
 }
 
 export interface Transaction {
   id: number;
   accountId: number;
-  importBatchId: number;
+  /** `null` for manually-entered cash transactions. */
+  importBatchId: number | null;
   occurredAtUtc: string;
   credit: string;
   debit: string;
@@ -93,10 +102,11 @@ export function dataDir(): Promise<string> {
 
 export function createAccount(args: {
   name: string;
+  kind?: AccountKind;
   bank: string;
   currency: string;
-  accountNumber: string;
-  ownerName: string;
+  accountNumber: string | null;
+  ownerName: string | null;
 }): Promise<Account> {
   return invoke<Account>("create_account", args);
 }
@@ -108,10 +118,11 @@ export function listAccounts(): Promise<Account[]> {
 export function updateAccount(args: {
   id: number;
   name: string;
+  kind?: AccountKind;
   bank: string;
   currency: string;
-  accountNumber: string;
-  ownerName: string;
+  accountNumber: string | null;
+  ownerName: string | null;
 }): Promise<Account> {
   return invoke<Account>("update_account", args);
 }
@@ -339,6 +350,46 @@ export function accountMonthlySummaryStats(
   return invoke<AccountMonthSummary[]>("account_monthly_summary_stats", {
     months,
   });
+}
+
+/// "in" → goes to `credit`, "out" → goes to `debit`. The form picks the
+/// direction with a segmented control; the backend splits the amount across
+/// credit/debit.
+export type CashDirection = "in" | "out";
+
+export interface CashTransactionInput {
+  accountId: number;
+  occurredAtUtc: string;
+  direction: CashDirection;
+  /** Decimal-formatted amount in major units ("123.45"). */
+  amount: string;
+  peer: string | null;
+  comment: string | null;
+}
+
+export function createCashTransaction(
+  args: CashTransactionInput,
+): Promise<Transaction> {
+  return invoke<Transaction>("create_cash_transaction", { ...args });
+}
+
+export interface CashTransactionUpdate {
+  id: number;
+  occurredAtUtc: string;
+  direction: CashDirection;
+  amount: string;
+  peer: string | null;
+  comment: string | null;
+}
+
+export function updateCashTransaction(
+  args: CashTransactionUpdate,
+): Promise<Transaction> {
+  return invoke<Transaction>("update_cash_transaction", { ...args });
+}
+
+export function deleteCashTransaction(id: number): Promise<void> {
+  return invoke<void>("delete_cash_transaction", { id });
 }
 
 export function updateTransactionComment(

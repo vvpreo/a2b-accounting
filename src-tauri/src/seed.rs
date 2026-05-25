@@ -82,13 +82,35 @@ enum AccountKind {
     Family,
     Savings,
     Vacation,
+    /// Cash purse used to demo the manual-entry account type. THB so transfers
+    /// from Family don't need FX conversion.
+    Cash,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AccountTypeDb {
+    Bank,
+    Cash,
+}
+
+impl AccountTypeDb {
+    fn as_str(self) -> &'static str {
+        match self {
+            AccountTypeDb::Bank => "bank",
+            AccountTypeDb::Cash => "cash",
+        }
+    }
 }
 
 struct AccountSpec {
     kind: AccountKind,
     name: &'static str,
+    /// Stored in `accounts.account_number`. Empty string is mapped to NULL by
+    /// `insert_accounts` so cash accounts don't collide with the partial
+    /// unique index on (bank, account_number).
     account_number: &'static str,
     currency: &'static str,
+    kind_db: AccountTypeDb,
 }
 
 const ACCOUNTS: &[AccountSpec] = &[
@@ -97,24 +119,35 @@ const ACCOUNTS: &[AccountSpec] = &[
         name: "Зарплатный счёт",
         account_number: "DEMO-SAL-0001",
         currency: "EUR",
+        kind_db: AccountTypeDb::Bank,
     },
     AccountSpec {
         kind: AccountKind::Family,
         name: "Семейный счёт",
         account_number: "DEMO-FAM-0001",
         currency: "THB",
+        kind_db: AccountTypeDb::Bank,
     },
     AccountSpec {
         kind: AccountKind::Savings,
         name: "Сберегательный счёт",
         account_number: "DEMO-SAV-0001",
         currency: "USD",
+        kind_db: AccountTypeDb::Bank,
     },
     AccountSpec {
         kind: AccountKind::Vacation,
         name: "На отпуск",
         account_number: "DEMO-VAC-0001",
         currency: "THB",
+        kind_db: AccountTypeDb::Bank,
+    },
+    AccountSpec {
+        kind: AccountKind::Cash,
+        name: "Наличные на конфеты",
+        account_number: "",
+        currency: "THB",
+        kind_db: AccountTypeDb::Cash,
     },
 ];
 
@@ -145,6 +178,18 @@ const SAVINGS_AGE_OFFSET_MONTHS: u32 = 6;
 // pre-rounded around the FX conversion (350 EUR ≈ 13 350 THB).
 const TRANSFER_TO_VACATION_DEBIT_EUR: u32 = 350;
 const TRANSFER_TO_VACATION_CREDIT_THB: u32 = 13_000;
+// Monthly cash withdrawal from the Family (THB) account onto the Cash purse,
+// and the candy-purchase mix at 7-Eleven that drains it. Same currency on
+// both sides → no FX conversion. The candy purchases live on the Cash
+// account, with no `import_batch_id` and a balance auto-computed by the
+// running sum (mirrors what the production `create_cash_transaction`
+// command does at runtime).
+const TRANSFER_TO_CASH_THB: u32 = 2_000;
+const CANDY_LO_THB: u32 = 40;
+const CANDY_HI_THB: u32 = 180;
+const CANDY_RUNS_MIN: u32 = 3;
+const CANDY_RUNS_MAX: u32 = 7;
+const CANDY_PEER: &str = "7-Eleven";
 // Number of monthly contributions the vacation account has accumulated.
 // Anchored to `today`, the first contribution lands in the month
 // `today - (VACATION_ACTIVE_MONTHS - 1)`. With the typical mid-/late-month
@@ -166,6 +211,9 @@ const BACHELOR_EXPENSE_HI_EUR: u32 = 4_100;
 // Separate seed for the bachelor period so its rng calls don't shift the
 // existing per-month randomness used by the family/savings/vacation flows.
 const BACHELOR_RNG_SEED: u64 = 0xBACE_5EED;
+// Same rationale: candy-purchase counts and amounts live on their own RNG
+// so adding the cash account didn't reroll any of the existing flows.
+const CASH_RNG_SEED: u64 = 0xC0FFEE_CA5;
 
 // Opening balance for the Family account (THB), posted on the first seed day
 // so the running balance can absorb month-to-month variance in expenses
@@ -429,6 +477,7 @@ fn iter_months(start: NaiveDate, end: NaiveDate) -> impl Iterator<Item = NaiveDa
 fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
     let mut rng = Rng::new(0xCAFEBABE);
     let mut bachelor_rng = Rng::new(BACHELOR_RNG_SEED);
+    let mut cash_rng = Rng::new(CASH_RNG_SEED);
     let mut out: Vec<TxnSpec> = Vec::new();
 
     // Bachelor period reaches back the full salary history; the Family,
@@ -1213,6 +1262,53 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 is_correcting: false,
             });
         }
+
+        // ----- Cash purse (Семейный → Наличные → 7-Eleven) -----
+        // Day 6: withdraw a fixed THB amount from the Family account onto the
+        // Cash purse. Both sides share a transfer_tag → linked pair in
+        // transaction_links. Day 6 sits after the day-4 rent so Family is
+        // already topped up. Same currency on both sides → no FX.
+        let tag_cash = format!("family->cash@{y}-{m:02}");
+        out.push(TxnSpec {
+            account: AccountKind::Family,
+            date: safe_date(y, m, 6),
+            credit_minor: 0,
+            debit_minor: thb(TRANSFER_TO_CASH_THB),
+            categorization: Categorization::None,
+            peer: Some("Наличные"),
+            bank_description: Some("Снятие наличных на конфеты"),
+            transfer_tag: Some(tag_cash.clone()),
+            is_correcting: false,
+        });
+        out.push(TxnSpec {
+            account: AccountKind::Cash,
+            date: safe_date(y, m, 6),
+            credit_minor: thb(TRANSFER_TO_CASH_THB),
+            debit_minor: 0,
+            categorization: Categorization::None,
+            peer: Some("Семейный счёт"),
+            bank_description: Some("Снятие наличных"),
+            transfer_tag: Some(tag_cash),
+            is_correcting: false,
+        });
+        // Spread the candy runs across the rest of the month — small amounts
+        // categorised as "Супермаркеты" (7-Eleven counts as one). Uses a
+        // dedicated `cash_rng` so adding this block doesn't reroll the
+        // family/savings/vacation flows that share the main `rng`.
+        let candy_runs = cash_rng.range(CANDY_RUNS_MIN, CANDY_RUNS_MAX);
+        for _ in 0..candy_runs {
+            out.push(TxnSpec {
+                account: AccountKind::Cash,
+                date: safe_date(y, m, cash_rng.range(7, 28)),
+                credit_minor: 0,
+                debit_minor: thb_from_range(&mut cash_rng, CANDY_LO_THB, CANDY_HI_THB),
+                categorization: Categorization::Full("Супермаркеты"),
+                peer: Some(CANDY_PEER),
+                bank_description: None,
+                transfer_tag: None,
+                is_correcting: false,
+            });
+        }
     }
 
     // Two illustrative split transactions in the most recent month: half goes
@@ -1291,15 +1387,28 @@ fn insert_category(
 fn insert_accounts(conn: &Connection) -> rusqlite::Result<HashMap<AccountKind, i64>> {
     let mut map = HashMap::new();
     for spec in ACCOUNTS {
+        // Cash accounts have no real account number / owner — store NULLs so
+        // the partial unique index on (bank, account_number) doesn't have to
+        // care, and the UI shows nothing instead of empty strings.
+        let acct_no: Option<&str> = if spec.account_number.is_empty() {
+            None
+        } else {
+            Some(spec.account_number)
+        };
+        let owner: Option<&str> = match spec.kind_db {
+            AccountTypeDb::Bank => Some(DEMO_ACCOUNT_OWNER),
+            AccountTypeDb::Cash => None,
+        };
         let id: i64 = conn.query_row(
-            "INSERT INTO accounts (name, bank, currency, account_number, owner_name)
-             VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id",
+            "INSERT INTO accounts (name, kind, bank, currency, account_number, owner_name)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6) RETURNING id",
             params![
                 spec.name,
+                spec.kind_db.as_str(),
                 DEMO_ACCOUNT_BANK,
                 spec.currency,
-                spec.account_number,
-                DEMO_ACCOUNT_OWNER,
+                acct_no,
+                owner,
             ],
             |r| r.get(0),
         )?;
@@ -1316,6 +1425,11 @@ fn insert_batches(
     let imported_at = format!("{}T00:00:00.000Z", today);
     let mut map = HashMap::new();
     for spec in ACCOUNTS {
+        // Cash accounts have no import batch — transactions are entered
+        // manually and reference `NULL` instead of a batch id.
+        if spec.kind_db == AccountTypeDb::Cash {
+            continue;
+        }
         let account_id = accounts[&spec.kind];
         let id: i64 = conn.query_row(
             "INSERT INTO import_batches
@@ -1332,13 +1446,16 @@ fn insert_batches(
 fn insert_transactions(
     conn: &Connection,
     account_id: i64,
-    batch_id: i64,
+    batch_id: Option<i64>,
     cats: &HashMap<String, i64>,
     txns: &[&TxnSpec],
     transfer_ids: &mut HashMap<String, Vec<i64>>,
 ) -> rusqlite::Result<()> {
     // Roll a balance scoped to *this* account — the DB stores per-account
-    // chains and the import validator checks each chain independently.
+    // chains and the import validator checks each chain independently. For
+    // cash accounts the same running sum mirrors what
+    // `cash_transactions::recompute_cash_balances` does at runtime, so the
+    // seeded data is indistinguishable from data the user enters manually.
     let mut balance: i64 = 0;
     for t in txns {
         balance += t.credit_minor - t.debit_minor;
@@ -1588,7 +1705,8 @@ fn seed_full(conn: &Connection, today: NaiveDate) -> rusqlite::Result<()> {
     // own date ordering after the per-kind filter.
     for spec in ACCOUNTS {
         let account_id = accounts[&spec.kind];
-        let batch_id = batches[&spec.kind];
+        // Cash accounts have no batch — their transactions reference NULL.
+        let batch_id: Option<i64> = batches.get(&spec.kind).copied();
         let per_account: Vec<&TxnSpec> = txns.iter().filter(|t| t.account == spec.kind).collect();
         insert_transactions(conn, account_id, batch_id, &cats, &per_account, &mut transfer_ids)?;
     }
@@ -1684,11 +1802,12 @@ mod tests {
         let today = NaiveDate::from_ymd_opt(2026, 4, 30).unwrap();
         seed_full(&conn, today).unwrap();
 
-        // Four demo accounts — Salary, Family, Savings, Vacation.
+        // Five demo accounts — Salary, Family, Savings, Vacation, Cash.
         let n_acc: i64 = conn.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0)).unwrap();
-        assert_eq!(n_acc, 4);
+        assert_eq!(n_acc, 5);
 
-        // Four matching import batches, one per account.
+        // Four matching import batches, one per *bank* account; the cash
+        // account has no batch (its rows reference NULL).
         let n_batches: i64 = conn
             .query_row("SELECT COUNT(*) FROM import_batches", [], |r| r.get(0))
             .unwrap();
@@ -1705,11 +1824,12 @@ mod tests {
         let n_txns: i64 = conn
             .query_row("SELECT COUNT(*) FROM transactions", [], |r| r.get(0))
             .unwrap();
-        // ~1100 base monthly mix + 4 transfer rows per month × 36 months = ~144
-        // extra. Bound generously to allow PRNG drift when the mix is tweaked.
+        // ~1100 base monthly mix + 4 transfer rows per month × 36 months
+        // (~144) + cash purse rows (2 transfer + 3..6 candy runs ≈ 7 per
+        // month × 36 ≈ 250). Bound generously to absorb PRNG drift.
         assert!(
-            n_txns > 900 && n_txns < 1700,
-            "expected ~1250 txns, got {n_txns}"
+            n_txns > 1100 && n_txns < 2100,
+            "expected ~1500 txns, got {n_txns}"
         );
 
         // Each month must contribute at least one fully-uncategorized cash
@@ -1770,13 +1890,14 @@ mod tests {
         // last `VACATION_ACTIVE_MONTHS` (8); savings is sporadic (1-in-3
         // chance over 31 active months — deterministic 10 with seed
         // 0xCAFEBABE) plus a one-shot bachelor-residual dump on the day
-        // Savings opens (1). Total: 37 + 8 + 10 + 1 = 56.
+        // Savings opens (1); cash-purse top-up fires every family-active
+        // month (37). Total: 37 + 8 + 10 + 1 + 37 = 93.
         let n_links: i64 = conn
             .query_row("SELECT COUNT(*) FROM transaction_links", [], |r| r.get(0))
             .unwrap();
         assert_eq!(
-            n_links, 56,
-            "expected 37 family + 8 vacation + 10 sporadic savings + 1 bachelor dump transfer pairs, got {n_links}"
+            n_links, 93,
+            "expected 37 family + 8 vacation + 10 sporadic savings + 1 bachelor dump + 37 cash transfer pairs, got {n_links}"
         );
 
         // Every link must connect two transactions on *different* accounts.
@@ -1845,6 +1966,16 @@ mod tests {
         assert_eq!(
             vacation, VACATION_ACTIVE_MONTHS as i64,
             "Vacation expected exactly {VACATION_ACTIVE_MONTHS} monthly transfers, got {vacation}"
+        );
+        // Cash purse: one transfer-in per family-active month (37) plus
+        // CANDY_RUNS_MIN..CANDY_RUNS_MAX candy purchases per month — i.e.
+        // 37 .. 37 × CANDY_RUNS_MAX. PRNG-driven, so we bracket the range.
+        let cash = by_name.get("Наличные на конфеты").copied().unwrap_or(0);
+        let cash_lo = FAMILY_AGE_MONTHS as i64 * (1 + CANDY_RUNS_MIN as i64);
+        let cash_hi = FAMILY_AGE_MONTHS as i64 * (1 + CANDY_RUNS_MAX as i64);
+        assert!(
+            (cash_lo..=cash_hi).contains(&cash),
+            "Cash account expected between {cash_lo} and {cash_hi} txns, got {cash}"
         );
     }
 
@@ -1928,12 +2059,12 @@ mod tests {
         let (_dir, conn) = open_clean_db();
         seed_if_first_launch(&conn).unwrap();
         let n_acc: i64 = conn.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0)).unwrap();
-        assert_eq!(n_acc, 4);
+        assert_eq!(n_acc, 5);
         assert!(flag_set(&conn).unwrap());
         // Second call must be idempotent.
         seed_if_first_launch(&conn).unwrap();
         let n_acc2: i64 = conn.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0)).unwrap();
-        assert_eq!(n_acc2, 4);
+        assert_eq!(n_acc2, 5);
     }
 
     #[test]
@@ -1989,6 +2120,6 @@ mod tests {
         let exp = parsed["expenseCategoryIds"].as_array().unwrap();
         assert!(exp.len() > 10, "expense list should include roots + children");
         let accs = parsed["accountIds"].as_array().unwrap();
-        assert_eq!(accs.len(), 4, "demo report must include all four accounts");
+        assert_eq!(accs.len(), 5, "demo report must include all five accounts");
     }
 }

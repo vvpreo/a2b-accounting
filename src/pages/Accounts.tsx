@@ -13,17 +13,22 @@ import { createPortal } from "react-dom";
 import { useI18n, useT, useTPlural } from "../i18n";
 import {
   Account,
+  AccountKind,
   AccountLatestTransaction,
   AccountMonthCell,
   AccountMonthSummary,
+  CashDirection,
   Currency,
   ImportBatch,
   MonthRange,
+  Transaction,
   ValidationError,
   accountMonthlyStatus,
   accountMonthlySummaryStats,
   createAccount,
+  createCashTransaction,
   deleteAccount,
+  deleteCashTransaction,
   deleteImportBatch,
   firstTransactionDate,
   getSetting,
@@ -31,8 +36,10 @@ import {
   listAccounts,
   listCurrencies,
   listImportBatches,
+  listTransactions,
   setSetting,
   updateAccount,
+  updateCashTransaction,
   validateBalanceChain,
 } from "../lib/api";
 import { ACCOUNT_PRESETS, findPresetByName } from "../lib/account-presets";
@@ -188,19 +195,36 @@ const INITIAL_FORM: AccountFormValues = {
 
 function formToApi(form: AccountFormValues): {
   name: string;
+  kind: AccountKind;
   bank: string;
   currency: string;
-  accountNumber: string;
-  ownerName: string;
+  accountNumber: string | null;
+  ownerName: string | null;
 } {
   const preset = ACCOUNT_PRESETS.find((p) => p.id === form.presetId);
+  const kind: AccountKind = preset?.kind ?? "bank";
+  const blank = (v: string) => (v.trim() === "" ? null : v);
   return {
     name: form.name,
+    kind,
     bank: preset?.name ?? "",
     currency: form.currency,
-    accountNumber: form.accountNumber,
-    ownerName: form.ownerName,
+    accountNumber: blank(form.accountNumber),
+    ownerName: blank(form.ownerName),
   };
+}
+
+function presetIdForAccount(account: Account): string {
+  const byName = findPresetByName(account.bank);
+  if (byName) return byName.id;
+  // Demo cash accounts (and any future cash account whose preset.name doesn't
+  // match `account.bank`) still need to surface as the cash preset so the
+  // edit form hides the bank-only fields.
+  if (account.kind === "cash") {
+    const cash = ACCOUNT_PRESETS.find((p) => p.kind === "cash");
+    if (cash) return cash.id;
+  }
+  return ACCOUNT_PRESETS[0].id;
 }
 
 function AccountFields({
@@ -212,6 +236,11 @@ function AccountFields({
 }) {
   const t = useT();
   const [currencies, setCurrencies] = useState<Currency[]>([]);
+  const selectedPreset = ACCOUNT_PRESETS.find((p) => p.id === value.presetId);
+  // Cash accounts don't have a bank-issued number or owner-on-file. Hide
+  // those fields so the form matches the data model (and the user isn't
+  // tempted to type values that the backend will discard).
+  const isCash = selectedPreset?.kind === "cash";
   useEffect(() => {
     let cancelled = false;
     listCurrencies()
@@ -232,10 +261,15 @@ function AccountFields({
           value={value.presetId}
           onChange={(e) => {
             const preset = ACCOUNT_PRESETS.find((p) => p.id === e.target.value);
+            // Switching to a cash preset wipes the bank-only fields so a
+            // stale account number doesn't get re-submitted on save.
+            const nextIsCash = preset?.kind === "cash";
             onChange({
               ...value,
               presetId: e.target.value,
               currency: preset?.defaultCurrency ?? value.currency,
+              accountNumber: nextIsCash ? "" : value.accountNumber,
+              ownerName: nextIsCash ? "" : value.ownerName,
             });
           }}
         >
@@ -273,22 +307,26 @@ function AccountFields({
           placeholder={t("accounts.fieldNamePlaceholder")}
         />
       </label>
-      <label>
-        {t("accounts.fieldAccountNumberOptional")}
-        <input
-          value={value.accountNumber}
-          onChange={(e) =>
-            onChange({ ...value, accountNumber: e.target.value })
-          }
-        />
-      </label>
-      <label>
-        {t("accounts.fieldOwnerOptional")}
-        <input
-          value={value.ownerName}
-          onChange={(e) => onChange({ ...value, ownerName: e.target.value })}
-        />
-      </label>
+      {!isCash && (
+        <>
+          <label>
+            {t("accounts.fieldAccountNumberOptional")}
+            <input
+              value={value.accountNumber}
+              onChange={(e) =>
+                onChange({ ...value, accountNumber: e.target.value })
+              }
+            />
+          </label>
+          <label>
+            {t("accounts.fieldOwnerOptional")}
+            <input
+              value={value.ownerName}
+              onChange={(e) => onChange({ ...value, ownerName: e.target.value })}
+            />
+          </label>
+        </>
+      )}
     </>
   );
 }
@@ -645,8 +683,8 @@ export function AccountsPage({ onCreateAccount, version, onOpenMonth }: Props) {
                   </td>
                   <td>{a.bank}</td>
                   <td>{a.currency}</td>
-                  <td>{a.accountNumber}</td>
-                  <td>{a.ownerName}</td>
+                  <td>{a.accountNumber ?? ""}</td>
+                  <td>{a.ownerName ?? ""}</td>
                   <td className="last-txn-cell">
                     <LastTransactionCell
                       latest={latestByAccount.get(a.id) ?? null}
@@ -863,7 +901,7 @@ function ActivityLegendModal({
   );
 }
 
-type DetailTab = "general" | "batches";
+type DetailTab = "general" | "batches" | "cash";
 
 function AccountDetailModal({
   account,
@@ -877,14 +915,17 @@ function AccountDetailModal({
   onDeleted: () => Promise<void>;
 }) {
   const t = useT();
+  const isCash = account.kind === "cash";
+  // Cash accounts have no import batches — the second tab is replaced with
+  // the manual-entry list. Bank accounts keep the historical layout.
   const [tab, setTab] = useState<DetailTab>("general");
 
   const [form, setForm] = useState<AccountFormValues>({
-    presetId: findPresetByName(account.bank)?.id ?? ACCOUNT_PRESETS[0].id,
+    presetId: presetIdForAccount(account),
     currency: account.currency,
     name: account.name,
-    accountNumber: account.accountNumber,
-    ownerName: account.ownerName,
+    accountNumber: account.accountNumber ?? "",
+    ownerName: account.ownerName ?? "",
   });
   const [submitting, setSubmitting] = useState(false);
   const [generalError, setGeneralError] = useState<string | null>(null);
@@ -946,13 +987,23 @@ function AccountDetailModal({
           >
             {t("accounts.detailsTabGeneral")}
           </button>
-          <button
-            type="button"
-            className={`modal-tab-button${tab === "batches" ? " active" : ""}`}
-            onClick={() => setTab("batches")}
-          >
-            {t("accounts.detailsTabBatches")}
-          </button>
+          {isCash ? (
+            <button
+              type="button"
+              className={`modal-tab-button${tab === "cash" ? " active" : ""}`}
+              onClick={() => setTab("cash")}
+            >
+              {t("accounts.detailsTabCash")}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={`modal-tab-button${tab === "batches" ? " active" : ""}`}
+              onClick={() => setTab("batches")}
+            >
+              {t("accounts.detailsTabBatches")}
+            </button>
+          )}
         </div>
         {tab === "general" ? (
           <form onSubmit={onSubmit}>
@@ -963,7 +1014,7 @@ function AccountDetailModal({
               {confirmingDelete && (
                 <div className="delete-confirm">
                   {t("accounts.deleteConfirm", {
-                    name: account.name || account.accountNumber,
+                    name: account.name || account.accountNumber || "",
                   })}
                   <div className="delete-confirm-actions">
                     <button
@@ -1006,6 +1057,8 @@ function AccountDetailModal({
               </button>
             </footer>
           </form>
+        ) : tab === "cash" ? (
+          <CashTransactionsTab account={account} />
         ) : (
           <BatchesTab account={account} />
         )}
@@ -1136,6 +1189,440 @@ function BatchesTab({ account }: { account: Account }) {
         )}
       </aside>
     </div>
+  );
+}
+
+interface CashRowDraft {
+  /** ISO local date+time string consumable by `<input type="datetime-local">`
+   *  (no offset). Converted to UTC at submit time. */
+  occurredAtLocal: string;
+  /** Two amount fields — приход / расход. Exactly one carries a value at
+   *  any time; the other is greyed out until the active one is cleared.
+   *  We don't store a separate `direction` flag because it's derivable
+   *  from which field is non-empty. */
+  amountIn: string;
+  amountOut: string;
+  peer: string;
+  comment: string;
+}
+
+/** Convert a "YYYY-MM-DDTHH:mm" local string (datetime-local input) to a
+ *  full ISO UTC string the backend can store and parse. */
+function localInputToUtcIso(localValue: string): string {
+  // `new Date(localValue)` interprets the bare datetime as local time, which
+  // is what the user typed. Convert to UTC via toISOString.
+  const d = new Date(localValue);
+  return d.toISOString();
+}
+
+/** Convert a backend UTC ISO string into the "YYYY-MM-DDTHH:mm" format the
+ *  datetime-local input requires (local time, no offset, minute precision). */
+function utcIsoToLocalInput(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  );
+}
+
+function nowLocalInput(): string {
+  return utcIsoToLocalInput(new Date().toISOString());
+}
+
+function directionFromTxn(t: Transaction): CashDirection {
+  // Backend stores credit/debit as decimal strings; treat any non-"0.00"-ish
+  // credit as incoming.
+  return Number(t.credit) > 0 ? "in" : "out";
+}
+
+/** Pure heuristic for the "active" amount field. When the user has typed
+ *  something into one field, the *other* one is locked; once both are empty
+ *  the lock lifts and either can be the next entry point. */
+function activeAmountField(
+  draft: CashRowDraft,
+): "in" | "out" | "either" {
+  if (draft.amountIn.trim() !== "") return "in";
+  if (draft.amountOut.trim() !== "") return "out";
+  return "either";
+}
+
+function CashTransactionsTab({ account }: { account: Account }) {
+  const t = useT();
+  const { locale } = useI18n();
+  const [rows, setRows] = useState<Transaction[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState<Transaction | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<number | null>(
+    null,
+  );
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+
+  const dateFmt = useMemo(
+    () =>
+      new Intl.DateTimeFormat(locale, {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+    [locale],
+  );
+  const moneyFmt = useMemo(() => {
+    try {
+      return new Intl.NumberFormat(locale, {
+        style: "currency",
+        currency: account.currency,
+        signDisplay: "exceptZero",
+      });
+    } catch {
+      return null;
+    }
+  }, [locale, account.currency]);
+
+  const formatAmount = useCallback(
+    (txn: Transaction): string => {
+      const net = Number(txn.credit) - Number(txn.debit);
+      if (!Number.isFinite(net)) return `${txn.credit} ${account.currency}`;
+      return moneyFmt
+        ? moneyFmt.format(net)
+        : `${net > 0 ? "+" : ""}${net.toFixed(2)} ${account.currency}`;
+    },
+    [moneyFmt, account.currency],
+  );
+
+  const formatBalance = useCallback(
+    (txn: Transaction): string => {
+      const n = Number(txn.balance);
+      if (!Number.isFinite(n)) return `${txn.balance} ${account.currency}`;
+      try {
+        return new Intl.NumberFormat(locale, {
+          style: "currency",
+          currency: account.currency,
+        }).format(n);
+      } catch {
+        return `${n.toFixed(2)} ${account.currency}`;
+      }
+    },
+    [locale, account.currency],
+  );
+
+  const refresh = useCallback(async () => {
+    try {
+      const txns = await listTransactions([account.id]);
+      // Most recent on top — easier to scan when you've just added one.
+      txns.sort((a, b) => b.occurredAtUtc.localeCompare(a.occurredAtUtc));
+      setRows(txns);
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [account.id]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  async function onDelete(id: number) {
+    setDeletingId(id);
+    try {
+      await deleteCashTransaction(id);
+      setConfirmingDeleteId(null);
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  return (
+    <div className="modal-body">
+      {error && <div className="error">{error}</div>}
+
+      <div className="cash-tab-toolbar">
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={() => setCreating(true)}
+        >
+          {t("accounts.cash.addEntry")}
+        </button>
+      </div>
+
+      {rows.length === 0 ? (
+        <p className="empty">{t("accounts.cash.empty")}</p>
+      ) : (
+        <table className="cash-tab-table">
+          <thead>
+            <tr>
+              <th>{t("accounts.cash.colDate")}</th>
+              <th>{t("accounts.cash.colAmount")}</th>
+              <th>{t("accounts.cash.colBalance")}</th>
+              <th>{t("accounts.cash.colPeer")}</th>
+              <th>{t("accounts.cash.colComment")}</th>
+              <th aria-label={t("common.actions")} />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const confirming = confirmingDeleteId === r.id;
+              const busy = deletingId === r.id;
+              return (
+                <tr key={r.id}>
+                  <td>{dateFmt.format(new Date(r.occurredAtUtc))}</td>
+                  <td>{formatAmount(r)}</td>
+                  <td>{formatBalance(r)}</td>
+                  <td>{r.peer ?? ""}</td>
+                  <td>{r.comment ?? ""}</td>
+                  <td className="cash-tab-actions">
+                    {confirming ? (
+                      <span className="cash-tab-confirm">
+                        <button
+                          type="button"
+                          className="btn-ghost"
+                          onClick={() => setConfirmingDeleteId(null)}
+                          disabled={busy}
+                        >
+                          {t("common.cancel")}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-danger"
+                          onClick={() => onDelete(r.id)}
+                          disabled={busy}
+                        >
+                          {busy
+                            ? t("common.deleting")
+                            : t("accounts.cash.deleteConfirmYes")}
+                        </button>
+                      </span>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className="icon-btn"
+                          onClick={() => setEditing(r)}
+                          aria-label={t("common.edit")}
+                          title={t("common.edit")}
+                        >
+                          ✎
+                        </button>
+                        <button
+                          type="button"
+                          className="icon-btn icon-btn--danger"
+                          onClick={() => setConfirmingDeleteId(r.id)}
+                          aria-label={t("common.delete")}
+                          title={t("common.delete")}
+                        >
+                          ✕
+                        </button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+
+      {creating && (
+        <CashTransactionModal
+          account={account}
+          onClose={() => setCreating(false)}
+          onSaved={async () => {
+            setCreating(false);
+            await refresh();
+          }}
+        />
+      )}
+      {editing && (
+        <CashTransactionModal
+          account={account}
+          existing={editing}
+          onClose={() => setEditing(null)}
+          onSaved={async () => {
+            setEditing(null);
+            await refresh();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function CashTransactionModal({
+  account,
+  existing,
+  onClose,
+  onSaved,
+}: {
+  account: Account;
+  existing?: Transaction;
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+}) {
+  const t = useT();
+  const [form, setForm] = useState<CashRowDraft>(() =>
+    existing
+      ? {
+          occurredAtLocal: utcIsoToLocalInput(existing.occurredAtUtc),
+          // Backend always stores positive credit OR positive debit; the
+          // other is "0.00". Surface whichever is non-zero into its own
+          // field and leave the opposite empty so the lock kicks in.
+          amountIn:
+            directionFromTxn(existing) === "in" ? existing.credit : "",
+          amountOut:
+            directionFromTxn(existing) === "out" ? existing.debit : "",
+          peer: existing.peer ?? "",
+          comment: existing.comment ?? "",
+        }
+      : {
+          occurredAtLocal: nowLocalInput(),
+          amountIn: "",
+          amountOut: "",
+          peer: "",
+          comment: "",
+        },
+  );
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function onSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setError(null);
+    const active = activeAmountField(form);
+    if (active === "either") {
+      setError(t("accounts.cash.errorAmountRequired"));
+      return;
+    }
+    const direction: CashDirection = active === "in" ? "in" : "out";
+    const amount = active === "in" ? form.amountIn : form.amountOut;
+    setSubmitting(true);
+    try {
+      const blank = (v: string) => (v.trim() === "" ? null : v);
+      const payload = {
+        occurredAtUtc: localInputToUtcIso(form.occurredAtLocal),
+        direction,
+        amount,
+        peer: blank(form.peer),
+        comment: blank(form.comment),
+      };
+      if (existing) {
+        await updateCashTransaction({ id: existing.id, ...payload });
+      } else {
+        await createCashTransaction({ accountId: account.id, ...payload });
+      }
+      await onSaved();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const active = activeAmountField(form);
+
+  return createPortal(
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal modal--cash" onClick={(e) => e.stopPropagation()}>
+        <header className="modal-header">
+          <h3>
+            {existing
+              ? t("accounts.cash.editEntry")
+              : t("accounts.cash.addEntry")}
+          </h3>
+          <button
+            className="icon-btn"
+            onClick={onClose}
+            aria-label={t("common.close")}
+            type="button"
+          >
+            ×
+          </button>
+        </header>
+        <form onSubmit={onSubmit}>
+          <div className="modal-body">
+            <div className="cash-form">
+              <label className="cash-form-row">
+                <span>{t("accounts.cash.fieldOccurredAt")}</span>
+                <input
+                  type="datetime-local"
+                  required
+                  value={form.occurredAtLocal}
+                  onChange={(e) =>
+                    setForm({ ...form, occurredAtLocal: e.target.value })
+                  }
+                />
+              </label>
+              <div className="cash-form-row cash-form-row--amount">
+                <label className="cash-form-amount-cell">
+                  <span>
+                    {t("accounts.cash.fieldAmountIn", {
+                      currency: account.currency,
+                    })}
+                  </span>
+                  <input
+                    inputMode="decimal"
+                    disabled={active === "out"}
+                    value={form.amountIn}
+                    onChange={(e) =>
+                      setForm({ ...form, amountIn: e.target.value })
+                    }
+                    placeholder="0.00"
+                  />
+                </label>
+                <label className="cash-form-amount-cell">
+                  <span>
+                    {t("accounts.cash.fieldAmountOut", {
+                      currency: account.currency,
+                    })}
+                  </span>
+                  <input
+                    inputMode="decimal"
+                    disabled={active === "in"}
+                    value={form.amountOut}
+                    onChange={(e) =>
+                      setForm({ ...form, amountOut: e.target.value })
+                    }
+                    placeholder="0.00"
+                  />
+                </label>
+              </div>
+              <label className="cash-form-row">
+                <span>{t("accounts.cash.fieldPeerOptional")}</span>
+                <input
+                  value={form.peer}
+                  onChange={(e) => setForm({ ...form, peer: e.target.value })}
+                />
+              </label>
+              <label className="cash-form-row">
+                <span>{t("accounts.cash.fieldCommentOptional")}</span>
+                <input
+                  value={form.comment}
+                  onChange={(e) =>
+                    setForm({ ...form, comment: e.target.value })
+                  }
+                />
+              </label>
+            </div>
+            {error && <div className="error">{error}</div>}
+          </div>
+          <footer className="modal-footer">
+            <button type="button" className="btn-ghost" onClick={onClose}>
+              {t("common.cancel")}
+            </button>
+            <button type="submit" className="btn-primary" disabled={submitting}>
+              {submitting ? t("common.saving") : t("common.save")}
+            </button>
+          </footer>
+        </form>
+      </div>
+    </div>,
+    document.body,
   );
 }
 

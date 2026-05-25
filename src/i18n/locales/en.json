@@ -17,12 +17,14 @@
     "saving": "Saving...",
     "delete": "Delete",
     "deleting": "Deleting...",
+    "edit": "Edit",
     "close": "Close",
     "back": "Back",
     "loading": "Loading...",
     "yes": "Yes",
     "no": "No",
-    "all": "All"
+    "all": "All",
+    "actions": "Actions"
   },
   "accounts": {
     "title": "Accounts",
@@ -111,7 +113,25 @@
       "other": "{count} rows"
     },
     "detailsBatchDeleteConfirm": "Delete this import? All of its transactions will be removed.",
-    "detailsBatchDeleteYes": "Yes, delete"
+    "detailsBatchDeleteYes": "Yes, delete",
+    "detailsTabCash": "Entries",
+    "cash": {
+      "addEntry": "Add entry",
+      "editEntry": "Edit entry",
+      "empty": "No entries yet. Add the first one manually.",
+      "fieldOccurredAt": "Date & time",
+      "fieldAmountIn": "Income ({currency})",
+      "fieldAmountOut": "Expense ({currency})",
+      "errorAmountRequired": "Fill in either income or expense.",
+      "fieldPeerOptional": "Peer (optional)",
+      "fieldCommentOptional": "Comment (optional)",
+      "colDate": "Date",
+      "colAmount": "Amount",
+      "colBalance": "Balance",
+      "colPeer": "Peer",
+      "colComment": "Comment",
+      "deleteConfirmYes": "Delete"
+    }
   },
   "transactions": {
     "title": "Transactions",

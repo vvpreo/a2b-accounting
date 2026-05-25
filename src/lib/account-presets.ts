@@ -6,6 +6,10 @@ export interface ImportFormat {
 export interface AccountPreset {
   id: string;
   name: string;
+  /** Account kind sent to the backend on create. Defaults to "bank" for any
+   *  preset that omits it; "cash" disables the import flow and switches the
+   *  account detail page to manual entry. */
+  kind?: "bank" | "cash";
   defaultCurrency: string;
   /** Optional default UTC offset to preselect in the import wizard when the
    *  user is importing into an account of this preset. Bank statements rarely
@@ -56,6 +60,17 @@ export const ACCOUNT_PRESETS: AccountPreset[] = [
       IMPORT_FORMATS["kasikorn-csv-v1"],
       IMPORT_FORMATS["generic-csv-v1"],
     ],
+  },
+  {
+    // Cash purse — manually-entered transactions, no statement import. The
+    // account detail page swaps the "Загрузки" panel for an "Add entry"
+    // button (see Accounts.tsx). Currency picked by the user at create time;
+    // USD is just a neutral default for the modal.
+    id: "cash",
+    name: "Наличные",
+    kind: "cash",
+    defaultCurrency: "USD",
+    supportedFormats: [],
   },
 ];
 

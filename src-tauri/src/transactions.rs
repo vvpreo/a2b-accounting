@@ -25,7 +25,8 @@ pub struct TxnImportRow {
 pub struct Transaction {
     pub id: i64,
     pub account_id: i64,
-    pub import_batch_id: i64,
+    /// `None` for manually-entered cash transactions (no import batch).
+    pub import_batch_id: Option<i64>,
     pub occurred_at_utc: String,
     pub credit: String,
     pub debit: String,
@@ -520,10 +521,14 @@ pub fn first_transaction_date(
     // We can't pre-filter by MIN(occurred_at_utc) and convert just that one,
     // because earliest UTC ≠ earliest local across timezones. Pull every
     // (utc, tz) pair, convert each, and reduce to the minimum NaiveDate.
+    // Cash transactions have no import batch and therefore no batch-level
+    // timezone offset — fall back to UTC for them. The local-date conversion
+    // is only used to pick the earliest column in the report, where UTC is a
+    // fine fallback for entries the user authored manually.
     let sql = format!(
-        "SELECT t.occurred_at_utc, b.timezone_offset
+        "SELECT t.occurred_at_utc, COALESCE(b.timezone_offset, '+00:00')
          FROM transactions t
-         JOIN import_batches b ON t.import_batch_id = b.id
+         LEFT JOIN import_batches b ON t.import_batch_id = b.id
          {where_clause}"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
@@ -566,10 +571,10 @@ fn collect_latest_transactions(
     // (multiple txns at the same instant) are broken by id so the result
     // is deterministic.
     let mut stmt = conn.prepare(
-        "SELECT t.account_id, t.occurred_at_utc, b.timezone_offset,
+        "SELECT t.account_id, t.occurred_at_utc, COALESCE(b.timezone_offset, '+00:00'),
                 t.credit, t.debit
          FROM transactions t
-         JOIN import_batches b ON b.id = t.import_batch_id
+         LEFT JOIN import_batches b ON b.id = t.import_batch_id
          JOIN (
              SELECT account_id, MAX(occurred_at_utc) AS max_utc
              FROM transactions
@@ -689,6 +694,21 @@ pub(crate) fn validate_account_chain(
     conn: &Connection,
     account_id: i64,
 ) -> rusqlite::Result<Vec<ValidationError>> {
+    // Cash accounts have their balance chain authored by us — every insert /
+    // update / delete already recomputes the running balance, so a "gap" can
+    // only exist if the DB was tampered with directly. Bank statement
+    // validation does not apply.
+    let kind: Option<String> = conn
+        .query_row(
+            "SELECT kind FROM accounts WHERE id = ?1",
+            [account_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if kind.as_deref() == Some("cash") {
+        return Ok(Vec::new());
+    }
+
     let mut stmt = conn.prepare(
         "SELECT id, occurred_at_utc, credit, debit, balance, bank_description, comment
          FROM transactions

@@ -384,10 +384,12 @@ fn load_transactions(
     let placeholders: Vec<String> = (1..=account_ids.len())
         .map(|i| format!("?{}", i + 2))
         .collect();
+    // Cash transactions have no import batch; fall back to UTC for their
+    // local-date bucketing so they still surface in the report.
     let sql = format!(
-        "SELECT t.id, t.occurred_at_utc, ib.timezone_offset, t.credit, t.debit
+        "SELECT t.id, t.occurred_at_utc, COALESCE(ib.timezone_offset, '+00:00'), t.credit, t.debit
          FROM transactions t
-         JOIN import_batches ib ON ib.id = t.import_batch_id
+         LEFT JOIN import_batches ib ON ib.id = t.import_batch_id
          WHERE t.is_correcting = 0
            AND t.occurred_at_utc >= ?1
            AND t.occurred_at_utc <= ?2
@@ -451,9 +453,9 @@ fn load_balance_history(
         .map(|i| format!("?{}", i + 1))
         .collect();
     let sql = format!(
-        "SELECT t.id, t.account_id, t.occurred_at_utc, ib.timezone_offset, t.balance
+        "SELECT t.id, t.account_id, t.occurred_at_utc, COALESCE(ib.timezone_offset, '+00:00'), t.balance
          FROM transactions t
-         JOIN import_batches ib ON ib.id = t.import_batch_id
+         LEFT JOIN import_batches ib ON ib.id = t.import_batch_id
          WHERE t.occurred_at_utc <= ?1
            AND t.account_id IN ({})",
         placeholders.join(",")

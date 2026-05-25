@@ -1,5 +1,6 @@
 mod account_status;
 mod accounts;
+mod cash_transactions;
 mod categories;
 mod currencies;
 mod db;
@@ -101,6 +102,9 @@ pub fn run() {
             transactions::validate_balance_chain,
             transactions::validate_import_preview,
             transactions::update_transaction_comment,
+            cash_transactions::create_cash_transaction,
+            cash_transactions::update_cash_transaction,
+            cash_transactions::delete_cash_transaction,
             settings::get_setting,
             settings::set_setting,
             exchange_rates::list_exchange_rates,

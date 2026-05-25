@@ -10,10 +10,11 @@ use crate::exchange_rates;
 pub struct Account {
     pub id: i64,
     pub name: String,
+    pub kind: String,
     pub bank: String,
     pub currency: String,
-    pub account_number: String,
-    pub owner_name: String,
+    pub account_number: Option<String>,
+    pub owner_name: Option<String>,
     pub created_at: String,
 }
 
@@ -21,44 +22,66 @@ fn from_row(row: &Row) -> rusqlite::Result<Account> {
     Ok(Account {
         id: row.get(0)?,
         name: row.get(1)?,
-        bank: row.get(2)?,
-        currency: row.get(3)?,
-        account_number: row.get(4)?,
-        owner_name: row.get(5)?,
-        created_at: row.get(6)?,
+        kind: row.get(2)?,
+        bank: row.get(3)?,
+        currency: row.get(4)?,
+        account_number: row.get(5)?,
+        owner_name: row.get(6)?,
+        created_at: row.get(7)?,
     })
 }
 
 const SELECT_COLUMNS: &str =
-    "id, name, bank, currency, account_number, owner_name, created_at";
+    "id, name, kind, bank, currency, account_number, owner_name, created_at";
+
+/// Normalise empty strings from the frontend to NULL so the partial unique
+/// index on (bank, account_number) sees a real "no value" instead of an
+/// empty string (which would collide across multiple cash accounts).
+fn blank_to_none(value: Option<String>) -> Option<String> {
+    value.and_then(|v| if v.trim().is_empty() { None } else { Some(v) })
+}
+
+fn normalise_kind(kind: Option<String>) -> Result<String, String> {
+    let k = kind.unwrap_or_else(|| "bank".to_string());
+    match k.as_str() {
+        "bank" | "cash" => Ok(k),
+        other => Err(format!("invalid account kind: {other}")),
+    }
+}
 
 #[tauri::command]
 pub fn create_account(
     app: AppHandle,
     state: State<'_, DbState>,
     name: String,
+    kind: Option<String>,
     bank: String,
     currency: String,
-    account_number: String,
-    owner_name: String,
+    account_number: Option<String>,
+    owner_name: Option<String>,
 ) -> Result<Account, String> {
+    let kind = normalise_kind(kind)?;
+    let account_number = blank_to_none(account_number);
+    let owner_name = blank_to_none(owner_name);
+
     let (account, should_fetch_rates) = {
         let conn = state.lock().map_err(|e| e.to_string())?;
 
         let id: i64 = conn
             .query_row(
-                "INSERT INTO accounts (name, bank, currency, account_number, owner_name)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
+                "INSERT INTO accounts (name, kind, bank, currency, account_number, owner_name)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                  RETURNING id",
-                params![name, bank, currency, account_number, owner_name],
+                params![name, kind, bank, currency, account_number, owner_name],
                 |row| row.get(0),
             )
             .map_err(|e| match &e {
                 rusqlite::Error::SqliteFailure(err, _)
                     if err.code == rusqlite::ErrorCode::ConstraintViolation =>
                 {
+                    let acct = account_number.as_deref().unwrap_or("");
                     format!(
-                        "Account with bank '{bank}' and number '{account_number}' already exists"
+                        "Account with bank '{bank}' and number '{acct}' already exists"
                     )
                 }
                 _ => e.to_string(),
@@ -135,26 +158,33 @@ pub fn update_account(
     state: State<'_, DbState>,
     id: i64,
     name: String,
+    kind: Option<String>,
     bank: String,
     currency: String,
-    account_number: String,
-    owner_name: String,
+    account_number: Option<String>,
+    owner_name: Option<String>,
 ) -> Result<Account, String> {
+    let kind = normalise_kind(kind)?;
+    let account_number = blank_to_none(account_number);
+    let owner_name = blank_to_none(owner_name);
+
     let conn = state.lock().map_err(|e| e.to_string())?;
 
     let updated = conn
         .execute(
             "UPDATE accounts
-             SET name = ?1, bank = ?2, currency = ?3, account_number = ?4, owner_name = ?5
-             WHERE id = ?6",
-            params![name, bank, currency, account_number, owner_name, id],
+             SET name = ?1, kind = ?2, bank = ?3, currency = ?4,
+                 account_number = ?5, owner_name = ?6
+             WHERE id = ?7",
+            params![name, kind, bank, currency, account_number, owner_name, id],
         )
         .map_err(|e| match &e {
             rusqlite::Error::SqliteFailure(err, _)
                 if err.code == rusqlite::ErrorCode::ConstraintViolation =>
             {
+                let acct = account_number.as_deref().unwrap_or("");
                 format!(
-                    "Account with bank '{bank}' and number '{account_number}' already exists"
+                    "Account with bank '{bank}' and number '{acct}' already exists"
                 )
             }
             _ => e.to_string(),
