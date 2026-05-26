@@ -227,53 +227,129 @@ const OPENING_BALANCE_FAMILY_THB: u32 = 325_000;
 struct CategorySpec {
     name: &'static str,
     color: &'static str,
+    description: Option<&'static str>,
     children: &'static [CategorySpec],
 }
 
 const INCOME_CATEGORIES: &[CategorySpec] = &[
-    CategorySpec { name: "Зарплата", color: "#84d268", children: &[] },
-    CategorySpec { name: "Подарки", color: "#d1b07d", children: &[] },
-    CategorySpec { name: "Прочие доходы", color: "#5acdc1", children: &[] },
+    CategorySpec {
+        name: "Зарплата",
+        color: "#84d268",
+        description: Some("Регулярные поступления от основного работодателя, включая премии и бонусы."),
+        children: &[],
+    },
+    CategorySpec {
+        name: "Подарки",
+        color: "#d1b07d",
+        description: Some("Денежные подарки от родственников и друзей — дни рождения, праздники, помощь."),
+        children: &[],
+    },
+    CategorySpec {
+        name: "Прочие доходы",
+        color: "#5acdc1",
+        description: Some("Разовые поступления: фриланс, возвраты, кэшбэк и прочее, что не подходит под другие категории."),
+        children: &[],
+    },
 ];
 
 const EXPENSE_CATEGORIES: &[CategorySpec] = &[
     CategorySpec {
         name: "Жильё",
         color: "#5a9cc7",
+        description: Some("Всё, что связано с домом: аренда, коммуналка, интернет, мелкий ремонт и хозтовары."),
         children: &[
-            CategorySpec { name: "Аренда", color: "#7eb1d2", children: &[] },
-            CategorySpec { name: "Коммуналка", color: "#92bcd9", children: &[] },
-            CategorySpec { name: "Интернет", color: "#a6c8df", children: &[] },
+            CategorySpec {
+                name: "Аренда",
+                color: "#7eb1d2",
+                description: Some("Ежемесячный платёж за съёмное жильё."),
+                children: &[],
+            },
+            CategorySpec {
+                name: "Коммуналка",
+                color: "#92bcd9",
+                description: Some("Вода, электричество, газ, отопление, вывоз мусора."),
+                children: &[],
+            },
+            CategorySpec {
+                name: "Интернет",
+                color: "#a6c8df",
+                description: Some("Домашний интернет и мобильная связь."),
+                children: &[],
+            },
         ],
     },
     CategorySpec {
         name: "Еда",
         color: "#84d268",
+        description: Some("Все траты на еду: продукты, кафе, доставка, перекусы."),
         children: &[
             CategorySpec {
                 name: "Магазины",
                 color: "#9ddb86",
+                description: Some("Покупка продуктов в магазинах и на рынке."),
                 children: &[
-                    CategorySpec { name: "Супермаркеты", color: "#aee29a", children: &[] },
-                    CategorySpec { name: "Фермерский рынок", color: "#bce8aa", children: &[] },
+                    CategorySpec {
+                        name: "Супермаркеты",
+                        color: "#aee29a",
+                        description: Some("Регулярные продуктовые закупки в сетевых супермаркетах."),
+                        children: &[],
+                    },
+                    CategorySpec {
+                        name: "Фермерский рынок",
+                        color: "#bce8aa",
+                        description: Some("Свежие овощи, фрукты, мясо и молочка с рынка."),
+                        children: &[],
+                    },
                 ],
             },
-            CategorySpec { name: "Кафе и рестораны", color: "#b2e2a4", children: &[] },
-            CategorySpec { name: "Доставка", color: "#c2e8b8", children: &[] },
+            CategorySpec {
+                name: "Кафе и рестораны",
+                color: "#b2e2a4",
+                description: Some("Завтраки, обеды и ужины вне дома, кофе с собой."),
+                children: &[],
+            },
+            CategorySpec {
+                name: "Доставка",
+                color: "#c2e8b8",
+                description: Some("Доставка готовой еды и продуктов на дом."),
+                children: &[],
+            },
         ],
     },
     CategorySpec {
         name: "Транспорт",
         color: "#e0b257",
+        description: Some("Передвижение по городу и поездки: транспорт, такси, бензин, парковки."),
         children: &[
-            CategorySpec { name: "Общественный", color: "#e8c585", children: &[] },
-            CategorySpec { name: "Такси", color: "#ecce98", children: &[] },
+            CategorySpec {
+                name: "Общественный",
+                color: "#e8c585",
+                description: Some("Метро, автобусы, проездные."),
+                children: &[],
+            },
+            CategorySpec {
+                name: "Такси",
+                color: "#ecce98",
+                description: Some("Поездки на такси и каршеринг."),
+                children: &[],
+            },
             CategorySpec {
                 name: "Бензин",
                 color: "#f0d7ab",
+                description: Some("Заправка личного автомобиля."),
                 children: &[
-                    CategorySpec { name: "АЗС Shell", color: "#f5e3c0", children: &[] },
-                    CategorySpec { name: "АЗС BP", color: "#f9ecd0", children: &[] },
+                    CategorySpec {
+                        name: "АЗС Shell",
+                        color: "#f5e3c0",
+                        description: Some("Заправки на сети Shell."),
+                        children: &[],
+                    },
+                    CategorySpec {
+                        name: "АЗС BP",
+                        color: "#f9ecd0",
+                        description: Some("Заправки на сети BP."),
+                        children: &[],
+                    },
                 ],
             },
         ],
@@ -281,14 +357,31 @@ const EXPENSE_CATEGORIES: &[CategorySpec] = &[
     CategorySpec {
         name: "Здоровье",
         color: "#e05757",
+        description: Some("Медицинские траты: лекарства, врачи, анализы, страховка."),
         children: &[
-            CategorySpec { name: "Аптека", color: "#e88080", children: &[] },
+            CategorySpec {
+                name: "Аптека",
+                color: "#e88080",
+                description: Some("Лекарства, БАДы, средства гигиены."),
+                children: &[],
+            },
             CategorySpec {
                 name: "Врачи",
                 color: "#ec9494",
+                description: Some("Приёмы у специалистов, процедуры, обследования."),
                 children: &[
-                    CategorySpec { name: "Терапевт", color: "#f0a6a6", children: &[] },
-                    CategorySpec { name: "Стоматолог", color: "#f4b8b8", children: &[] },
+                    CategorySpec {
+                        name: "Терапевт",
+                        color: "#f0a6a6",
+                        description: Some("Приёмы у терапевта и общая диагностика."),
+                        children: &[],
+                    },
+                    CategorySpec {
+                        name: "Стоматолог",
+                        color: "#f4b8b8",
+                        description: Some("Лечение зубов, профчистки, ортодонтия."),
+                        children: &[],
+                    },
                 ],
             },
         ],
@@ -296,22 +389,59 @@ const EXPENSE_CATEGORIES: &[CategorySpec] = &[
     CategorySpec {
         name: "Развлечения",
         color: "#a87dd1",
+        description: Some("Свободное время: кино, концерты, подписки, хобби."),
         children: &[
-            CategorySpec { name: "Кино и театр", color: "#b89bd9", children: &[] },
+            CategorySpec {
+                name: "Кино и театр",
+                color: "#b89bd9",
+                description: Some("Билеты в кино, театр и на концерты."),
+                children: &[],
+            },
             CategorySpec {
                 name: "Подписки",
                 color: "#c1abdf",
+                description: Some("Ежемесячные подписки на сервисы."),
                 children: &[
-                    CategorySpec { name: "Музыка", color: "#cdb9e3", children: &[] },
-                    CategorySpec { name: "Видео", color: "#d6c5e8", children: &[] },
+                    CategorySpec {
+                        name: "Музыка",
+                        color: "#cdb9e3",
+                        description: Some("Spotify, Яндекс.Музыка и подобное."),
+                        children: &[],
+                    },
+                    CategorySpec {
+                        name: "Видео",
+                        color: "#d6c5e8",
+                        description: Some("Netflix, Кинопоиск и другие видеосервисы."),
+                        children: &[],
+                    },
                 ],
             },
-            CategorySpec { name: "Хобби", color: "#cabae5", children: &[] },
+            CategorySpec {
+                name: "Хобби",
+                color: "#cabae5",
+                description: Some("Спортзал, книги, настольные игры и другие увлечения."),
+                children: &[],
+            },
         ],
     },
-    CategorySpec { name: "Одежда", color: "#d17daf", children: &[] },
-    CategorySpec { name: "Образование", color: "#5acdc1", children: &[] },
-    CategorySpec { name: "Прочее", color: "#7d8ad1", children: &[] },
+    CategorySpec {
+        name: "Одежда",
+        color: "#d17daf",
+        description: Some("Покупка одежды, обуви и аксессуаров."),
+        children: &[],
+    },
+    CategorySpec {
+        name: "Образование",
+        color: "#5acdc1",
+        description: Some("Курсы, книги, обучающие материалы."),
+        children: &[],
+    },
+    CategorySpec {
+        name: "Прочее",
+        color: "#7d8ad1",
+        description: Some("Разовые мелкие траты, которые не подходят под другие категории."),
+        children: &[],
+    },
 ];
 
 // ---- Deterministic PRNG (xorshift64*) ----
@@ -1363,7 +1493,7 @@ fn insert_category_tree(
     map: &mut HashMap<String, i64>,
 ) -> rusqlite::Result<()> {
     for spec in specs {
-        let id = insert_category(conn, spec.name, spec.color, kind, parent_id)?;
+        let id = insert_category(conn, spec.name, spec.color, kind, parent_id, spec.description)?;
         map.insert(spec.name.to_string(), id);
         insert_category_tree(conn, spec.children, kind, Some(id), map)?;
     }
@@ -1376,10 +1506,11 @@ fn insert_category(
     color: &str,
     kind: &str,
     parent_id: Option<i64>,
+    description: Option<&str>,
 ) -> rusqlite::Result<i64> {
     conn.query_row(
-        "INSERT INTO categories (name, color, kind, parent_id) VALUES (?1, ?2, ?3, ?4) RETURNING id",
-        params![name, color, kind, parent_id],
+        "INSERT INTO categories (name, color, kind, parent_id, description) VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id",
+        params![name, color, kind, parent_id, description],
         |r| r.get(0),
     )
 }

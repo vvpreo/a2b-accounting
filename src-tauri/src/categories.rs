@@ -12,6 +12,7 @@ pub struct Category {
     pub color: String,
     pub kind: String,
     pub parent_id: Option<i64>,
+    pub description: Option<String>,
     pub created_at: String,
 }
 
@@ -22,11 +23,23 @@ fn from_row(row: &Row) -> rusqlite::Result<Category> {
         color: row.get(2)?,
         kind: row.get(3)?,
         parent_id: row.get(4)?,
-        created_at: row.get(5)?,
+        description: row.get(5)?,
+        created_at: row.get(6)?,
     })
 }
 
-const SELECT_COLUMNS: &str = "id, name, color, kind, parent_id, created_at";
+const SELECT_COLUMNS: &str = "id, name, color, kind, parent_id, description, created_at";
+
+fn normalize_description(value: Option<String>) -> Option<String> {
+    value.and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
 
 fn validate_kind(kind: &str) -> Result<(), String> {
     match kind {
@@ -42,7 +55,9 @@ pub fn create_category(
     color: String,
     kind: String,
     parent_id: Option<i64>,
+    description: Option<String>,
 ) -> Result<Category, String> {
+    let description = normalize_description(description);
     let conn = state.lock().map_err(|e| e.to_string())?;
 
     // Resolve effective kind: if parent is set, child must inherit parent's kind.
@@ -95,10 +110,10 @@ pub fn create_category(
 
     let id: i64 = conn
         .query_row(
-            "INSERT INTO categories (name, color, kind, parent_id)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO categories (name, color, kind, parent_id, description)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              RETURNING id",
-            params![name, color, effective_kind, parent_id],
+            params![name, color, effective_kind, parent_id, description],
             |row| row.get(0),
         )
         .map_err(|e| match &e {
@@ -143,13 +158,15 @@ pub fn update_category(
     id: i64,
     name: String,
     color: String,
+    description: Option<String>,
 ) -> Result<Category, String> {
     let conn = state.lock().map_err(|e| e.to_string())?;
+    let description = normalize_description(description);
 
     let updated = conn
         .execute(
-            "UPDATE categories SET name = ?1, color = ?2 WHERE id = ?3",
-            params![name, color, id],
+            "UPDATE categories SET name = ?1, color = ?2, description = ?3 WHERE id = ?4",
+            params![name, color, description, id],
         )
         .map_err(|e| match &e {
             rusqlite::Error::SqliteFailure(err, _)

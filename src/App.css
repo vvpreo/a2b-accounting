@@ -327,6 +327,19 @@ body {
   margin-bottom: 0;
 }
 
+/* Category modal form: each field is its own row — name, description,
+   color — so the textarea has room to breathe and the palette doesn't
+   compete for horizontal space. */
+.category-form--modal {
+  grid-template-columns: 1fr;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  margin-bottom: 0;
+  align-items: stretch;
+  gap: 16px;
+}
+
 .account-name-cell {
   display: flex;
   align-items: center;
@@ -394,7 +407,8 @@ body {
 }
 
 .account-form input,
-.account-form select {
+.account-form select,
+.account-form textarea {
   padding: 6px 8px;
   font-size: 14px;
   border: 1px solid #d4d4d8;
@@ -404,8 +418,15 @@ body {
   font-family: inherit;
 }
 
+.account-form textarea {
+  resize: vertical;
+  min-height: 64px;
+  line-height: 1.4;
+}
+
 .account-form input:focus,
-.account-form select:focus {
+.account-form select:focus,
+.account-form textarea:focus {
   outline: none;
   border-color: #6366f1;
 }
@@ -2655,8 +2676,21 @@ code {
   flex-shrink: 0;
 }
 
+.categories-label {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .categories-name {
   font-size: 14px;
+}
+
+.categories-description {
+  font-size: 12px;
+  color: #71717a;
+  line-height: 1.3;
 }
 
 .categories-actions {

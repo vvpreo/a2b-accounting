@@ -313,6 +313,8 @@
     "modalEditTitle": "Редактировать категорию",
     "fieldName": "Название",
     "fieldNamePlaceholder": "Например, «Продукты»",
+    "fieldDescription": "Описание",
+    "fieldDescriptionPlaceholder": "Краткое пояснение: что входит в эту категорию",
     "fieldColor": "Цвет",
     "colorTabPalette": "Палитра",
     "colorTabShades": "Оттенки родителя",

@@ -202,7 +202,14 @@ function CategoryNodeRow({
           style={{ backgroundColor: node.category.color }}
           aria-hidden="true"
         />
-        <span className="categories-name">{node.category.name}</span>
+        <span className="categories-label">
+          <span className="categories-name">{node.category.name}</span>
+          {node.category.description && (
+            <span className="categories-description">
+              {node.category.description}
+            </span>
+          )}
+        </span>
         <span className="categories-actions">
           {canAddChild && (
             <button
@@ -272,6 +279,9 @@ function CategoryFormModal(props: ModalProps) {
   const [name, setName] = useState<string>(
     isEdit ? props.category.name : "",
   );
+  const [description, setDescription] = useState<string>(
+    isEdit ? (props.category.description ?? "") : "",
+  );
   const [color, setColor] = useState<string>(props.defaultColor);
   const [colorTab, setColorTab] = useState<"palette" | "shades">(
     props.parent ? "shades" : "palette",
@@ -298,14 +308,23 @@ function CategoryFormModal(props: ModalProps) {
     setError(null);
     setSubmitting(true);
     try {
+      const trimmedDescription = description.trim();
+      const descriptionPayload =
+        trimmedDescription.length > 0 ? trimmedDescription : null;
       if (isEdit) {
-        await updateCategory({ id: props.category.id, name, color });
+        await updateCategory({
+          id: props.category.id,
+          name,
+          color,
+          description: descriptionPayload,
+        });
       } else {
         await createCategory({
           name,
           color,
           kind: props.kind,
           parentId: props.parent?.id ?? null,
+          description: descriptionPayload,
         });
       }
       props.onSaved();
@@ -347,7 +366,7 @@ function CategoryFormModal(props: ModalProps) {
         </header>
         <form onSubmit={onSubmit}>
           <div className="modal-body">
-            <div className="account-form account-form--modal">
+            <div className="account-form category-form--modal">
               <label>
                 {t("categories.fieldName")}
                 <input
@@ -356,6 +375,16 @@ function CategoryFormModal(props: ModalProps) {
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder={t("categories.fieldNamePlaceholder")}
+                />
+              </label>
+
+              <label>
+                {t("categories.fieldDescription")}
+                <textarea
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  placeholder={t("categories.fieldDescriptionPlaceholder")}
+                  rows={3}
                 />
               </label>
 

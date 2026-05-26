@@ -303,6 +303,8 @@
     "modalEditTitle": "Edit category",
     "fieldName": "Name",
     "fieldNamePlaceholder": "e.g. “Groceries”",
+    "fieldDescription": "Description",
+    "fieldDescriptionPlaceholder": "Short note: what falls under this category",
     "fieldColor": "Color",
     "colorTabPalette": "Palette",
     "colorTabShades": "Parent shades",

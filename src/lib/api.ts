@@ -41,6 +41,7 @@ export interface Category {
   color: string;
   kind: CategoryKind;
   parentId: number | null;
+  description: string | null;
   createdAt: string;
 }
 
@@ -136,6 +137,7 @@ export function createCategory(args: {
   color: string;
   kind: CategoryKind;
   parentId: number | null;
+  description: string | null;
 }): Promise<Category> {
   return invoke<Category>("create_category", args);
 }
@@ -148,6 +150,7 @@ export function updateCategory(args: {
   id: number;
   name: string;
   color: string;
+  description: string | null;
 }): Promise<Category> {
   return invoke<Category>("update_category", args);
 }
