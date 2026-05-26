@@ -45,13 +45,326 @@ use crate::db::DbState;
 
 const DEMO_FLAG_KEY: &str = "demo_seeded";
 const DEMO_ACCOUNT_BANK: &str = "Demo Bank";
-const DEMO_ACCOUNT_OWNER: &str = "Демо";
 const DEMO_ACCOUNT_TIMEZONE: &str = "+03:00";
-const DEMO_REPORT_NAME: &str = "Отчёт учёта";
 // Default display currency on the seeded report. EUR is the FX base in the
 // app and matches the salary account's currency, so the multi-currency demo
 // shows a converted view without picking sides between THB and USD.
 const DEMO_REPORT_CURRENCY: &str = "EUR";
+
+// ---- Locale ----
+//
+// Seed text (account names, category names + descriptions, peer/description
+// literals on every transaction) is generated in the user's locale so the
+// demo dataset can act as a friendly walkthrough of the UI in the language
+// the user actually reads. The seed picks up the locale either from
+// `app_settings.locale` (set by the frontend after the first language pick),
+// or — on the very first launch, before the frontend has had a chance to
+// run — by sniffing the OS via `sys-locale` and persisting the result so
+// the frontend later agrees with what we baked into the data.
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Locale {
+    Ru,
+    En,
+}
+
+impl Locale {
+    fn parse_or_default(value: &str) -> Locale {
+        if value.to_ascii_lowercase().starts_with("ru") {
+            Locale::Ru
+        } else {
+            Locale::En
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Locale::Ru => "ru",
+            Locale::En => "en",
+        }
+    }
+
+    fn strings(self) -> &'static SeedStrings {
+        match self {
+            Locale::Ru => &STRINGS_RU,
+            Locale::En => &STRINGS_EN,
+        }
+    }
+}
+
+/// Resolve the locale to seed in. Checks `app_settings.locale` first; if
+/// missing, sniffs the OS locale via `sys-locale`; ultimate fallback is
+/// English (which also matches the frontend's `DEFAULT_LOCALE`).
+fn resolve_locale(conn: &Connection) -> rusqlite::Result<Locale> {
+    let stored: Option<String> = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'locale'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(value) = stored {
+        return Ok(Locale::parse_or_default(&value));
+    }
+    let os = sys_locale::get_locale().unwrap_or_else(|| "en".to_string());
+    Ok(Locale::parse_or_default(&os))
+}
+
+/// Persist `locale` into `app_settings.locale` so the frontend boots into
+/// the same language we seeded data in. Idempotent — overwrites only when
+/// the key is unset, so a user who already picked a language by hand keeps
+/// it on subsequent launches.
+fn persist_locale_if_unset(conn: &Connection, locale: Locale) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES ('locale', ?1)
+         ON CONFLICT(key) DO NOTHING",
+        [locale.as_str()],
+    )?;
+    Ok(())
+}
+
+// All user-visible text the seed writes into the database lives here, with
+// a Russian and an English flavour. Picked once per seed run based on
+// `Locale` and threaded down into the spec/insert pipeline. Keeping these
+// as `&'static str` lets `TxnSpec` keep its existing borrowed-string shape.
+struct SeedStrings {
+    // Account names (one per AccountKind) and bank-account owner.
+    account_salary: &'static str,
+    account_family: &'static str,
+    account_savings: &'static str,
+    account_vacation: &'static str,
+    account_cash: &'static str,
+    account_owner: &'static str,
+
+    // Default demo report.
+    report_name: &'static str,
+
+    // Peers (single-string fields used as `Some(s.peer_*)` on TxnSpec).
+    peer_employer: &'static str,
+    peer_current_expenses: &'static str,
+    peer_opening_balance: &'static str,
+    peer_parents_transfer: &'static str,
+    peer_apartment_rent: &'static str,
+    peer_utilities: &'static str,
+    peer_isp: &'static str,
+    peer_transit_card: &'static str,
+    peer_atm: &'static str,
+    peer_farmers_market: &'static str,
+    peer_clinic: &'static str,
+    peer_household_supplies: &'static str,
+    peer_corner_store: &'static str,
+    peer_parking: &'static str,
+    peer_lab: &'static str,
+    peer_concert: &'static str,
+    peer_neighborhood_store: &'static str,
+    peer_no_brand_gas: &'static str,
+    peer_family_plan: &'static str,
+    peer_hypermarket: &'static str,
+    peer_dental_clinic: &'static str,
+    peer_family_plan_addon: &'static str,
+    peer_supermarket_delivery: &'static str,
+    peer_cash: &'static str,
+    peer_partner: &'static str,
+    /// "АЗС Shell" / "Shell" — used both as the peer string and as the
+    /// localised display name of the `fuel.shell` category.
+    peer_shell: &'static str,
+    peer_bp: &'static str,
+
+    // Free-form descriptions on the bank statement (the column the user sees
+    // in the imports table). All optional in the underlying schema — `None`
+    // is used in plenty of places where the bank just shows the peer.
+    desc_opening_balance: &'static str,
+    desc_salary: &'static str,
+    desc_monthly_expenses: &'static str,
+    desc_quarterly_bonus: &'static str,
+    desc_transfer_to_family: &'static str,
+    desc_transfer_from_salary: &'static str,
+    desc_transfer_to_vacation: &'static str,
+    desc_transfer_to_savings: &'static str,
+    desc_atm_withdrawal: &'static str,
+    desc_atm_withdrawal_candy: &'static str,
+    desc_doctor_visit: &'static str,
+    desc_minor_repair: &'static str,
+    desc_snack: &'static str,
+    desc_lab_tests: &'static str,
+    desc_hypermarket_run: &'static str,
+    desc_consultation_procedure: &'static str,
+    desc_delivery_order: &'static str,
+    desc_balance_reconciliation: &'static str,
+    desc_rounding_adjustment: &'static str,
+    desc_savings_transfer: &'static str,
+    desc_bachelor_savings: &'static str,
+    desc_half_purchase: &'static str,
+    desc_half_bonus: &'static str,
+    desc_transit_topup: &'static str,
+
+    // RNG-picked peer pools (counterparties on regular spending). The pool
+    // contents differ per locale but the count and roles match so the
+    // generated transaction stream stays comparable.
+    shops: &'static [&'static str],
+    cafes: &'static [&'static str],
+    delivery: &'static [&'static str],
+    taxi: &'static [&'static str],
+    pharmacy: &'static [&'static str],
+    cinemas: &'static [&'static str],
+    subscriptions: &'static [&'static str],
+    hobbies: &'static [&'static str],
+    clothes: &'static [&'static str],
+    edu: &'static [&'static str],
+    misc: &'static [&'static str],
+}
+
+static STRINGS_RU: SeedStrings = SeedStrings {
+    account_salary: "Зарплатный счёт",
+    account_family: "Семейный счёт",
+    account_savings: "Сберегательный счёт",
+    account_vacation: "На отпуск",
+    account_cash: "Наличные на конфеты",
+    account_owner: "Демо",
+
+    report_name: "Отчёт учёта",
+
+    peer_employer: "ООО \"Работодатель\"",
+    peer_current_expenses: "Текущие расходы",
+    peer_opening_balance: "Начальный остаток",
+    peer_parents_transfer: "Перевод от родителей",
+    peer_apartment_rent: "Аренда квартиры",
+    peer_utilities: "ЖКХ",
+    peer_isp: "Провайдер",
+    peer_transit_card: "Транспортная карта",
+    peer_atm: "ATM",
+    peer_farmers_market: "Фермерский рынок",
+    peer_clinic: "Клиника",
+    peer_household_supplies: "Хозтовары для дома",
+    peer_corner_store: "Магазинчик у дома",
+    peer_parking: "Парковка",
+    peer_lab: "Лаборатория",
+    peer_concert: "Концерт",
+    peer_neighborhood_store: "Магазин у дома",
+    peer_no_brand_gas: "АЗС",
+    peer_family_plan: "Family Plan",
+    peer_hypermarket: "Гипермаркет",
+    peer_dental_clinic: "Стоматологическая клиника",
+    peer_family_plan_addon: "Family Plan + addon",
+    peer_supermarket_delivery: "Супермаркет с доставкой",
+    peer_cash: "Наличные",
+    peer_partner: "Партнёр",
+    peer_shell: "АЗС Shell",
+    peer_bp: "АЗС BP",
+
+    desc_opening_balance: "Начальный остаток на счёте",
+    desc_salary: "Заработная плата",
+    desc_monthly_expenses: "Расходы за месяц",
+    desc_quarterly_bonus: "Квартальная премия",
+    desc_transfer_to_family: "Перевод на семейный счёт",
+    desc_transfer_from_salary: "Перевод с зарплатного счёта",
+    desc_transfer_to_vacation: "Перевод на отпускной счёт",
+    desc_transfer_to_savings: "Перевод на сберегательный счёт",
+    desc_atm_withdrawal: "Снятие наличных",
+    desc_atm_withdrawal_candy: "Снятие наличных на конфеты",
+    desc_doctor_visit: "Приём врача",
+    desc_minor_repair: "Мелкий ремонт",
+    desc_snack: "Перекус",
+    desc_lab_tests: "Анализы",
+    desc_hypermarket_run: "Продукты + хозтовары",
+    desc_consultation_procedure: "Консультация + процедура",
+    desc_delivery_order: "Заказ + доставка",
+    desc_balance_reconciliation: "Сверка баланса при старте учёта",
+    desc_rounding_adjustment: "Округление после сверки",
+    desc_savings_transfer: "Перевод накоплений",
+    desc_bachelor_savings: "Накопления холостого периода",
+    desc_half_purchase: "Покупка (часть без категории)",
+    desc_half_bonus: "Бонус (часть без категории)",
+    desc_transit_topup: "Пополнение проездного",
+
+    shops: &["Перекрёсток", "Магнит", "Пятёрочка", "Лента", "Ашан"],
+    cafes: &["Кофейня", "Шоколадница", "Кафе у дома", "Coffee House"],
+    delivery: &["Яндекс.Еда", "Delivery Club", "Самокат"],
+    taxi: &["Яндекс.Такси", "Citymobil"],
+    pharmacy: &["Аптека 36.6", "Ригла", "Горздрав"],
+    cinemas: &["КиноПоиск", "Каро", "Формула Кино"],
+    subscriptions: &["Яндекс.Плюс", "Spotify", "Netflix", "iCloud+"],
+    hobbies: &["Спортзал", "Книги", "Игры"],
+    clothes: &["Uniqlo", "Zara", "H&M", "Lamoda"],
+    edu: &["Курсы английского", "Онлайн-школа", "Книжный магазин"],
+    misc: &["Хозтовары", "Подарок", "Сувенир", "Канцелярия"],
+};
+
+static STRINGS_EN: SeedStrings = SeedStrings {
+    account_salary: "Salary account",
+    account_family: "Family account",
+    account_savings: "Savings account",
+    account_vacation: "Vacation fund",
+    account_cash: "Candy cash",
+    account_owner: "Demo",
+
+    report_name: "Household report",
+
+    peer_employer: "Acme Corp.",
+    peer_current_expenses: "Monthly expenses",
+    peer_opening_balance: "Opening balance",
+    peer_parents_transfer: "Transfer from parents",
+    peer_apartment_rent: "Apartment rent",
+    peer_utilities: "Utilities",
+    peer_isp: "Internet provider",
+    peer_transit_card: "Transit card",
+    peer_atm: "ATM",
+    peer_farmers_market: "Farmers market",
+    peer_clinic: "Clinic",
+    peer_household_supplies: "Home supplies",
+    peer_corner_store: "Corner store",
+    peer_parking: "Parking",
+    peer_lab: "Lab",
+    peer_concert: "Concert",
+    peer_neighborhood_store: "Neighborhood store",
+    peer_no_brand_gas: "Gas station",
+    peer_family_plan: "Family Plan",
+    peer_hypermarket: "Hypermarket",
+    peer_dental_clinic: "Dental clinic",
+    peer_family_plan_addon: "Family Plan + add-on",
+    peer_supermarket_delivery: "Supermarket delivery",
+    peer_cash: "Cash",
+    peer_partner: "Side project",
+    peer_shell: "Shell",
+    peer_bp: "BP",
+
+    desc_opening_balance: "Account opening balance",
+    desc_salary: "Salary payment",
+    desc_monthly_expenses: "Monthly spend",
+    desc_quarterly_bonus: "Quarterly bonus",
+    desc_transfer_to_family: "Transfer to family account",
+    desc_transfer_from_salary: "Transfer from salary account",
+    desc_transfer_to_vacation: "Transfer to vacation account",
+    desc_transfer_to_savings: "Transfer to savings account",
+    desc_atm_withdrawal: "Cash withdrawal",
+    desc_atm_withdrawal_candy: "Cash withdrawal for candy",
+    desc_doctor_visit: "Doctor visit",
+    desc_minor_repair: "Minor repair",
+    desc_snack: "Snack",
+    desc_lab_tests: "Lab tests",
+    desc_hypermarket_run: "Groceries + home supplies",
+    desc_consultation_procedure: "Consultation + procedure",
+    desc_delivery_order: "Order + delivery",
+    desc_balance_reconciliation: "Opening reconciliation",
+    desc_rounding_adjustment: "Rounding adjustment",
+    desc_savings_transfer: "Savings top-up",
+    desc_bachelor_savings: "Pre-family savings deposit",
+    desc_half_purchase: "Purchase (partly uncategorised)",
+    desc_half_bonus: "Bonus (partly uncategorised)",
+    desc_transit_topup: "Transit card top-up",
+
+    shops: &["Whole Foods", "Trader Joe's", "Walmart", "Costco", "Aldi"],
+    cafes: &["Blue Bottle", "Starbucks", "Local Cafe", "Coffee House"],
+    delivery: &["DoorDash", "Uber Eats", "Instacart"],
+    taxi: &["Uber", "Lyft"],
+    pharmacy: &["CVS", "Walgreens", "Rite Aid"],
+    cinemas: &["AMC", "Regal", "Cinemark"],
+    subscriptions: &["Spotify", "YouTube Premium", "Netflix", "iCloud+"],
+    hobbies: &["Gym", "Bookstore", "Board games"],
+    clothes: &["Uniqlo", "Zara", "H&M", "Gap"],
+    edu: &["Language school", "Online course", "Bookstore"],
+    misc: &["Home goods", "Gift", "Souvenir", "Stationery"],
+};
 
 // ---- FX rates (Frankfurter, 2026-05-05) ----
 //
@@ -104,7 +417,6 @@ impl AccountTypeDb {
 
 struct AccountSpec {
     kind: AccountKind,
-    name: &'static str,
     /// Stored in `accounts.account_number`. Empty string is mapped to NULL by
     /// `insert_accounts` so cash accounts don't collide with the partial
     /// unique index on (bank, account_number).
@@ -116,40 +428,45 @@ struct AccountSpec {
 const ACCOUNTS: &[AccountSpec] = &[
     AccountSpec {
         kind: AccountKind::Salary,
-        name: "Зарплатный счёт",
         account_number: "DEMO-SAL-0001",
         currency: "EUR",
         kind_db: AccountTypeDb::Bank,
     },
     AccountSpec {
         kind: AccountKind::Family,
-        name: "Семейный счёт",
         account_number: "DEMO-FAM-0001",
         currency: "THB",
         kind_db: AccountTypeDb::Bank,
     },
     AccountSpec {
         kind: AccountKind::Savings,
-        name: "Сберегательный счёт",
         account_number: "DEMO-SAV-0001",
         currency: "USD",
         kind_db: AccountTypeDb::Bank,
     },
     AccountSpec {
         kind: AccountKind::Vacation,
-        name: "На отпуск",
         account_number: "DEMO-VAC-0001",
         currency: "THB",
         kind_db: AccountTypeDb::Bank,
     },
     AccountSpec {
         kind: AccountKind::Cash,
-        name: "Наличные на конфеты",
         account_number: "",
         currency: "THB",
         kind_db: AccountTypeDb::Cash,
     },
 ];
+
+fn account_name(s: &'static SeedStrings, kind: AccountKind) -> &'static str {
+    match kind {
+        AccountKind::Salary => s.account_salary,
+        AccountKind::Family => s.account_family,
+        AccountKind::Savings => s.account_savings,
+        AccountKind::Vacation => s.account_vacation,
+        AccountKind::Cash => s.account_cash,
+    }
+}
 
 // Fixed monthly internal transfer to Family — kept as plain debits/credits
 // with no category so they collapse together in the report's "Без категории"
@@ -224,130 +541,209 @@ const OPENING_BALANCE_FAMILY_THB: u32 = 325_000;
 
 // ---- Categories ----
 
+/// A category in the seed tree. `key` is a stable English identifier used
+/// throughout the seed code (in `Categorization::Full("salary")`, in the
+/// `HashMap<&str, i64>` returned by `insert_categories`, etc.) so that
+/// swapping the user-visible language never breaks internal lookups.
 struct CategorySpec {
-    name: &'static str,
+    key: &'static str,
     color: &'static str,
-    description: Option<&'static str>,
+    name_ru: &'static str,
+    name_en: &'static str,
+    desc_ru: &'static str,
+    desc_en: &'static str,
     children: &'static [CategorySpec],
+}
+
+impl CategorySpec {
+    fn name(&self, locale: Locale) -> &'static str {
+        match locale {
+            Locale::Ru => self.name_ru,
+            Locale::En => self.name_en,
+        }
+    }
+    fn description(&self, locale: Locale) -> &'static str {
+        match locale {
+            Locale::Ru => self.desc_ru,
+            Locale::En => self.desc_en,
+        }
+    }
 }
 
 const INCOME_CATEGORIES: &[CategorySpec] = &[
     CategorySpec {
-        name: "Зарплата",
+        key: "salary",
         color: "#84d268",
-        description: Some("Регулярные поступления от основного работодателя, включая премии и бонусы."),
+        name_ru: "Зарплата",
+        name_en: "Salary",
+        desc_ru: "Регулярные поступления от основного работодателя, включая премии и бонусы.",
+        desc_en: "Regular pay from the primary employer, including bonuses.",
         children: &[],
     },
     CategorySpec {
-        name: "Подарки",
+        key: "gifts",
         color: "#d1b07d",
-        description: Some("Денежные подарки от родственников и друзей — дни рождения, праздники, помощь."),
+        name_ru: "Подарки",
+        name_en: "Gifts",
+        desc_ru: "Денежные подарки от родственников и друзей — дни рождения, праздники, помощь.",
+        desc_en: "Cash gifts from family and friends — birthdays, holidays, support.",
         children: &[],
     },
     CategorySpec {
-        name: "Прочие доходы",
+        key: "income_misc",
         color: "#5acdc1",
-        description: Some("Разовые поступления: фриланс, возвраты, кэшбэк и прочее, что не подходит под другие категории."),
+        name_ru: "Прочие доходы",
+        name_en: "Other income",
+        desc_ru: "Разовые поступления: фриланс, возвраты, кэшбэк и прочее, что не подходит под другие категории.",
+        desc_en: "One-off income: freelance, refunds, cashback, anything that doesn't fit elsewhere.",
         children: &[],
     },
 ];
 
 const EXPENSE_CATEGORIES: &[CategorySpec] = &[
     CategorySpec {
-        name: "Жильё",
+        key: "housing",
         color: "#5a9cc7",
-        description: Some("Всё, что связано с домом: аренда, коммуналка, интернет, мелкий ремонт и хозтовары."),
+        name_ru: "Жильё",
+        name_en: "Housing",
+        desc_ru: "Всё, что связано с домом: аренда, коммуналка, интернет, мелкий ремонт и хозтовары.",
+        desc_en: "Everything home-related: rent, utilities, internet, small repairs, supplies.",
         children: &[
             CategorySpec {
-                name: "Аренда",
+                key: "rent",
                 color: "#7eb1d2",
-                description: Some("Ежемесячный платёж за съёмное жильё."),
+                name_ru: "Аренда",
+                name_en: "Rent",
+                desc_ru: "Ежемесячный платёж за съёмное жильё.",
+                desc_en: "Monthly rent payment.",
                 children: &[],
             },
             CategorySpec {
-                name: "Коммуналка",
+                key: "utilities",
                 color: "#92bcd9",
-                description: Some("Вода, электричество, газ, отопление, вывоз мусора."),
+                name_ru: "Коммуналка",
+                name_en: "Utilities",
+                desc_ru: "Вода, электричество, газ, отопление, вывоз мусора.",
+                desc_en: "Water, electricity, gas, heating, trash.",
                 children: &[],
             },
             CategorySpec {
-                name: "Интернет",
+                key: "internet",
                 color: "#a6c8df",
-                description: Some("Домашний интернет и мобильная связь."),
+                name_ru: "Интернет",
+                name_en: "Internet",
+                desc_ru: "Домашний интернет и мобильная связь.",
+                desc_en: "Home internet and mobile connectivity.",
                 children: &[],
             },
         ],
     },
     CategorySpec {
-        name: "Еда",
+        key: "food",
         color: "#84d268",
-        description: Some("Все траты на еду: продукты, кафе, доставка, перекусы."),
+        name_ru: "Еда",
+        name_en: "Food",
+        desc_ru: "Все траты на еду: продукты, кафе, доставка, перекусы.",
+        desc_en: "All food spending: groceries, cafes, delivery, snacks.",
         children: &[
             CategorySpec {
-                name: "Магазины",
+                key: "shops",
                 color: "#9ddb86",
-                description: Some("Покупка продуктов в магазинах и на рынке."),
+                name_ru: "Магазины",
+                name_en: "Grocery shops",
+                desc_ru: "Покупка продуктов в магазинах и на рынке.",
+                desc_en: "Groceries at supermarkets and farmers markets.",
                 children: &[
                     CategorySpec {
-                        name: "Супермаркеты",
+                        key: "supermarkets",
                         color: "#aee29a",
-                        description: Some("Регулярные продуктовые закупки в сетевых супермаркетах."),
+                        name_ru: "Супермаркеты",
+                        name_en: "Supermarkets",
+                        desc_ru: "Регулярные продуктовые закупки в сетевых супермаркетах.",
+                        desc_en: "Regular grocery runs at chain supermarkets.",
                         children: &[],
                     },
                     CategorySpec {
-                        name: "Фермерский рынок",
+                        key: "farmers_market",
                         color: "#bce8aa",
-                        description: Some("Свежие овощи, фрукты, мясо и молочка с рынка."),
+                        name_ru: "Фермерский рынок",
+                        name_en: "Farmers market",
+                        desc_ru: "Свежие овощи, фрукты, мясо и молочка с рынка.",
+                        desc_en: "Fresh produce, meat and dairy from the market.",
                         children: &[],
                     },
                 ],
             },
             CategorySpec {
-                name: "Кафе и рестораны",
+                key: "cafes",
                 color: "#b2e2a4",
-                description: Some("Завтраки, обеды и ужины вне дома, кофе с собой."),
+                name_ru: "Кафе и рестораны",
+                name_en: "Cafes & restaurants",
+                desc_ru: "Завтраки, обеды и ужины вне дома, кофе с собой.",
+                desc_en: "Eating out and takeaway coffee.",
                 children: &[],
             },
             CategorySpec {
-                name: "Доставка",
+                key: "delivery",
                 color: "#c2e8b8",
-                description: Some("Доставка готовой еды и продуктов на дом."),
+                name_ru: "Доставка",
+                name_en: "Food delivery",
+                desc_ru: "Доставка готовой еды и продуктов на дом.",
+                desc_en: "Prepared meals and groceries delivered home.",
                 children: &[],
             },
         ],
     },
     CategorySpec {
-        name: "Транспорт",
+        key: "transport",
         color: "#e0b257",
-        description: Some("Передвижение по городу и поездки: транспорт, такси, бензин, парковки."),
+        name_ru: "Транспорт",
+        name_en: "Transport",
+        desc_ru: "Передвижение по городу и поездки: транспорт, такси, бензин, парковки.",
+        desc_en: "Getting around: transit, taxis, fuel, parking.",
         children: &[
             CategorySpec {
-                name: "Общественный",
+                key: "transit",
                 color: "#e8c585",
-                description: Some("Метро, автобусы, проездные."),
+                name_ru: "Общественный",
+                name_en: "Public transit",
+                desc_ru: "Метро, автобусы, проездные.",
+                desc_en: "Subway, buses, transit passes.",
                 children: &[],
             },
             CategorySpec {
-                name: "Такси",
+                key: "taxi",
                 color: "#ecce98",
-                description: Some("Поездки на такси и каршеринг."),
+                name_ru: "Такси",
+                name_en: "Taxi",
+                desc_ru: "Поездки на такси и каршеринг.",
+                desc_en: "Ride-hailing and car-sharing trips.",
                 children: &[],
             },
             CategorySpec {
-                name: "Бензин",
+                key: "fuel",
                 color: "#f0d7ab",
-                description: Some("Заправка личного автомобиля."),
+                name_ru: "Бензин",
+                name_en: "Fuel",
+                desc_ru: "Заправка личного автомобиля.",
+                desc_en: "Filling up the personal car.",
                 children: &[
                     CategorySpec {
-                        name: "АЗС Shell",
+                        key: "fuel_shell",
                         color: "#f5e3c0",
-                        description: Some("Заправки на сети Shell."),
+                        name_ru: "АЗС Shell",
+                        name_en: "Shell",
+                        desc_ru: "Заправки на сети Shell.",
+                        desc_en: "Fuel at Shell stations.",
                         children: &[],
                     },
                     CategorySpec {
-                        name: "АЗС BP",
+                        key: "fuel_bp",
                         color: "#f9ecd0",
-                        description: Some("Заправки на сети BP."),
+                        name_ru: "АЗС BP",
+                        name_en: "BP",
+                        desc_ru: "Заправки на сети BP.",
+                        desc_en: "Fuel at BP stations.",
                         children: &[],
                     },
                 ],
@@ -355,31 +751,46 @@ const EXPENSE_CATEGORIES: &[CategorySpec] = &[
         ],
     },
     CategorySpec {
-        name: "Здоровье",
+        key: "health",
         color: "#e05757",
-        description: Some("Медицинские траты: лекарства, врачи, анализы, страховка."),
+        name_ru: "Здоровье",
+        name_en: "Health",
+        desc_ru: "Медицинские траты: лекарства, врачи, анализы, страховка.",
+        desc_en: "Medical spending: meds, doctors, lab work, insurance.",
         children: &[
             CategorySpec {
-                name: "Аптека",
+                key: "pharmacy",
                 color: "#e88080",
-                description: Some("Лекарства, БАДы, средства гигиены."),
+                name_ru: "Аптека",
+                name_en: "Pharmacy",
+                desc_ru: "Лекарства, БАДы, средства гигиены.",
+                desc_en: "Medications, supplements, hygiene products.",
                 children: &[],
             },
             CategorySpec {
-                name: "Врачи",
+                key: "doctors",
                 color: "#ec9494",
-                description: Some("Приёмы у специалистов, процедуры, обследования."),
+                name_ru: "Врачи",
+                name_en: "Doctors",
+                desc_ru: "Приёмы у специалистов, процедуры, обследования.",
+                desc_en: "Specialist visits, procedures, checkups.",
                 children: &[
                     CategorySpec {
-                        name: "Терапевт",
+                        key: "therapist",
                         color: "#f0a6a6",
-                        description: Some("Приёмы у терапевта и общая диагностика."),
+                        name_ru: "Терапевт",
+                        name_en: "GP",
+                        desc_ru: "Приёмы у терапевта и общая диагностика.",
+                        desc_en: "GP visits and routine diagnostics.",
                         children: &[],
                     },
                     CategorySpec {
-                        name: "Стоматолог",
+                        key: "dentist",
                         color: "#f4b8b8",
-                        description: Some("Лечение зубов, профчистки, ортодонтия."),
+                        name_ru: "Стоматолог",
+                        name_en: "Dentist",
+                        desc_ru: "Лечение зубов, профчистки, ортодонтия.",
+                        desc_en: "Dental treatment, cleanings, orthodontics.",
                         children: &[],
                     },
                 ],
@@ -387,59 +798,86 @@ const EXPENSE_CATEGORIES: &[CategorySpec] = &[
         ],
     },
     CategorySpec {
-        name: "Развлечения",
+        key: "entertainment",
         color: "#a87dd1",
-        description: Some("Свободное время: кино, концерты, подписки, хобби."),
+        name_ru: "Развлечения",
+        name_en: "Entertainment",
+        desc_ru: "Свободное время: кино, концерты, подписки, хобби.",
+        desc_en: "Free-time spending: movies, concerts, subscriptions, hobbies.",
         children: &[
             CategorySpec {
-                name: "Кино и театр",
+                key: "cinema",
                 color: "#b89bd9",
-                description: Some("Билеты в кино, театр и на концерты."),
+                name_ru: "Кино и театр",
+                name_en: "Cinema & theatre",
+                desc_ru: "Билеты в кино, театр и на концерты.",
+                desc_en: "Tickets to movies, theatre, concerts.",
                 children: &[],
             },
             CategorySpec {
-                name: "Подписки",
+                key: "subscriptions",
                 color: "#c1abdf",
-                description: Some("Ежемесячные подписки на сервисы."),
+                name_ru: "Подписки",
+                name_en: "Subscriptions",
+                desc_ru: "Ежемесячные подписки на сервисы.",
+                desc_en: "Recurring service subscriptions.",
                 children: &[
                     CategorySpec {
-                        name: "Музыка",
+                        key: "music",
                         color: "#cdb9e3",
-                        description: Some("Spotify, Яндекс.Музыка и подобное."),
+                        name_ru: "Музыка",
+                        name_en: "Music",
+                        desc_ru: "Spotify, Яндекс.Музыка и подобное.",
+                        desc_en: "Spotify, Apple Music and the like.",
                         children: &[],
                     },
                     CategorySpec {
-                        name: "Видео",
+                        key: "video",
                         color: "#d6c5e8",
-                        description: Some("Netflix, Кинопоиск и другие видеосервисы."),
+                        name_ru: "Видео",
+                        name_en: "Video",
+                        desc_ru: "Netflix, Кинопоиск и другие видеосервисы.",
+                        desc_en: "Netflix, Hulu, and other streaming services.",
                         children: &[],
                     },
                 ],
             },
             CategorySpec {
-                name: "Хобби",
+                key: "hobbies",
                 color: "#cabae5",
-                description: Some("Спортзал, книги, настольные игры и другие увлечения."),
+                name_ru: "Хобби",
+                name_en: "Hobbies",
+                desc_ru: "Спортзал, книги, настольные игры и другие увлечения.",
+                desc_en: "Gym, books, board games and other pastimes.",
                 children: &[],
             },
         ],
     },
     CategorySpec {
-        name: "Одежда",
+        key: "clothes",
         color: "#d17daf",
-        description: Some("Покупка одежды, обуви и аксессуаров."),
+        name_ru: "Одежда",
+        name_en: "Clothes",
+        desc_ru: "Покупка одежды, обуви и аксессуаров.",
+        desc_en: "Clothing, shoes and accessories.",
         children: &[],
     },
     CategorySpec {
-        name: "Образование",
+        key: "education",
         color: "#5acdc1",
-        description: Some("Курсы, книги, обучающие материалы."),
+        name_ru: "Образование",
+        name_en: "Education",
+        desc_ru: "Курсы, книги, обучающие материалы.",
+        desc_en: "Courses, books, learning materials.",
         children: &[],
     },
     CategorySpec {
-        name: "Прочее",
+        key: "other",
         color: "#7d8ad1",
-        description: Some("Разовые мелкие траты, которые не подходят под другие категории."),
+        name_ru: "Прочее",
+        name_en: "Other",
+        desc_ru: "Разовые мелкие траты, которые не подходят под другие категории.",
+        desc_en: "Small one-offs that don't fit other categories.",
         children: &[],
     },
 ];
@@ -503,23 +941,23 @@ fn multi_total(parts: &[(&'static str, i64)]) -> i64 {
 }
 
 // Splits used by Categorization::Multi. Amounts are in minor units (THB
-// satang — Family lives in THB). Each tuple is (category_name, share_minor);
-// sum equals the txn debit.
+// satang — Family lives in THB). Each tuple is (category_key, share_minor);
+// sum equals the txn debit. Keys map back to `CategorySpec::key`.
 const MULTI_HYPERMARKET: &[(&str, i64)] = &[
-    ("Магазины", 1_300_00),       // group: stuff that didn't fit a leaf
-    ("Супермаркеты", 2_900_00),   // leaf: groceries
+    ("shops", 1_300_00),           // group: stuff that didn't fit a leaf
+    ("supermarkets", 2_900_00),    // leaf: groceries
 ];
 const MULTI_DOCTOR_VISIT: &[(&str, i64)] = &[
-    ("Врачи", 1_600_00),          // group: consult
-    ("Стоматолог", 2_600_00),     // leaf: procedure
+    ("doctors", 1_600_00),         // group: consult
+    ("dentist", 2_600_00),         // leaf: procedure
 ];
 const MULTI_SUB_BUNDLE: &[(&str, i64)] = &[
-    ("Подписки", 200_00),         // group: base family plan
-    ("Музыка", 300_00),           // leaf: add-on
+    ("subscriptions", 200_00),     // group: base family plan
+    ("music", 300_00),             // leaf: add-on
 ];
 const MULTI_GROCERY_DELIVERY: &[(&str, i64)] = &[
-    ("Супермаркеты", 3_300_00),   // leaf under one group
-    ("Доставка", 800_00),         // leaf under another — cross-group split
+    ("supermarkets", 3_300_00),    // leaf under one group
+    ("delivery", 800_00),          // leaf under another — cross-group split
 ];
 
 #[derive(Debug)]
@@ -543,17 +981,10 @@ struct TxnSpec {
     is_correcting: bool,
 }
 
-const SHOPS: &[&str] = &["Перекрёсток", "Магнит", "Пятёрочка", "Лента", "Ашан"];
-const CAFES: &[&str] = &["Кофейня", "Шоколадница", "Кафе у дома", "Coffee House"];
-const DELIVERY: &[&str] = &["Яндекс.Еда", "Delivery Club", "Самокат"];
-const TAXI: &[&str] = &["Яндекс.Такси", "Citymobil"];
-const PHARMACY: &[&str] = &["Аптека 36.6", "Ригла", "Горздрав"];
-const CINEMAS: &[&str] = &["КиноПоиск", "Каро", "Формула Кино"];
-const SUBSCRIPTIONS: &[&str] = &["Яндекс.Плюс", "Spotify", "Netflix", "iCloud+"];
-const HOBBIES: &[&str] = &["Спортзал", "Книги", "Игры"];
-const CLOTHES: &[&str] = &["Uniqlo", "Zara", "H&M", "Lamoda"];
-const EDU: &[&str] = &["Курсы английского", "Онлайн-школа", "Книжный магазин"];
-const MISC: &[&str] = &["Хозтовары", "Подарок", "Сувенир", "Канцелярия"];
+// Peer pools used by the per-month random walks live on `SeedStrings`
+// (`s.shops`, `s.cafes`, ...) so the seed picks names in the user's
+// locale. The slices keep the same length and ordering between locales
+// so PRNG draws produce comparable distributions either way.
 
 // Each currency we use here has scale 2, so the helpers all share the same
 // `× 100` shape; named distinctly to keep the call sites self-documenting
@@ -604,7 +1035,7 @@ fn iter_months(start: NaiveDate, end: NaiveDate) -> impl Iterator<Item = NaiveDa
     })
 }
 
-fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
+fn generate_transactions(today: NaiveDate, s: &'static SeedStrings) -> Vec<TxnSpec> {
     let mut rng = Rng::new(0xCAFEBABE);
     let mut bachelor_rng = Rng::new(BACHELOR_RNG_SEED);
     let mut cash_rng = Rng::new(CASH_RNG_SEED);
@@ -657,8 +1088,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         credit_minor: thb(OPENING_BALANCE_FAMILY_THB),
         debit_minor: 0,
         categorization: Categorization::None,
-        peer: Some("Начальный остаток"),
-        bank_description: Some("Начальный остаток на счёте"),
+        peer: Some(s.peer_opening_balance),
+        bank_description: Some(s.desc_opening_balance),
         transfer_tag: None,
         is_correcting: false,
     });
@@ -682,9 +1113,9 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 date: safe_date(y, m, 1),
                 credit_minor: eur(4_300),
                 debit_minor: 0,
-                categorization: Categorization::Full("Зарплата"),
-                peer: Some("ООО \"Работодатель\""),
-                bank_description: Some("Заработная плата"),
+                categorization: Categorization::Full("salary"),
+                peer: Some(s.peer_employer),
+                bank_description: Some(s.desc_salary),
                 transfer_tag: None,
                 is_correcting: false,
             });
@@ -699,8 +1130,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 credit_minor: 0,
                 debit_minor: expense,
                 categorization: Categorization::None,
-                peer: Some("Текущие расходы"),
-                bank_description: Some("Расходы за месяц"),
+                peer: Some(s.peer_current_expenses),
+                bank_description: Some(s.desc_monthly_expenses),
                 transfer_tag: None,
                 is_correcting: false,
             });
@@ -717,9 +1148,9 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             date: safe_date(y, m, 1),
             credit_minor: eur(4_300),
             debit_minor: 0,
-            categorization: Categorization::Full("Зарплата"),
-            peer: Some("ООО \"Работодатель\""),
-            bank_description: Some("Заработная плата"),
+            categorization: Categorization::Full("salary"),
+            peer: Some(s.peer_employer),
+            bank_description: Some(s.desc_salary),
             transfer_tag: None,
             is_correcting: false,
         });
@@ -731,9 +1162,9 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 date: safe_date(y, m, 25),
                 credit_minor: eur(1_300),
                 debit_minor: 0,
-                categorization: Categorization::Full("Зарплата"),
-                peer: Some("ООО \"Работодатель\""),
-                bank_description: Some("Квартальная премия"),
+                categorization: Categorization::Full("salary"),
+                peer: Some(s.peer_employer),
+                bank_description: Some(s.desc_quarterly_bonus),
                 transfer_tag: None,
                 is_correcting: false,
             });
@@ -760,8 +1191,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             credit_minor: 0,
             debit_minor: eur(TRANSFER_TO_FAMILY_DEBIT_EUR),
             categorization: Categorization::None,
-            peer: Some("Семейный счёт"),
-            bank_description: Some("Перевод на семейный счёт"),
+            peer: Some(s.account_family),
+            bank_description: Some(s.desc_transfer_to_family),
             transfer_tag: Some(tag_family.clone()),
             is_correcting: false,
         });
@@ -771,8 +1202,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             credit_minor: thb(TRANSFER_TO_FAMILY_CREDIT_THB),
             debit_minor: 0,
             categorization: Categorization::None,
-            peer: Some("Зарплатный счёт"),
-            bank_description: Some("Перевод с зарплатного счёта"),
+            peer: Some(s.account_salary),
+            bank_description: Some(s.desc_transfer_from_salary),
             transfer_tag: Some(tag_family),
             is_correcting: false,
         });
@@ -791,8 +1222,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 credit_minor: 0,
                 debit_minor: eur(TRANSFER_TO_VACATION_DEBIT_EUR),
                 categorization: Categorization::None,
-                peer: Some("Счёт «На отпуск»"),
-                bank_description: Some("Перевод на отпускной счёт"),
+                peer: Some(s.account_vacation),
+                bank_description: Some(s.desc_transfer_to_vacation),
                 transfer_tag: Some(tag_vacation.clone()),
                 is_correcting: false,
             });
@@ -802,8 +1233,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 credit_minor: thb(TRANSFER_TO_VACATION_CREDIT_THB),
                 debit_minor: 0,
                 categorization: Categorization::None,
-                peer: Some("Зарплатный счёт"),
-                bank_description: Some("Перевод с зарплатного счёта"),
+                peer: Some(s.account_salary),
+                bank_description: Some(s.desc_transfer_from_salary),
                 transfer_tag: Some(tag_vacation),
                 is_correcting: false,
             });
@@ -818,8 +1249,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 date: safe_date(y, m, rng.range(10, 28)),
                 credit_minor: 0,
                 debit_minor: eur_from_range(&mut rng, 10, 60),
-                categorization: Categorization::Full("Прочее"),
-                peer: Some(rng.pick(MISC)),
+                categorization: Categorization::Full("other"),
+                peer: Some(rng.pick(s.misc)),
                 bank_description: None,
                 transfer_tag: None,
                 is_correcting: false,
@@ -833,8 +1264,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: thb_from_range(&mut rng, 1_500, 6_500),
                 debit_minor: 0,
-                categorization: Categorization::Full("Подарки"),
-                peer: Some("Перевод от родителей"),
+                categorization: Categorization::Full("gifts"),
+                peer: Some(s.peer_parents_transfer),
                 bank_description: None,
                 transfer_tag: None,
                 is_correcting: false,
@@ -849,8 +1280,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             date: safe_date(y, m, 4),
             credit_minor: 0,
             debit_minor: thb(65_000),
-            categorization: Categorization::Full("Аренда"),
-            peer: Some("Аренда квартиры"),
+            categorization: Categorization::Full("rent"),
+            peer: Some(s.peer_apartment_rent),
             bank_description: None,
             transfer_tag: None,
             is_correcting: false,
@@ -860,8 +1291,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             date: safe_date(y, m, 10),
             credit_minor: 0,
             debit_minor: thb_from_range(&mut rng, 3_000, 7_000),
-            categorization: Categorization::Full("Коммуналка"),
-            peer: Some("ЖКХ"),
+            categorization: Categorization::Full("utilities"),
+            peer: Some(s.peer_utilities),
             bank_description: None,
             transfer_tag: None,
             is_correcting: false,
@@ -871,8 +1302,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             date: safe_date(y, m, 15),
             credit_minor: 0,
             debit_minor: thb(1_000),
-            categorization: Categorization::Full("Интернет"),
-            peer: Some("Провайдер"),
+            categorization: Categorization::Full("internet"),
+            peer: Some(s.peer_isp),
             bank_description: None,
             transfer_tag: None,
             is_correcting: false,
@@ -882,22 +1313,22 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             date: safe_date(y, m, 5),
             credit_minor: 0,
             debit_minor: thb(2_500),
-            categorization: Categorization::Full("Общественный"),
-            peer: Some("Транспортная карта"),
-            bank_description: Some("Пополнение проездного"),
+            categorization: Categorization::Full("transit"),
+            peer: Some(s.peer_transit_card),
+            bank_description: Some(s.desc_transit_topup),
             transfer_tag: None,
             is_correcting: false,
         });
-        // Subscription rows alternate between "Музыка" and "Видео" so the
-        // grandchild level under "Подписки" is visible in the demo report.
-        let sub_leaf = if rng.chance(1, 2) { "Музыка" } else { "Видео" };
+        // Subscription rows alternate between "music" and "video" so the
+        // grandchild level under "subscriptions" is visible in the demo report.
+        let sub_leaf = if rng.chance(1, 2) { "music" } else { "video" };
         out.push(TxnSpec {
             account: AccountKind::Family,
             date: safe_date(y, m, 5),
             credit_minor: 0,
             debit_minor: thb_from_range(&mut rng, 300, 800),
             categorization: Categorization::Full(sub_leaf),
-            peer: Some(rng.pick(SUBSCRIPTIONS)),
+            peer: Some(rng.pick(s.subscriptions)),
             bank_description: None,
             transfer_tag: None,
             is_correcting: false,
@@ -911,22 +1342,22 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             credit_minor: 0,
             debit_minor: thb_from_range(&mut rng, 2_500, 8_000),
             categorization: Categorization::None,
-            peer: Some("ATM"),
-            bank_description: Some("Снятие наличных"),
+            peer: Some(s.peer_atm),
+            bank_description: Some(s.desc_atm_withdrawal),
             transfer_tag: None,
             is_correcting: false,
         });
 
         // --- Variable groceries: 4 supermarket runs + maybe 1 farmer's market ---
-        // Both grandchildren of "Магазины", which is itself a child of "Еда".
+        // Both grandchildren of "shops", which is itself a child of "food".
         for _ in 0..4 {
             out.push(TxnSpec {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, days_in_month(y, m))),
                 credit_minor: 0,
                 debit_minor: thb_from_range(&mut rng, 1_300, 4_900),
-                categorization: Categorization::Full("Супермаркеты"),
-                peer: Some(rng.pick(SHOPS)),
+                categorization: Categorization::Full("supermarkets"),
+                peer: Some(rng.pick(s.shops)),
                 bank_description: None,
                 transfer_tag: None,
                 is_correcting: false,
@@ -938,8 +1369,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 date: safe_date(y, m, rng.range(2, days_in_month(y, m))),
                 credit_minor: 0,
                 debit_minor: thb_from_range(&mut rng, 1_000, 3_000),
-                categorization: Categorization::Full("Фермерский рынок"),
-                peer: Some("Фермерский рынок"),
+                categorization: Categorization::Full("farmers_market"),
+                peer: Some(s.peer_farmers_market),
                 bank_description: None,
                 transfer_tag: None,
                 is_correcting: false,
@@ -953,8 +1384,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 date: safe_date(y, m, rng.range(2, days_in_month(y, m))),
                 credit_minor: 0,
                 debit_minor: thb_from_range(&mut rng, 700, 2_600),
-                categorization: Categorization::Full("Кафе и рестораны"),
-                peer: Some(rng.pick(CAFES)),
+                categorization: Categorization::Full("cafes"),
+                peer: Some(rng.pick(s.cafes)),
                 bank_description: None,
                 transfer_tag: None,
                 is_correcting: false,
@@ -968,8 +1399,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 date: safe_date(y, m, rng.range(2, days_in_month(y, m))),
                 credit_minor: 0,
                 debit_minor: thb_from_range(&mut rng, 800, 2_300),
-                categorization: Categorization::Full("Доставка"),
-                peer: Some(rng.pick(DELIVERY)),
+                categorization: Categorization::Full("delivery"),
+                peer: Some(rng.pick(s.delivery)),
                 bank_description: None,
                 transfer_tag: None,
                 is_correcting: false,
@@ -983,8 +1414,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 date: safe_date(y, m, rng.range(2, days_in_month(y, m))),
                 credit_minor: 0,
                 debit_minor: thb_from_range(&mut rng, 300, 1_000),
-                categorization: Categorization::Full("Такси"),
-                peer: Some(rng.pick(TAXI)),
+                categorization: Categorization::Full("taxi"),
+                peer: Some(rng.pick(s.taxi)),
                 bank_description: None,
                 transfer_tag: None,
                 is_correcting: false,
@@ -998,42 +1429,46 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 date: safe_date(y, m, rng.range(5, 28)),
                 credit_minor: 0,
                 debit_minor: thb_from_range(&mut rng, 500, 2_000),
-                categorization: Categorization::Full("Аптека"),
-                peer: Some(rng.pick(PHARMACY)),
+                categorization: Categorization::Full("pharmacy"),
+                peer: Some(rng.pick(s.pharmacy)),
                 bank_description: None,
                 transfer_tag: None,
                 is_correcting: false,
             });
         }
 
-        // Doctor: roughly every other month — alternating "Терапевт" /
-        // "Стоматолог" so the third-level grandchild is visible.
+        // Doctor: roughly every other month — alternating GP / dentist so
+        // the third-level grandchild is visible.
         if rng.chance(1, 2) {
-            let doctor = if rng.chance(1, 2) { "Терапевт" } else { "Стоматолог" };
+            let doctor = if rng.chance(1, 2) { "therapist" } else { "dentist" };
             out.push(TxnSpec {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(5, 28)),
                 credit_minor: 0,
                 debit_minor: thb_from_range(&mut rng, 2_500, 6_500),
                 categorization: Categorization::Full(doctor),
-                peer: Some("Клиника"),
-                bank_description: Some("Приём врача"),
+                peer: Some(s.peer_clinic),
+                bank_description: Some(s.desc_doctor_visit),
                 transfer_tag: None,
                 is_correcting: false,
             });
         }
 
-        // Fuel: ~once a month at one of the chains. Exercises the "Бензин"
-        // grandchildren (АЗС Shell / АЗС BP).
+        // Fuel: ~once a month at one of the chains. Exercises the "fuel"
+        // grandchildren (Shell / BP).
         if rng.chance(3, 4) {
-            let station = if rng.chance(1, 2) { "АЗС Shell" } else { "АЗС BP" };
+            let (station_key, station_peer) = if rng.chance(1, 2) {
+                ("fuel_shell", s.peer_shell)
+            } else {
+                ("fuel_bp", s.peer_bp)
+            };
             out.push(TxnSpec {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(3, 28)),
                 credit_minor: 0,
                 debit_minor: thb_from_range(&mut rng, 1_000, 3_000),
-                categorization: Categorization::Full(station),
-                peer: Some(station),
+                categorization: Categorization::Full(station_key),
+                peer: Some(station_peer),
                 bank_description: None,
                 transfer_tag: None,
                 is_correcting: false,
@@ -1047,8 +1482,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 date: safe_date(y, m, rng.range(7, 27)),
                 credit_minor: 0,
                 debit_minor: thb_from_range(&mut rng, 500, 1_600),
-                categorization: Categorization::Full("Кино и театр"),
-                peer: Some(rng.pick(CINEMAS)),
+                categorization: Categorization::Full("cinema"),
+                peer: Some(rng.pick(s.cinemas)),
                 bank_description: None,
                 transfer_tag: None,
                 is_correcting: false,
@@ -1062,8 +1497,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 date: safe_date(y, m, rng.range(5, 28)),
                 credit_minor: 0,
                 debit_minor: thb_from_range(&mut rng, 1_300, 4_200),
-                categorization: Categorization::Full("Хобби"),
-                peer: Some(rng.pick(HOBBIES)),
+                categorization: Categorization::Full("hobbies"),
+                peer: Some(rng.pick(s.hobbies)),
                 bank_description: None,
                 transfer_tag: None,
                 is_correcting: false,
@@ -1077,8 +1512,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 date: safe_date(y, m, rng.range(7, 27)),
                 credit_minor: 0,
                 debit_minor: thb_from_range(&mut rng, 2_600, 9_800),
-                categorization: Categorization::Full("Одежда"),
-                peer: Some(rng.pick(CLOTHES)),
+                categorization: Categorization::Full("clothes"),
+                peer: Some(rng.pick(s.clothes)),
                 bank_description: None,
                 transfer_tag: None,
                 is_correcting: false,
@@ -1092,8 +1527,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 date: safe_date(y, m, rng.range(7, 27)),
                 credit_minor: 0,
                 debit_minor: thb_from_range(&mut rng, 1_600, 6_500),
-                categorization: Categorization::Full("Образование"),
-                peer: Some(rng.pick(EDU)),
+                categorization: Categorization::Full("education"),
+                peer: Some(rng.pick(s.edu)),
                 bank_description: None,
                 transfer_tag: None,
                 is_correcting: false,
@@ -1106,113 +1541,113 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // amounts as the group's own line, distinct from its child leaves.
         // All on Family — these are everyday household expenses.
 
-        // Жильё (group): minor home repair / household supplies.
+        // housing (group): minor home repair / household supplies.
         if rng.chance(1, 3) {
             out.push(TxnSpec {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: 0,
                 debit_minor: thb_from_range(&mut rng, 1_000, 2_600),
-                categorization: Categorization::Full("Жильё"),
-                peer: Some("Хозтовары для дома"),
-                bank_description: Some("Мелкий ремонт"),
+                categorization: Categorization::Full("housing"),
+                peer: Some(s.peer_household_supplies),
+                bank_description: Some(s.desc_minor_repair),
                 transfer_tag: None,
                 is_correcting: false,
             });
         }
-        // Еда (group): generic food expense not fitting Магазины/Кафе/Доставка.
+        // food (group): generic food expense not fitting shops/cafes/delivery.
         if rng.chance(1, 4) {
             out.push(TxnSpec {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: 0,
                 debit_minor: thb_from_range(&mut rng, 700, 1_600),
-                categorization: Categorization::Full("Еда"),
-                peer: Some("Магазинчик у дома"),
-                bank_description: Some("Перекус"),
+                categorization: Categorization::Full("food"),
+                peer: Some(s.peer_corner_store),
+                bank_description: Some(s.desc_snack),
                 transfer_tag: None,
                 is_correcting: false,
             });
         }
-        // Транспорт (group): parking, tolls.
+        // transport (group): parking, tolls.
         if rng.chance(1, 3) {
             out.push(TxnSpec {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: 0,
                 debit_minor: thb_from_range(&mut rng, 300, 1_000),
-                categorization: Categorization::Full("Транспорт"),
-                peer: Some("Парковка"),
+                categorization: Categorization::Full("transport"),
+                peer: Some(s.peer_parking),
                 bank_description: None,
                 transfer_tag: None,
                 is_correcting: false,
             });
         }
-        // Здоровье (group): lab tests, supplements.
+        // health (group): lab tests, supplements.
         if rng.chance(1, 4) {
             out.push(TxnSpec {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: 0,
                 debit_minor: thb_from_range(&mut rng, 1_000, 3_300),
-                categorization: Categorization::Full("Здоровье"),
-                peer: Some("Лаборатория"),
-                bank_description: Some("Анализы"),
+                categorization: Categorization::Full("health"),
+                peer: Some(s.peer_lab),
+                bank_description: Some(s.desc_lab_tests),
                 transfer_tag: None,
                 is_correcting: false,
             });
         }
-        // Развлечения (group): a one-off event.
+        // entertainment (group): a one-off event.
         if rng.chance(1, 4) {
             out.push(TxnSpec {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: 0,
                 debit_minor: thb_from_range(&mut rng, 700, 2_600),
-                categorization: Categorization::Full("Развлечения"),
-                peer: Some("Концерт"),
+                categorization: Categorization::Full("entertainment"),
+                peer: Some(s.peer_concert),
                 bank_description: None,
                 transfer_tag: None,
                 is_correcting: false,
             });
         }
-        // Магазины (depth-2 group): generic shopping run.
+        // shops (depth-2 group): generic shopping run.
         if rng.chance(1, 3) {
             out.push(TxnSpec {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: 0,
                 debit_minor: thb_from_range(&mut rng, 700, 2_000),
-                categorization: Categorization::Full("Магазины"),
-                peer: Some("Магазин у дома"),
+                categorization: Categorization::Full("shops"),
+                peer: Some(s.peer_neighborhood_store),
                 bank_description: None,
                 transfer_tag: None,
                 is_correcting: false,
             });
         }
-        // Бензин (depth-2 group): fuel from an unbranded station.
+        // fuel (depth-2 group): fuel from an unbranded station.
         if rng.chance(1, 4) {
             out.push(TxnSpec {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: 0,
                 debit_minor: thb_from_range(&mut rng, 1_000, 2_300),
-                categorization: Categorization::Full("Бензин"),
-                peer: Some("АЗС"),
+                categorization: Categorization::Full("fuel"),
+                peer: Some(s.peer_no_brand_gas),
                 bank_description: None,
                 transfer_tag: None,
                 is_correcting: false,
             });
         }
-        // Подписки (depth-2 group): bundled family plan.
+        // subscriptions (depth-2 group): bundled family plan.
         if rng.chance(1, 4) {
             out.push(TxnSpec {
                 account: AccountKind::Family,
                 date: safe_date(y, m, rng.range(2, 28)),
                 credit_minor: 0,
                 debit_minor: thb_from_range(&mut rng, 300, 800),
-                categorization: Categorization::Full("Подписки"),
-                peer: Some("Family Plan"),
+                categorization: Categorization::Full("subscriptions"),
+                peer: Some(s.peer_family_plan),
                 bank_description: None,
                 transfer_tag: None,
                 is_correcting: false,
@@ -1224,7 +1659,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         // both the group's own line and its child line getting their share.
         // All on Family.
 
-        // Hypermarket trip — Магазины (group) + Супермаркеты (leaf descendant).
+        // Hypermarket trip — shops (group) + supermarkets (leaf descendant).
         if rng.chance(1, 2) {
             out.push(TxnSpec {
                 account: AccountKind::Family,
@@ -1232,13 +1667,13 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 credit_minor: 0,
                 debit_minor: multi_total(MULTI_HYPERMARKET),
                 categorization: Categorization::Multi(MULTI_HYPERMARKET),
-                peer: Some("Гипермаркет"),
-                bank_description: Some("Продукты + хозтовары"),
+                peer: Some(s.peer_hypermarket),
+                bank_description: Some(s.desc_hypermarket_run),
                 transfer_tag: None,
                 is_correcting: false,
             });
         }
-        // Doctor appointment — Врачи (group) + Стоматолог (leaf).
+        // Doctor appointment — doctors (group) + dentist (leaf).
         if rng.chance(1, 4) {
             out.push(TxnSpec {
                 account: AccountKind::Family,
@@ -1246,13 +1681,13 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 credit_minor: 0,
                 debit_minor: multi_total(MULTI_DOCTOR_VISIT),
                 categorization: Categorization::Multi(MULTI_DOCTOR_VISIT),
-                peer: Some("Стоматологическая клиника"),
-                bank_description: Some("Консультация + процедура"),
+                peer: Some(s.peer_dental_clinic),
+                bank_description: Some(s.desc_consultation_procedure),
                 transfer_tag: None,
                 is_correcting: false,
             });
         }
-        // Subscription with an add-on — Подписки (group) + Музыка (leaf).
+        // Subscription with an add-on — subscriptions (group) + music (leaf).
         if rng.chance(1, 3) {
             out.push(TxnSpec {
                 account: AccountKind::Family,
@@ -1260,13 +1695,13 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 credit_minor: 0,
                 debit_minor: multi_total(MULTI_SUB_BUNDLE),
                 categorization: Categorization::Multi(MULTI_SUB_BUNDLE),
-                peer: Some("Family Plan + addon"),
+                peer: Some(s.peer_family_plan_addon),
                 bank_description: None,
                 transfer_tag: None,
                 is_correcting: false,
             });
         }
-        // Two-leaf cross-group split — Супермаркеты + Доставка (different groups).
+        // Two-leaf cross-group split — supermarkets + delivery (different groups).
         if rng.chance(1, 3) {
             out.push(TxnSpec {
                 account: AccountKind::Family,
@@ -1274,8 +1709,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 credit_minor: 0,
                 debit_minor: multi_total(MULTI_GROCERY_DELIVERY),
                 categorization: Categorization::Multi(MULTI_GROCERY_DELIVERY),
-                peer: Some("Супермаркет с доставкой"),
-                bank_description: Some("Заказ + доставка"),
+                peer: Some(s.peer_supermarket_delivery),
+                bank_description: Some(s.desc_delivery_order),
                 transfer_tag: None,
                 is_correcting: false,
             });
@@ -1303,8 +1738,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 credit_minor: 0,
                 debit_minor: debit_eur,
                 categorization: Categorization::None,
-                peer: Some("Сберегательный счёт"),
-                bank_description: Some("Перевод на сберегательный счёт"),
+                peer: Some(s.account_savings),
+                bank_description: Some(s.desc_transfer_to_savings),
                 transfer_tag: Some(tag_savings.clone()),
                 is_correcting: false,
             });
@@ -1314,8 +1749,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 credit_minor: credit_usd,
                 debit_minor: 0,
                 categorization: Categorization::None,
-                peer: Some("Зарплатный счёт"),
-                bank_description: Some("Перевод с зарплатного счёта"),
+                peer: Some(s.account_salary),
+                bank_description: Some(s.desc_transfer_from_salary),
                 transfer_tag: Some(tag_savings),
                 is_correcting: false,
             });
@@ -1337,7 +1772,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 debit_minor: 0,
                 categorization: Categorization::None,
                 peer: None,
-                bank_description: Some("Сверка баланса при старте учёта"),
+                bank_description: Some(s.desc_balance_reconciliation),
                 transfer_tag: None,
                 is_correcting: true,
             });
@@ -1354,7 +1789,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 debit_minor: usd(7),
                 categorization: Categorization::None,
                 peer: None,
-                bank_description: Some("Округление после сверки"),
+                bank_description: Some(s.desc_rounding_adjustment),
                 transfer_tag: None,
                 is_correcting: true,
             });
@@ -1375,8 +1810,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 credit_minor: 0,
                 debit_minor: bachelor_residual_minor,
                 categorization: Categorization::None,
-                peer: Some("Сберегательный счёт"),
-                bank_description: Some("Перевод накоплений"),
+                peer: Some(s.account_savings),
+                bank_description: Some(s.desc_savings_transfer),
                 transfer_tag: Some(tag.clone()),
                 is_correcting: false,
             });
@@ -1386,14 +1821,14 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 credit_minor: eur_minor_to_usd_minor(bachelor_residual_minor),
                 debit_minor: 0,
                 categorization: Categorization::None,
-                peer: Some("Зарплатный счёт"),
-                bank_description: Some("Накопления холостого периода"),
+                peer: Some(s.account_salary),
+                bank_description: Some(s.desc_bachelor_savings),
                 transfer_tag: Some(tag),
                 is_correcting: false,
             });
         }
 
-        // ----- Cash purse (Семейный → Наличные → 7-Eleven) -----
+        // ----- Cash purse (Family → Cash → 7-Eleven) -----
         // Day 6: withdraw a fixed THB amount from the Family account onto the
         // Cash purse. Both sides share a transfer_tag → linked pair in
         // transaction_links. Day 6 sits after the day-4 rent so Family is
@@ -1405,8 +1840,8 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             credit_minor: 0,
             debit_minor: thb(TRANSFER_TO_CASH_THB),
             categorization: Categorization::None,
-            peer: Some("Наличные"),
-            bank_description: Some("Снятие наличных на конфеты"),
+            peer: Some(s.peer_cash),
+            bank_description: Some(s.desc_atm_withdrawal_candy),
             transfer_tag: Some(tag_cash.clone()),
             is_correcting: false,
         });
@@ -1416,13 +1851,13 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
             credit_minor: thb(TRANSFER_TO_CASH_THB),
             debit_minor: 0,
             categorization: Categorization::None,
-            peer: Some("Семейный счёт"),
-            bank_description: Some("Снятие наличных"),
+            peer: Some(s.account_family),
+            bank_description: Some(s.desc_atm_withdrawal),
             transfer_tag: Some(tag_cash),
             is_correcting: false,
         });
         // Spread the candy runs across the rest of the month — small amounts
-        // categorised as "Супермаркеты" (7-Eleven counts as one). Uses a
+        // categorised as "supermarkets" (7-Eleven counts as one). Uses a
         // dedicated `cash_rng` so adding this block doesn't reroll the
         // family/savings/vacation flows that share the main `rng`.
         let candy_runs = cash_rng.range(CANDY_RUNS_MIN, CANDY_RUNS_MAX);
@@ -1432,7 +1867,7 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
                 date: safe_date(y, m, cash_rng.range(7, 28)),
                 credit_minor: 0,
                 debit_minor: thb_from_range(&mut cash_rng, CANDY_LO_THB, CANDY_HI_THB),
-                categorization: Categorization::Full("Супермаркеты"),
+                categorization: Categorization::Full("supermarkets"),
                 peer: Some(CANDY_PEER),
                 bank_description: None,
                 transfer_tag: None,
@@ -1452,9 +1887,9 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         date: safe_date(last_month.year(), last_month.month(), 12),
         credit_minor: 0,
         debit_minor: thb(6_500),
-        categorization: Categorization::Half("Магазины"),
-        peer: Some("Гипермаркет"),
-        bank_description: Some("Покупка (часть без категории)"),
+        categorization: Categorization::Half("shops"),
+        peer: Some(s.peer_hypermarket),
+        bank_description: Some(s.desc_half_purchase),
         transfer_tag: None,
         is_correcting: false,
     });
@@ -1463,9 +1898,9 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
         date: safe_date(last_month.year(), last_month.month(), 13),
         credit_minor: eur(850),
         debit_minor: 0,
-        categorization: Categorization::Half("Зарплата"),
-        peer: Some("Партнёр"),
-        bank_description: Some("Бонус (часть без категории)"),
+        categorization: Categorization::Half("salary"),
+        peer: Some(s.peer_partner),
+        bank_description: Some(s.desc_half_bonus),
         transfer_tag: None,
         is_correcting: false,
     });
@@ -1478,10 +1913,13 @@ fn generate_transactions(today: NaiveDate) -> Vec<TxnSpec> {
 
 // ---- DB write paths ----
 
-fn insert_categories(conn: &Connection) -> rusqlite::Result<HashMap<String, i64>> {
+fn insert_categories(
+    conn: &Connection,
+    locale: Locale,
+) -> rusqlite::Result<HashMap<&'static str, i64>> {
     let mut map = HashMap::new();
-    insert_category_tree(conn, INCOME_CATEGORIES, "income", None, &mut map)?;
-    insert_category_tree(conn, EXPENSE_CATEGORIES, "expense", None, &mut map)?;
+    insert_category_tree(conn, INCOME_CATEGORIES, "income", None, locale, &mut map)?;
+    insert_category_tree(conn, EXPENSE_CATEGORIES, "expense", None, locale, &mut map)?;
     Ok(map)
 }
 
@@ -1490,12 +1928,20 @@ fn insert_category_tree(
     specs: &[CategorySpec],
     kind: &str,
     parent_id: Option<i64>,
-    map: &mut HashMap<String, i64>,
+    locale: Locale,
+    map: &mut HashMap<&'static str, i64>,
 ) -> rusqlite::Result<()> {
     for spec in specs {
-        let id = insert_category(conn, spec.name, spec.color, kind, parent_id, spec.description)?;
-        map.insert(spec.name.to_string(), id);
-        insert_category_tree(conn, spec.children, kind, Some(id), map)?;
+        let id = insert_category(
+            conn,
+            spec.name(locale),
+            spec.color,
+            kind,
+            parent_id,
+            Some(spec.description(locale)),
+        )?;
+        map.insert(spec.key, id);
+        insert_category_tree(conn, spec.children, kind, Some(id), locale, map)?;
     }
     Ok(())
 }
@@ -1515,7 +1961,10 @@ fn insert_category(
     )
 }
 
-fn insert_accounts(conn: &Connection) -> rusqlite::Result<HashMap<AccountKind, i64>> {
+fn insert_accounts(
+    conn: &Connection,
+    s: &'static SeedStrings,
+) -> rusqlite::Result<HashMap<AccountKind, i64>> {
     let mut map = HashMap::new();
     for spec in ACCOUNTS {
         // Cash accounts have no real account number / owner — store NULLs so
@@ -1527,14 +1976,14 @@ fn insert_accounts(conn: &Connection) -> rusqlite::Result<HashMap<AccountKind, i
             Some(spec.account_number)
         };
         let owner: Option<&str> = match spec.kind_db {
-            AccountTypeDb::Bank => Some(DEMO_ACCOUNT_OWNER),
+            AccountTypeDb::Bank => Some(s.account_owner),
             AccountTypeDb::Cash => None,
         };
         let id: i64 = conn.query_row(
             "INSERT INTO accounts (name, kind, bank, currency, account_number, owner_name)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6) RETURNING id",
             params![
-                spec.name,
+                account_name(s, spec.kind),
                 spec.kind_db.as_str(),
                 DEMO_ACCOUNT_BANK,
                 spec.currency,
@@ -1578,7 +2027,7 @@ fn insert_transactions(
     conn: &Connection,
     account_id: i64,
     batch_id: Option<i64>,
-    cats: &HashMap<String, i64>,
+    cats: &HashMap<&'static str, i64>,
     txns: &[&TxnSpec],
     transfer_ids: &mut HashMap<String, Vec<i64>>,
 ) -> rusqlite::Result<()> {
@@ -1615,36 +2064,39 @@ fn insert_transactions(
         }
 
         let total = t.credit_minor + t.debit_minor;
-        // Build the list of (category_name, share_minor) entries to insert.
-        // Single-share variants degenerate to a one-element list; Multi passes
-        // through directly. Skipping zero-share entries keeps the data clean.
+        // Build the list of (category_key, share_minor) entries to insert.
+        // Keys are stable English identifiers (`CategorySpec::key`) — they
+        // map to the per-locale localised name only at category-insert time.
+        // Single-share variants degenerate to a one-element list; Multi
+        // passes through directly. Zero shares are skipped to keep the data
+        // clean.
         let mut shares: Vec<(&str, i64)> = Vec::new();
         match &t.categorization {
             Categorization::None => {}
-            Categorization::Full(name) => {
+            Categorization::Full(key) => {
                 if total > 0 {
-                    shares.push((name, total));
+                    shares.push((key, total));
                 }
             }
-            Categorization::Half(name) => {
+            Categorization::Half(key) => {
                 let s = total / 2;
                 if s > 0 {
-                    shares.push((name, s));
+                    shares.push((key, s));
                 }
             }
             Categorization::Multi(parts) => {
-                for (name, share) in parts.iter() {
+                for (key, share) in parts.iter() {
                     if *share > 0 {
-                        shares.push((name, *share));
+                        shares.push((key, *share));
                     }
                 }
             }
         }
-        for (position, (name, share)) in shares.into_iter().enumerate() {
+        for (position, (key, share)) in shares.into_iter().enumerate() {
             let cat_id = cats
-                .get(name)
+                .get(key)
                 .copied()
-                .unwrap_or_else(|| panic!("seed: unknown category '{name}'"));
+                .unwrap_or_else(|| panic!("seed: unknown category key '{key}'"));
             conn.execute(
                 "INSERT INTO transaction_categories
                  (transaction_id, category_id, share_minor, position)
@@ -1656,9 +2108,9 @@ fn insert_transactions(
     Ok(())
 }
 
-fn collect_ids(specs: &[CategorySpec], cats: &HashMap<String, i64>, out: &mut Vec<i64>) {
+fn collect_ids(specs: &[CategorySpec], cats: &HashMap<&'static str, i64>, out: &mut Vec<i64>) {
     for spec in specs {
-        if let Some(&id) = cats.get(spec.name) {
+        if let Some(&id) = cats.get(spec.key) {
             out.push(id);
         }
         collect_ids(spec.children, cats, out);
@@ -1668,7 +2120,8 @@ fn collect_ids(specs: &[CategorySpec], cats: &HashMap<String, i64>, out: &mut Ve
 fn insert_report_view(
     conn: &Connection,
     accounts: &HashMap<AccountKind, i64>,
-    cats: &HashMap<String, i64>,
+    cats: &HashMap<&'static str, i64>,
+    s: &'static SeedStrings,
 ) -> rusqlite::Result<()> {
     // Include every level (root + children + grandchildren) so the user can
     // fold/unfold the full tree inside the report.
@@ -1697,7 +2150,7 @@ fn insert_report_view(
 
     conn.execute(
         "INSERT INTO report_views (name, config, sort_order) VALUES (?1, ?2, 0)",
-        params![DEMO_REPORT_NAME, config_str],
+        params![s.report_name, config_str],
     )?;
     Ok(())
 }
@@ -1707,7 +2160,8 @@ fn insert_report_view(
 /// already had data (so the demo seed was skipped) and the manual "clear all
 /// data" wipe. Picks up whatever accounts and categories currently live in the
 /// DB; if there are none yet, inserts empty arrays so the report tab still
-/// shows up and the user can populate it later via the editor.
+/// shows up and the user can populate it later via the editor. The default
+/// report name comes from the current locale stored in `app_settings`.
 pub fn ensure_default_report_view(conn: &Connection) -> rusqlite::Result<()> {
     let n: i64 = conn.query_row("SELECT COUNT(*) FROM report_views", [], |r| r.get(0))?;
     if n > 0 {
@@ -1742,9 +2196,10 @@ pub fn ensure_default_report_view(conn: &Connection) -> rusqlite::Result<()> {
         "expandedCategoryIds": []
     });
 
+    let locale = resolve_locale(conn)?;
     conn.execute(
         "INSERT INTO report_views (name, config, sort_order) VALUES (?1, ?2, 0)",
-        params![DEMO_REPORT_NAME, config.to_string()],
+        params![locale.strings().report_name, config.to_string()],
     )?;
     Ok(())
 }
@@ -1787,6 +2242,11 @@ fn set_flag(conn: &Connection) -> rusqlite::Result<()> {
 /// Auto-seed entry point. Idempotent: does nothing if the flag is set or the DB
 /// already contains anything the user might have created. Always sets the flag
 /// at the end so the next launch is a no-op.
+///
+/// Locale is resolved from `app_settings.locale` if the user (or a previous
+/// run) already picked one; otherwise it's sniffed from the OS via
+/// `sys-locale`. The resolved value is persisted to `app_settings.locale` so
+/// the frontend boots into the same language we seeded data in.
 pub fn seed_if_first_launch(conn: &Connection) -> rusqlite::Result<()> {
     let tx = conn.unchecked_transaction()?;
     if flag_set(&tx)? {
@@ -1799,7 +2259,9 @@ pub fn seed_if_first_launch(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
         return Ok(());
     }
-    seed_full(&tx, today_local())?;
+    let locale = resolve_locale(&tx)?;
+    seed_full(&tx, today_local(), locale)?;
+    persist_locale_if_unset(&tx, locale)?;
     set_flag(&tx)?;
     tx.commit()?;
     Ok(())
@@ -1821,11 +2283,12 @@ fn wipe(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-fn seed_full(conn: &Connection, today: NaiveDate) -> rusqlite::Result<()> {
-    let cats = insert_categories(conn)?;
-    let accounts = insert_accounts(conn)?;
+fn seed_full(conn: &Connection, today: NaiveDate, locale: Locale) -> rusqlite::Result<()> {
+    let s = locale.strings();
+    let cats = insert_categories(conn, locale)?;
+    let accounts = insert_accounts(conn, s)?;
     let batches = insert_batches(conn, &accounts, today)?;
-    let txns = generate_transactions(today);
+    let txns = generate_transactions(today, s);
 
     // Map of `transfer_tag → [txn_id, txn_id]` for the two halves of every
     // internal transfer. Built up across the per-account passes below and
@@ -1843,7 +2306,7 @@ fn seed_full(conn: &Connection, today: NaiveDate) -> rusqlite::Result<()> {
     }
 
     insert_transfer_links(conn, &transfer_ids)?;
-    insert_report_view(conn, &accounts, &cats)?;
+    insert_report_view(conn, &accounts, &cats, s)?;
     Ok(())
 }
 
@@ -1888,8 +2351,11 @@ pub fn seed_demo_data(
     {
         let conn = state.lock().map_err(|e| e.to_string())?;
         let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        // Read the locale *before* wipe — wipe leaves app_settings intact,
+        // but reading from `tx` keeps the resolution scope tight regardless.
+        let locale = resolve_locale(&tx).map_err(|e| e.to_string())?;
         wipe(&tx).map_err(|e| e.to_string())?;
-        seed_full(&tx, today_local()).map_err(|e| e.to_string())?;
+        seed_full(&tx, today_local(), locale).map_err(|e| e.to_string())?;
         set_flag(&tx).map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
     } // db lock released before we spawn background fetches
@@ -1931,7 +2397,7 @@ mod tests {
     fn seed_creates_account_categories_transactions_and_report() {
         let (_dir, conn) = open_clean_db();
         let today = NaiveDate::from_ymd_opt(2026, 4, 30).unwrap();
-        seed_full(&conn, today).unwrap();
+        seed_full(&conn, today, Locale::Ru).unwrap();
 
         // Five demo accounts — Salary, Family, Savings, Vacation, Cash.
         let n_acc: i64 = conn.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0)).unwrap();
@@ -2049,7 +2515,7 @@ mod tests {
     fn seed_distributes_transactions_across_all_accounts() {
         let (_dir, conn) = open_clean_db();
         let today = NaiveDate::from_ymd_opt(2026, 4, 30).unwrap();
-        seed_full(&conn, today).unwrap();
+        seed_full(&conn, today, Locale::Ru).unwrap();
 
         // Each of the four demo accounts must carry transactions; the savings
         // and vacation accounts are intentionally receive-only with one
@@ -2114,7 +2580,7 @@ mod tests {
     fn seed_balance_chain_is_consistent_per_account() {
         let (_dir, conn) = open_clean_db();
         let today = NaiveDate::from_ymd_opt(2026, 4, 30).unwrap();
-        seed_full(&conn, today).unwrap();
+        seed_full(&conn, today, Locale::Ru).unwrap();
 
         // Each account has its own running balance — the import validator
         // checks chains per-account, so the seed must produce them per-account.
@@ -2202,7 +2668,7 @@ mod tests {
     fn wipe_removes_everything_except_settings() {
         let (_dir, conn) = open_clean_db();
         let today = NaiveDate::from_ymd_opt(2026, 4, 30).unwrap();
-        seed_full(&conn, today).unwrap();
+        seed_full(&conn, today, Locale::Ru).unwrap();
         set_flag(&conn).unwrap();
         // Add a separate setting to ensure we don't nuke unrelated keys.
         conn.execute(
@@ -2240,7 +2706,7 @@ mod tests {
     fn report_view_config_is_valid_json_with_expected_shape() {
         let (_dir, conn) = open_clean_db();
         let today = NaiveDate::from_ymd_opt(2026, 4, 30).unwrap();
-        seed_full(&conn, today).unwrap();
+        seed_full(&conn, today, Locale::Ru).unwrap();
         let config: String = conn
             .query_row("SELECT config FROM report_views LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -2252,5 +2718,140 @@ mod tests {
         assert!(exp.len() > 10, "expense list should include roots + children");
         let accs = parsed["accountIds"].as_array().unwrap();
         assert_eq!(accs.len(), 5, "demo report must include all five accounts");
+    }
+
+    #[test]
+    fn english_seed_writes_english_account_names_and_report_name() {
+        let (_dir, conn) = open_clean_db();
+        let today = NaiveDate::from_ymd_opt(2026, 4, 30).unwrap();
+        seed_full(&conn, today, Locale::En).unwrap();
+
+        // Account names round-trip in the English variant.
+        let names: Vec<String> = conn
+            .prepare("SELECT name FROM accounts ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "Salary account",
+                "Family account",
+                "Savings account",
+                "Vacation fund",
+                "Candy cash",
+            ]
+        );
+
+        // Report name in English.
+        let report: String = conn
+            .query_row("SELECT name FROM report_views LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(report, "Household report");
+
+        // A handful of root categories should be in English. Sanity check
+        // by counting any row whose name appears in the English seed.
+        let income_salary: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM categories WHERE name = ?1 AND kind = 'income'",
+                ["Salary"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(income_salary, 1);
+    }
+
+    #[test]
+    fn english_seed_balance_chain_is_consistent_per_account() {
+        // Smoke-check that swapping the locale doesn't break any of the
+        // numeric invariants — same balance-chain check the Russian seed
+        // is held to, just on the English flavour.
+        let (_dir, conn) = open_clean_db();
+        let today = NaiveDate::from_ymd_opt(2026, 4, 30).unwrap();
+        seed_full(&conn, today, Locale::En).unwrap();
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT account_id, credit, debit, balance FROM transactions
+                 ORDER BY account_id ASC, occurred_at_utc ASC, id ASC",
+            )
+            .unwrap();
+        let rows: Vec<(i64, i64, i64, i64)> = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+
+        let mut current_account: Option<i64> = None;
+        let mut running: i64 = 0;
+        for (account_id, credit, debit, balance) in rows {
+            if Some(account_id) != current_account {
+                current_account = Some(account_id);
+                running = 0;
+            }
+            running += credit - debit;
+            assert_eq!(running, balance, "balance mismatch on account {account_id}");
+        }
+    }
+
+    #[test]
+    fn resolve_locale_prefers_stored_setting() {
+        let (_dir, conn) = open_clean_db();
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES ('locale', 'en')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(resolve_locale(&conn).unwrap(), Locale::En);
+
+        conn.execute(
+            "UPDATE app_settings SET value = 'ru-RU' WHERE key = 'locale'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(resolve_locale(&conn).unwrap(), Locale::Ru);
+    }
+
+    #[test]
+    fn persist_locale_does_not_overwrite_existing_value() {
+        let (_dir, conn) = open_clean_db();
+        // User picked English by hand — seed must not clobber it later.
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES ('locale', 'en')",
+            [],
+        )
+        .unwrap();
+        persist_locale_if_unset(&conn, Locale::Ru).unwrap();
+        let stored: String = conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = 'locale'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "en");
+    }
+
+    #[test]
+    fn persist_locale_writes_when_unset() {
+        let (_dir, conn) = open_clean_db();
+        persist_locale_if_unset(&conn, Locale::Ru).unwrap();
+        let stored: String = conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = 'locale'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "ru");
     }
 }

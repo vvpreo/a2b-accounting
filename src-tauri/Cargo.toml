@@ -23,6 +23,7 @@ chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
+sys-locale = "0.3"
 
 [dev-dependencies]
 tempfile = "3"
