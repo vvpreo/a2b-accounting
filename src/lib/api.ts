@@ -151,6 +151,7 @@ export function updateCategory(args: {
   name: string;
   color: string;
   description: string | null;
+  parentId: number | null;
 }): Promise<Category> {
   return invoke<Category>("update_category", args);
 }

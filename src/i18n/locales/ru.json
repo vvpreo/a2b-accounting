@@ -315,6 +315,8 @@
     "fieldNamePlaceholder": "Например, «Продукты»",
     "fieldDescription": "Описание",
     "fieldDescriptionPlaceholder": "Краткое пояснение: что входит в эту категорию",
+    "fieldParent": "Родитель",
+    "parentNone": "— Верхний уровень —",
     "fieldColor": "Цвет",
     "colorTabPalette": "Палитра",
     "colorTabShades": "Оттенки родителя",

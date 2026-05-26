@@ -418,6 +418,20 @@ body {
   font-family: inherit;
 }
 
+/* Strip the native macOS/Windows chrome from form selects and replace it
+   with a custom chevron so the control matches sibling inputs. Extra
+   right padding leaves room for the chevron; line-height keeps the text
+   vertically aligned the way it sits in the surrounding inputs. */
+.account-form select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 28px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%2352525b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  cursor: pointer;
+}
+
 .account-form textarea {
   resize: vertical;
   min-height: 64px;
@@ -2275,10 +2289,15 @@ code {
 }
 
 .settings-row select {
-  padding: 6px 10px;
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 6px 32px 6px 10px;
   border: 1px solid #d4d4d8;
   border-radius: 4px;
-  background: #ffffff;
+  background-color: #ffffff;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%2352525b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
   font: inherit;
   color: inherit;
   cursor: pointer;

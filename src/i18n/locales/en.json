@@ -305,6 +305,8 @@
     "fieldNamePlaceholder": "e.g. “Groceries”",
     "fieldDescription": "Description",
     "fieldDescriptionPlaceholder": "Short note: what falls under this category",
+    "fieldParent": "Parent",
+    "parentNone": "— Top level —",
     "fieldColor": "Color",
     "colorTabPalette": "Palette",
     "colorTabShades": "Parent shades",

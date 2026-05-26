@@ -90,6 +90,7 @@ export function CategoriesPage() {
                 )
               : nextRootColor(usedRootColors(creating.kind))
           }
+          categories={categories}
           onClose={() => setCreating(null)}
           onSaved={() => {
             setCreating(null);
@@ -110,6 +111,7 @@ export function CategoriesPage() {
               : -1
           }
           defaultColor={editing.color}
+          categories={categories}
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
@@ -257,6 +259,7 @@ type ModalProps =
       parent: Category | null;
       parentDepth: number;
       defaultColor: string;
+      categories: Category[];
       onClose: () => void;
       onSaved: () => void;
     }
@@ -267,6 +270,7 @@ type ModalProps =
       parent: Category | null;
       parentDepth: number;
       defaultColor: string;
+      categories: Category[];
       onClose: () => void;
       onSaved: () => void;
       onDeleted: () => void;
@@ -282,6 +286,9 @@ function CategoryFormModal(props: ModalProps) {
   const [description, setDescription] = useState<string>(
     isEdit ? (props.category.description ?? "") : "",
   );
+  const [parentId, setParentId] = useState<number | null>(
+    isEdit ? props.category.parentId : (props.parent?.id ?? null),
+  );
   const [color, setColor] = useState<string>(props.defaultColor);
   const [colorTab, setColorTab] = useState<"palette" | "shades">(
     props.parent ? "shades" : "palette",
@@ -296,6 +303,67 @@ function CategoryFormModal(props: ModalProps) {
     () => (props.parent ? shadesOf(props.parent.color, childDepth) : []),
     [props.parent, childDepth],
   );
+
+  // Eligible parents for the "Родитель" select (edit mode only). Rules:
+  //  - same kind as the category being edited;
+  //  - depth ≤ 1 — third-level (depth 2) nodes can't become parents, since
+  //    a new child under them would exceed MAX_VISIBLE_DEPTH;
+  //  - not the category itself and not one of its descendants (cycle);
+  //  - moving the subtree under this candidate must not push any descendant
+  //    beyond depth MAX_VISIBLE_DEPTH-1: candidate.depth + 1 + subtreeHeight ≤ 2.
+  const eligibleParents = useMemo<Array<{ id: number; path: string }>>(() => {
+    if (!isEdit) return [];
+    const editingCat = props.category;
+    const byParent = new Map<number | null, Category[]>();
+    for (const c of props.categories) {
+      if (c.kind !== editingCat.kind) continue;
+      const key = c.parentId ?? null;
+      if (!byParent.has(key)) byParent.set(key, []);
+      byParent.get(key)!.push(c);
+    }
+
+    const descendants = new Set<number>([editingCat.id]);
+    const queue: number[] = [editingCat.id];
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      const kids = byParent.get(id) ?? [];
+      for (const k of kids) {
+        if (!descendants.has(k.id)) {
+          descendants.add(k.id);
+          queue.push(k.id);
+        }
+      }
+    }
+
+    function subtreeHeight(id: number): number {
+      const kids = byParent.get(id) ?? [];
+      if (kids.length === 0) return 0;
+      return 1 + Math.max(...kids.map((k) => subtreeHeight(k.id)));
+    }
+    const movingHeight = subtreeHeight(editingCat.id);
+
+    const out: Array<{ id: number; path: string; depth: number; sort: string }> = [];
+    const walk = (parent: number | null, depth: number, prefix: string) => {
+      const items = (byParent.get(parent) ?? [])
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name));
+      for (const c of items) {
+        const path = prefix ? `${prefix} → ${c.name}` : c.name;
+        if (
+          !descendants.has(c.id) &&
+          depth <= 1 &&
+          depth + 1 + movingHeight <= MAX_VISIBLE_DEPTH - 1
+        ) {
+          out.push({ id: c.id, path, depth, sort: path.toLowerCase() });
+        }
+        walk(c.id, depth + 1, path);
+      }
+    };
+    walk(null, 0, "");
+    return out
+      .sort((a, b) => a.sort.localeCompare(b.sort))
+      .map(({ id, path }) => ({ id, path }));
+  }, [isEdit, props.categories, isEdit ? props.category : null]);
 
   const title = isEdit
     ? t("categories.modalEditTitle")
@@ -317,6 +385,7 @@ function CategoryFormModal(props: ModalProps) {
           name,
           color,
           description: descriptionPayload,
+          parentId,
         });
       } else {
         await createCategory({
@@ -377,6 +446,27 @@ function CategoryFormModal(props: ModalProps) {
                   placeholder={t("categories.fieldNamePlaceholder")}
                 />
               </label>
+
+              {isEdit && (
+                <label>
+                  {t("categories.fieldParent")}
+                  <select
+                    value={parentId === null ? "" : String(parentId)}
+                    onChange={(e) =>
+                      setParentId(
+                        e.target.value === "" ? null : Number(e.target.value),
+                      )
+                    }
+                  >
+                    <option value="">{t("categories.parentNone")}</option>
+                    {eligibleParents.map((p) => (
+                      <option key={p.id} value={String(p.id)}>
+                        {p.path}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
 
               <label>
                 {t("categories.fieldDescription")}

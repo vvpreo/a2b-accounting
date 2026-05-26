@@ -159,14 +159,74 @@ pub fn update_category(
     name: String,
     color: String,
     description: Option<String>,
+    parent_id: Option<i64>,
 ) -> Result<Category, String> {
     let conn = state.lock().map_err(|e| e.to_string())?;
     let description = normalize_description(description);
 
+    // Load the current row so we can validate the requested parent change
+    // against the category's kind and existing ancestry.
+    let (current_kind, _current_parent): (String, Option<i64>) = conn
+        .query_row(
+            "SELECT kind, parent_id FROM categories WHERE id = ?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => format!("category {id} does not exist"),
+            _ => e.to_string(),
+        })?;
+
+    if let Some(new_parent_id) = parent_id {
+        if new_parent_id == id {
+            return Err("category cannot be its own parent".to_string());
+        }
+
+        let new_parent_kind: String = conn
+            .query_row(
+                "SELECT kind FROM categories WHERE id = ?1",
+                [new_parent_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    format!("parent category {new_parent_id} does not exist")
+                }
+                _ => e.to_string(),
+            })?;
+
+        if new_parent_kind != current_kind {
+            return Err(format!(
+                "parent kind '{new_parent_kind}' must match category kind '{current_kind}'"
+            ));
+        }
+
+        if is_descendant_of(&conn, new_parent_id, id)? {
+            return Err("cannot move category under one of its own descendants".to_string());
+        }
+    } else {
+        // Moving to top level: enforce the same (kind, name) uniqueness at
+        // the root that create_category uses, since SQLite's UNIQUE treats
+        // NULL parents as distinct and the DB constraint won't catch it.
+        let collision: bool = conn
+            .query_row(
+                "SELECT 1 FROM categories
+                 WHERE parent_id IS NULL AND kind = ?1 AND name = ?2 AND id <> ?3",
+                params![current_kind, name, id],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+        if collision {
+            return Err(format!(
+                "category '{name}' already exists at the top level"
+            ));
+        }
+    }
+
     let updated = conn
         .execute(
-            "UPDATE categories SET name = ?1, color = ?2, description = ?3 WHERE id = ?4",
-            params![name, color, description, id],
+            "UPDATE categories SET name = ?1, color = ?2, description = ?3, parent_id = ?4 WHERE id = ?5",
+            params![name, color, description, parent_id, id],
         )
         .map_err(|e| match &e {
             rusqlite::Error::SqliteFailure(err, _)
@@ -187,6 +247,30 @@ pub fn update_category(
         from_row,
     )
     .map_err(|e| e.to_string())
+}
+
+/// Walks ancestry of `candidate` upward and returns true if `ancestor`
+/// appears along the way. Used to block moves that would create a cycle
+/// (e.g. making a node a child of its own descendant).
+fn is_descendant_of(
+    conn: &rusqlite::Connection,
+    candidate: i64,
+    ancestor: i64,
+) -> Result<bool, String> {
+    let mut current = Some(candidate);
+    while let Some(node) = current {
+        if node == ancestor {
+            return Ok(true);
+        }
+        current = conn
+            .query_row(
+                "SELECT parent_id FROM categories WHERE id = ?1",
+                [node],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(false)
 }
 
 #[tauri::command]
@@ -310,5 +394,26 @@ mod tests {
             .collect();
 
         assert_eq!(names, vec!["Auto", "bank", "salary"]);
+    }
+
+    #[test]
+    fn is_descendant_of_walks_full_ancestry_chain() {
+        let dir = TempDir::new().unwrap();
+        let conn = db::open(dir.path()).unwrap();
+
+        let root = insert_root(&conn, "Food", "expense");
+        let child = insert_child(&conn, "Shops", root, "expense");
+        let grand = insert_child(&conn, "Market", child, "expense");
+
+        // A node is its own descendant in the cycle-detection sense — the
+        // check is used to forbid making a category its own parent.
+        assert!(super::is_descendant_of(&conn, root, root).unwrap());
+        // Direct and transitive descendants.
+        assert!(super::is_descendant_of(&conn, child, root).unwrap());
+        assert!(super::is_descendant_of(&conn, grand, root).unwrap());
+        // Unrelated and reverse-direction lookups must be false.
+        let other_root = insert_root(&conn, "Travel", "expense");
+        assert!(!super::is_descendant_of(&conn, other_root, root).unwrap());
+        assert!(!super::is_descendant_of(&conn, root, child).unwrap());
     }
 }
