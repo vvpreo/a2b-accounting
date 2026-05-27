@@ -361,6 +361,14 @@ export function TransactionsPage({
   const scrollWrapRef = useRef<HTMLDivElement>(null);
   const theadRef = useRef<HTMLTableSectionElement>(null);
   const [theadHeight, setTheadHeight] = useState(0);
+  // Track the filter signature so we can scroll-to-bottom on the first
+  // load and on every filter change, but *not* on in-place mutations of
+  // existing rows (comment edits, withdrawal-paired cash inserts, etc).
+  // Without this distinction, every keystroke that triggers a re-render
+  // would yank the scroll position down to the latest transaction —
+  // jarring when the user is mid-task. Null on mount → first effect run
+  // always scrolls (initial population of the table).
+  const lastFilterSigRef = useRef<string | null>(null);
 
   useLayoutEffect(() => {
     const el = theadRef.current;
@@ -424,10 +432,24 @@ export function TransactionsPage({
     });
   }, [txns, selectedAccountIds, selectedKinds, dateFrom, dateTo]);
 
+  // Only scroll to the bottom when the *filter shape* changes (or on
+  // first mount). Row-level edits and additions keep the user's current
+  // position so the table doesn't jump out from under them.
+  const filterSignature = JSON.stringify({
+    selectedAccountIds,
+    selectedKinds,
+    dateFrom,
+    dateTo,
+    visibleColumns,
+  });
   useLayoutEffect(() => {
     const el = scrollWrapRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [visibleTxns, visibleColumns]);
+    if (!el) return;
+    if (lastFilterSigRef.current !== filterSignature) {
+      el.scrollTop = el.scrollHeight;
+      lastFilterSigRef.current = filterSignature;
+    }
+  }, [visibleTxns, filterSignature]);
 
   // Auto-clear transient link errors so the banner doesn't linger.
   useEffect(() => {
@@ -1181,7 +1203,22 @@ export function TransactionsPage({
           localizedError={localizedLinkError}
           onCancel={() => setWithdrawModalOpen(false)}
           onCreated={(result) => {
-            setTxns((prev) => [...prev, result.newTransaction]);
+            // Splice the new cash transaction into the txns array in
+            // chronological order so it lands next to its source rather
+            // than at the very bottom of the table. The backend returns
+            // `listTransactions` sorted by occurred_at_utc ASC with id
+            // ASC as the implicit tiebreaker — replicate that here so a
+            // freshly-created row of the same date as an existing one
+            // settles after it (the new row always has the higher id).
+            setTxns((prev) => {
+              const next = [...prev, result.newTransaction];
+              next.sort((a, b) => {
+                const t = a.occurredAtUtc.localeCompare(b.occurredAtUtc);
+                if (t !== 0) return t;
+                return a.id - b.id;
+              });
+              return next;
+            });
             setLinks((prev) => [...prev, result.link]);
             setWithdrawModalOpen(false);
             setPendingLinkTxnId(null);
