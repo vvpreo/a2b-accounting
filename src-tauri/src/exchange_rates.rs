@@ -439,6 +439,48 @@ pub(crate) fn lookup_rate_at(
     Some((val, Some(rate_date)))
 }
 
+/// Convert `amount` from `from_currency` into `to_currency` using rates
+/// available on `date_yyyy_mm_dd`. Same-currency conversions short-circuit
+/// to the input amount. Returned value has 2 decimal places (matches the
+/// money minor-unit scale used elsewhere in the project) so the result is
+/// directly usable by `create_cash_withdrawal` and similar callers.
+///
+/// Stable error code `withdrawal.rate_unavailable` is returned when a rate
+/// can't be located for either currency, so the frontend can localise.
+#[tauri::command]
+pub fn convert_amount(
+    state: State<'_, DbState>,
+    amount: String,
+    from_currency: String,
+    to_currency: String,
+    date_yyyy_mm_dd: String,
+) -> Result<String, String> {
+    let from = validate_currency(&from_currency)?;
+    let to = validate_currency(&to_currency)?;
+    let date = validate_date(&date_yyyy_mm_dd)?;
+    let amount_decimal = Decimal::from_str(amount.trim())
+        .map_err(|_| format!("invalid amount '{amount}', expected decimal string"))?;
+
+    if from == to {
+        return Ok(amount_decimal.round_dp(2).to_string());
+    }
+
+    let conn = state.lock().map_err(|e| e.to_string())?;
+    let rate_from = rate_at(&conn, &from, &date, "EUR")
+        .map_err(|_| "withdrawal.rate_unavailable".to_string())?;
+    let rate_to = rate_at(&conn, &to, &date, "EUR")
+        .map_err(|_| "withdrawal.rate_unavailable".to_string())?;
+    if rate_to.is_zero() {
+        return Err("withdrawal.rate_unavailable".to_string());
+    }
+
+    // rate_to_base means: rate_X = price of 1 X in EUR-base units, so
+    // amount_X in EUR base = amount_X * rate_X. Convert across via base:
+    //   amount_to = amount_from * rate_from / rate_to
+    let converted = (amount_decimal * rate_from / rate_to).round_dp(2);
+    Ok(converted.to_string())
+}
+
 /// Look up a conversion rate from `currency` into `base_currency` for a given calendar date.
 ///
 /// Strategy:
@@ -446,7 +488,6 @@ pub(crate) fn lookup_rate_at(
 /// 2. Most recent rate with `rate_date <= date_yyyy_mm_dd`.
 /// 3. Fallback: earliest rate with `rate_date >= date_yyyy_mm_dd` (so a single future quote still works).
 /// 4. Otherwise — `Err` describing the missing pair.
-#[allow(dead_code)]
 pub(crate) fn rate_at(
     conn: &rusqlite::Connection,
     currency: &str,

@@ -1,6 +1,7 @@
 mod account_status;
 mod accounts;
 mod cash_transactions;
+mod cash_withdrawals;
 mod categories;
 mod currencies;
 mod db;
@@ -105,6 +106,7 @@ pub fn run() {
             cash_transactions::create_cash_transaction,
             cash_transactions::update_cash_transaction,
             cash_transactions::delete_cash_transaction,
+            cash_withdrawals::create_cash_withdrawal,
             settings::get_setting,
             settings::set_setting,
             exchange_rates::list_exchange_rates,
@@ -113,6 +115,7 @@ pub fn run() {
             exchange_rates::download_rates_for_currency,
             exchange_rates::list_currency_rate_summaries,
             exchange_rates::list_rate_entries_for_currency,
+            exchange_rates::convert_amount,
             report_views::list_report_views,
             report_views::create_report_view,
             report_views::update_report_view,

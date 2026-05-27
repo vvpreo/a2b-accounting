@@ -48,7 +48,7 @@ fn normalize_occurred_at(input: &str) -> Result<String, String> {
         .to_rfc3339_opts(SecondsFormat::Millis, true))
 }
 
-fn ensure_cash_account(conn: &Connection, account_id: i64) -> Result<(), String> {
+pub(crate) fn ensure_cash_account(conn: &Connection, account_id: i64) -> Result<(), String> {
     let kind: Option<String> = conn
         .query_row(
             "SELECT kind FROM accounts WHERE id = ?1",
@@ -90,7 +90,7 @@ fn ensure_cash_transaction(
     }
 }
 
-fn fetch_transaction(conn: &Connection, txn_id: i64) -> Result<Transaction, String> {
+pub(crate) fn fetch_transaction(conn: &Connection, txn_id: i64) -> Result<Transaction, String> {
     conn.query_row(
         "SELECT id, account_id, import_batch_id, occurred_at_utc, credit, debit, balance,
                 peer, bank_description, comment, is_correcting
@@ -161,6 +161,42 @@ pub(crate) fn recompute_cash_balances(
     Ok(())
 }
 
+/// Insert one cash transaction row inside an already-open SQL transaction and
+/// recompute the running balance for the touched account from this point
+/// forward. Returns the new row id. The caller owns the SQL transaction (open,
+/// commit, rollback) and is expected to have already validated that
+/// `account_id` belongs to a cash account.
+///
+/// `credit` and `debit` are in minor units (e.g. cents); exactly one of them
+/// must be non-zero for a normal entry. Both zero is allowed by the schema
+/// but doesn't make sense semantically — callers should reject earlier.
+pub(crate) fn insert_cash_transaction_row(
+    tx: &Connection,
+    account_id: i64,
+    occurred_at_utc: &str,
+    credit: i64,
+    debit: i64,
+    peer: Option<&str>,
+    comment: Option<&str>,
+) -> Result<i64, String> {
+    // Placeholder balance — recompute_cash_balances overwrites it below.
+    let new_id: i64 = tx
+        .query_row(
+            "INSERT INTO transactions
+                (account_id, import_batch_id, occurred_at_utc,
+                 credit, debit, balance,
+                 peer, bank_description, comment, is_correcting)
+             VALUES (?1, NULL, ?2, ?3, ?4, 0, ?5, NULL, ?6, 0)
+             RETURNING id",
+            params![account_id, occurred_at_utc, credit, debit, peer, comment],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    recompute_cash_balances(tx, account_id, occurred_at_utc).map_err(|e| e.to_string())?;
+    Ok(new_id)
+}
+
 #[tauri::command]
 pub fn create_cash_transaction(
     state: State<'_, DbState>,
@@ -182,22 +218,15 @@ pub fn create_cash_transaction(
     ensure_cash_account(conn, account_id)?;
 
     let tx = conn.transaction().map_err(|e| e.to_string())?;
-
-    // Placeholder balance — recompute_cash_balances will overwrite it.
-    let new_id: i64 = tx
-        .query_row(
-            "INSERT INTO transactions
-                (account_id, import_batch_id, occurred_at_utc,
-                 credit, debit, balance,
-                 peer, bank_description, comment, is_correcting)
-             VALUES (?1, NULL, ?2, ?3, ?4, 0, ?5, NULL, ?6, 0)
-             RETURNING id",
-            params![account_id, occurred_at, credit, debit, peer, comment],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-
-    recompute_cash_balances(&tx, account_id, &occurred_at).map_err(|e| e.to_string())?;
+    let new_id = insert_cash_transaction_row(
+        &tx,
+        account_id,
+        &occurred_at,
+        credit,
+        debit,
+        peer.as_deref(),
+        comment.as_deref(),
+    )?;
     tx.commit().map_err(|e| e.to_string())?;
 
     fetch_transaction(conn, new_id)

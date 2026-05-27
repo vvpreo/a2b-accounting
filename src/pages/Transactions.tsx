@@ -20,6 +20,10 @@ import {
   TransactionCategoryView,
   TransferDelta,
   TxnLink,
+  WITHDRAWAL_ERROR_CODES,
+  WithdrawalErrorCode,
+  convertAmount,
+  createCashWithdrawal,
   getSetting,
   linkTransactions,
   listAccounts,
@@ -159,6 +163,10 @@ export function TransactionsPage({
   const [pendingLinkTxnId, setPendingLinkTxnId] = useState<number | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
   const [unlinkConfirm, setUnlinkConfirm] = useState<number | null>(null);
+  // True while the "Withdraw to cash" modal sits on top of the pending-link
+  // overlay. Opening it doesn't cancel the pending link — the modal owns the
+  // commit and clears the pending state itself on success or cancel.
+  const [withdrawModalOpen, setWithdrawModalOpen] = useState(false);
   // FX-conversion deltas for every linked pair, keyed by txnId. Reloaded
   // alongside `links` and again whenever a background rate download finishes
   // — newly arrived rates can flip a row from "—" to a real number.
@@ -365,6 +373,35 @@ export function TransactionsPage({
   }, []);
 
   const accountById = new Map(accounts.map((a) => [a.id, a]));
+  // Cash-kind accounts only — used to populate the "Withdraw to cash"
+  // selector. Recomputed on every accounts change but the list is tiny in
+  // practice (1–2 entries) and downstream consumers are stable, so this is
+  // cheap.
+  const cashAccounts = useMemo(
+    () => accounts.filter((a) => a.kind === "cash"),
+    [accounts],
+  );
+  // The transaction the pending-link banner is anchored on, if any. Null when
+  // not in pending mode or when the source is no longer in the filtered list
+  // (we still keep the banner up, but features that need the source — like
+  // "Withdraw to cash" — gracefully hide).
+  const pendingSourceTxn = useMemo(
+    () =>
+      pendingLinkTxnId === null
+        ? null
+        : txns.find((tt) => tt.id === pendingLinkTxnId) ?? null,
+    [txns, pendingLinkTxnId],
+  );
+  const pendingSourceAccount = pendingSourceTxn
+    ? accountById.get(pendingSourceTxn.accountId) ?? null
+    : null;
+  // "Withdraw to cash" only makes sense when the user started linking from
+  // an outgoing transaction — the new cash entry will be the matching
+  // incoming side.
+  const canWithdrawToCash =
+    pendingSourceTxn !== null &&
+    pendingSourceTxn.debit !== "0.00" &&
+    pendingSourceTxn.credit === "0.00";
   const showCategory = visibleColumns.includes("category");
   const showComment = visibleColumns.includes("comment");
   const showPeer = visibleColumns.includes("peer");
@@ -407,11 +444,17 @@ export function TransactionsPage({
   // a comment input or anywhere else focus might trap clicks.
   useEffect(() => {
     if (pendingLinkTxnId === null) return;
+    // The Withdraw-to-cash modal sits on top of pending mode and owns its
+    // own outside-click / Escape handling — disable the global cancel so
+    // clicks inside the modal don't accidentally tear down the pending
+    // state behind it.
+    if (withdrawModalOpen) return;
     const onClick = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null;
       if (!target) return;
       if (target.closest(".col-link")) return;
       if (target.closest(".txn-link-overlay")) return;
+      if (target.closest(".withdraw-modal")) return;
       setPendingLinkTxnId(null);
     };
     const onKeyDown = (event: KeyboardEvent) => {
@@ -430,11 +473,14 @@ export function TransactionsPage({
       window.removeEventListener("click", onClick);
       window.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [pendingLinkTxnId]);
+  }, [pendingLinkTxnId, withdrawModalOpen]);
 
   function localizedLinkError(code: string): string {
     if ((LINK_ERROR_CODES as string[]).includes(code)) {
       return t(`transactions.linkError.${code as LinkErrorCode}`);
+    }
+    if ((WITHDRAWAL_ERROR_CODES as string[]).includes(code)) {
+      return t(`transactions.linkError.${code as WithdrawalErrorCode}`);
     }
     return code;
   }
@@ -998,6 +1044,20 @@ export function TransactionsPage({
       {pendingLinkTxnId !== null && (
         <div className="txn-link-overlay">
           <span>{t("transactions.linkPickPartner")}</span>
+          {canWithdrawToCash && (
+            <button
+              type="button"
+              disabled={cashAccounts.length === 0}
+              title={
+                cashAccounts.length === 0
+                  ? t("transactions.withdrawNoCashAccounts")
+                  : undefined
+              }
+              onClick={() => setWithdrawModalOpen(true)}
+            >
+              {t("transactions.withdrawToCash")}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setPendingLinkTxnId(null)}
@@ -1052,7 +1112,227 @@ export function TransactionsPage({
           </div>
         </div>
       )}
+      {withdrawModalOpen && pendingSourceTxn && pendingSourceAccount && (
+        <WithdrawToCashModal
+          source={pendingSourceTxn}
+          sourceAccount={pendingSourceAccount}
+          cashAccounts={cashAccounts}
+          localizedError={localizedLinkError}
+          onCancel={() => setWithdrawModalOpen(false)}
+          onCreated={(result) => {
+            setTxns((prev) => [...prev, result.newTransaction]);
+            setLinks((prev) => [...prev, result.link]);
+            setWithdrawModalOpen(false);
+            setPendingLinkTxnId(null);
+            setLinkError(null);
+          }}
+        />
+      )}
     </section>
+  );
+}
+
+// Modal that turns an outgoing bank transaction into a paired cash credit:
+// the user picks which cash account receives the funds, confirms (and
+// optionally adjusts) the amount, and the backend creates the new cash
+// transaction plus the link in a single round-trip. When the source and
+// cash-account currencies differ, the amount is prefilled via the
+// `convert_amount` Tauri command using the rate at the source's date — but
+// the user remains free to override the value.
+function WithdrawToCashModal({
+  source,
+  sourceAccount,
+  cashAccounts,
+  localizedError,
+  onCancel,
+  onCreated,
+}: {
+  source: Transaction;
+  sourceAccount: Account;
+  cashAccounts: Account[];
+  localizedError: (code: string) => string;
+  onCancel: () => void;
+  onCreated: (result: { newTransaction: Transaction; link: TxnLink }) => void;
+}) {
+  const t = useT();
+  const [cashAccountId, setCashAccountId] = useState<number | null>(
+    cashAccounts[0]?.id ?? null,
+  );
+  const [amount, setAmount] = useState("");
+  const [rateLoading, setRateLoading] = useState(false);
+  const [rateUnavailable, setRateUnavailable] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const selectedCashAccount = useMemo(
+    () => cashAccounts.find((a) => a.id === cashAccountId) ?? null,
+    [cashAccounts, cashAccountId],
+  );
+
+  // Prefill / refresh the amount whenever the selected cash account changes
+  // (and on first open). Same-currency case skips the network round-trip
+  // and just copies the source debit. Cross-currency falls back to the
+  // backend FX converter; on missing rate we leave the field empty and
+  // surface a hint so the user can type the value by hand.
+  useEffect(() => {
+    if (!selectedCashAccount) return;
+    let cancelled = false;
+    setErrorMessage(null);
+    setRateUnavailable(false);
+
+    if (selectedCashAccount.currency === sourceAccount.currency) {
+      setAmount(source.debit);
+      setRateLoading(false);
+      return;
+    }
+
+    setRateLoading(true);
+    const date = source.occurredAtUtc.slice(0, 10);
+    convertAmount({
+      amount: source.debit,
+      fromCurrency: sourceAccount.currency,
+      toCurrency: selectedCashAccount.currency,
+      dateYyyyMmDd: date,
+    })
+      .then((converted) => {
+        if (cancelled) return;
+        setAmount(converted);
+        setRateLoading(false);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        // Stable code from the backend → leave the field empty and show a
+        // localised hint. Any other error we surface as a generic message.
+        const code = String(e);
+        if (code.includes("withdrawal.rate_unavailable")) {
+          setRateUnavailable(true);
+          setAmount("");
+        } else {
+          setErrorMessage(localizedError(code));
+          setAmount("");
+        }
+        setRateLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    selectedCashAccount,
+    sourceAccount.currency,
+    source.debit,
+    source.occurredAtUtc,
+    localizedError,
+  ]);
+
+  // Local Escape handler — the parent's pending-link cancel effect is paused
+  // while we're open, so we own dismissal here. Submit stays on the form
+  // button only.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        onCancel();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [onCancel]);
+
+  const amountMinor = parseMoneyToMinor(amount);
+  const canSubmit =
+    cashAccountId !== null &&
+    !rateLoading &&
+    !submitting &&
+    amountMinor !== null &&
+    amountMinor > 0;
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!canSubmit || cashAccountId === null) return;
+    setSubmitting(true);
+    setErrorMessage(null);
+    try {
+      const result = await createCashWithdrawal({
+        sourceTxnId: source.id,
+        cashAccountId,
+        amount,
+      });
+      onCreated(result);
+    } catch (e) {
+      setErrorMessage(localizedError(String(e)));
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div
+      className="txn-link-confirm-overlay withdraw-modal-backdrop"
+      onClick={onCancel}
+    >
+      <form
+        className="txn-link-confirm withdraw-modal"
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={handleSubmit}
+      >
+        <h3>{t("transactions.withdrawModalTitle")}</h3>
+        <label className="withdraw-modal-field">
+          <span>{t("transactions.withdrawAccountLabel")}</span>
+          <select
+            value={cashAccountId ?? ""}
+            disabled={cashAccounts.length === 0 || submitting}
+            onChange={(e) => setCashAccountId(Number(e.target.value))}
+          >
+            {cashAccounts.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name || a.bank} · {a.currency}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="withdraw-modal-field">
+          <span>
+            {t("transactions.withdrawAmountLabel")}
+            {selectedCashAccount ? ` · ${selectedCashAccount.currency}` : ""}
+          </span>
+          <input
+            type="text"
+            inputMode="decimal"
+            value={amount}
+            disabled={submitting}
+            placeholder={rateLoading ? t("transactions.withdrawRateLoading") : ""}
+            onChange={(e) => setAmount(e.target.value)}
+            autoFocus
+          />
+          {rateUnavailable && (
+            <span className="withdraw-modal-hint">
+              {t("transactions.withdrawRateUnavailable")}
+            </span>
+          )}
+        </label>
+        {errorMessage && (
+          <p className="withdraw-modal-error">{errorMessage}</p>
+        )}
+        <div className="txn-link-confirm-actions">
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={onCancel}
+            disabled={submitting}
+          >
+            {t("common.cancel")}
+          </button>
+          <button
+            type="submit"
+            className="btn-primary"
+            disabled={!canSubmit}
+          >
+            {t("transactions.withdrawSubmit")}
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
 

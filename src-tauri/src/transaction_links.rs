@@ -66,11 +66,42 @@ fn already_linked(conn: &Connection, txn_id: i64) -> rusqlite::Result<bool> {
 
 /// Stable error codes returned across the Tauri boundary so the frontend can
 /// localise messages without parsing English/Russian text.
-const ERR_NOT_FOUND: &str = "link.txn_not_found";
+pub(crate) const ERR_NOT_FOUND: &str = "link.txn_not_found";
 const ERR_SAME_TXN: &str = "link.same_txn";
-const ERR_SAME_ACCOUNT: &str = "link.same_account";
+pub(crate) const ERR_SAME_ACCOUNT: &str = "link.same_account";
 const ERR_SAME_DIRECTION: &str = "link.same_direction";
-const ERR_ALREADY_LINKED: &str = "link.already_linked";
+pub(crate) const ERR_ALREADY_LINKED: &str = "link.already_linked";
+
+/// Canonicalise the pair `(a_id, b_id)` (smaller id first) and INSERT a link
+/// row. Performs no validation — the caller is expected to have already
+/// checked existence, account/direction/already-linked invariants. Used by
+/// internal flows (e.g. `cash_withdrawals`) that build the pair themselves
+/// and don't want the redundant validation cost.
+pub(crate) fn insert_link_unchecked(
+    tx: &Connection,
+    a_id: i64,
+    b_id: i64,
+) -> Result<TxnLink, String> {
+    let (lo, hi) = if a_id < b_id { (a_id, b_id) } else { (b_id, a_id) };
+    let id: i64 = tx
+        .query_row(
+            "INSERT INTO transaction_links (txn_a_id, txn_b_id) VALUES (?1, ?2) RETURNING id",
+            params![lo, hi],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(TxnLink {
+        id,
+        txn_a_id: lo,
+        txn_b_id: hi,
+    })
+}
+
+/// Check if `txn_id` already participates in any link. Public to the crate so
+/// other flows that create links can short-circuit before doing other work.
+pub(crate) fn is_already_linked(conn: &Connection, txn_id: i64) -> rusqlite::Result<bool> {
+    already_linked(conn, txn_id)
+}
 
 #[tauri::command]
 pub fn link_transactions(
@@ -105,20 +136,9 @@ pub fn link_transactions(
         return Err(ERR_ALREADY_LINKED.to_string());
     }
 
-    let (lo, hi) = if a_id < b_id { (a_id, b_id) } else { (b_id, a_id) };
-    let id: i64 = tx
-        .query_row(
-            "INSERT INTO transaction_links (txn_a_id, txn_b_id) VALUES (?1, ?2) RETURNING id",
-            params![lo, hi],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
+    let link = insert_link_unchecked(&tx, a_id, b_id)?;
     tx.commit().map_err(|e| e.to_string())?;
-    Ok(TxnLink {
-        id,
-        txn_a_id: lo,
-        txn_b_id: hi,
-    })
+    Ok(link)
 }
 
 /// Drops the link involving `transaction_id`, if any. Returns Ok even when no

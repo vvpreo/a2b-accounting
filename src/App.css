@@ -966,6 +966,76 @@ th.col-delta {
   justify-content: flex-end;
 }
 
+/* "Withdraw to cash" form — reuses the .txn-link-confirm shell for the
+   backdrop + panel, adds vertically-stacked labelled fields above the
+   action row. */
+.withdraw-modal {
+  min-width: 320px;
+  max-width: 420px;
+}
+
+.withdraw-modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.withdraw-modal-field > span {
+  color: #475569;
+}
+
+.withdraw-modal-field select,
+.withdraw-modal-field input {
+  padding: 6px 8px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  font: inherit;
+  background: #fff;
+  color: inherit;
+}
+
+.withdraw-modal-field input:focus,
+.withdraw-modal-field select:focus {
+  outline: none;
+  border-color: #6366f1;
+}
+
+.withdraw-modal-hint {
+  color: #b45309;
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.withdraw-modal-error {
+  color: #991b1b;
+  background: #fee2e2;
+  padding: 6px 10px;
+  border-radius: 4px;
+  margin: 0 0 12px 0;
+  font-size: 12px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .withdraw-modal-field > span {
+    color: #cbd5e1;
+  }
+  .withdraw-modal-field select,
+  .withdraw-modal-field input {
+    background: #0f172a;
+    color: #f3f4f6;
+    border-color: #334155;
+  }
+  .withdraw-modal-hint {
+    color: #fbbf24;
+  }
+  .withdraw-modal-error {
+    background: #4c1d24;
+    color: #fecaca;
+  }
+}
+
 .inline-edit {
   width: 100%;
   min-width: 120px;

@@ -396,6 +396,35 @@ export function deleteCashTransaction(id: number): Promise<void> {
   return invoke<void>("delete_cash_transaction", { id });
 }
 
+// Stable error codes from `create_cash_withdrawal` and friends. The
+// `link.*` codes reuse the existing pairing errors when a withdrawal
+// hits the same invariants (already linked, same account).
+export type WithdrawalErrorCode =
+  | "withdrawal.source_not_outgoing"
+  | "withdrawal.account_not_cash"
+  | "withdrawal.invalid_amount"
+  | "withdrawal.rate_unavailable";
+
+export const WITHDRAWAL_ERROR_CODES: WithdrawalErrorCode[] = [
+  "withdrawal.source_not_outgoing",
+  "withdrawal.account_not_cash",
+  "withdrawal.invalid_amount",
+  "withdrawal.rate_unavailable",
+];
+
+export interface CashWithdrawalResult {
+  newTransaction: Transaction;
+  link: TxnLink;
+}
+
+export function createCashWithdrawal(args: {
+  sourceTxnId: number;
+  cashAccountId: number;
+  amount: string;
+}): Promise<CashWithdrawalResult> {
+  return invoke<CashWithdrawalResult>("create_cash_withdrawal", { ...args });
+}
+
 export function updateTransactionComment(
   id: number,
   comment: string | null,
@@ -454,6 +483,21 @@ export function upsertExchangeRate(args: {
 
 export function deleteExchangeRate(id: number): Promise<void> {
   return invoke<void>("delete_exchange_rate", { id });
+}
+
+/// Convert `amount` from `fromCurrency` into `toCurrency` using the rate that
+/// would have been active on `dateYyyyMmDd`. Same-currency conversions
+/// short-circuit to the original amount. Returns a decimal string with two
+/// fractional digits ready to be displayed or sent into createCashWithdrawal.
+/// Rejects with the stable code `"withdrawal.rate_unavailable"` when either
+/// currency has no rate on or near the requested date.
+export function convertAmount(args: {
+  amount: string;
+  fromCurrency: string;
+  toCurrency: string;
+  dateYyyyMmDd: string;
+}): Promise<string> {
+  return invoke<string>("convert_amount", { ...args });
 }
 
 export interface CurrencyRateSummary {

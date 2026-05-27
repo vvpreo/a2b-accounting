@@ -168,8 +168,22 @@
         "same_account": "Нельзя связать транзакции одного счёта.",
         "same_direction": "Связывать можно только входящую и исходящую транзакции.",
         "already_linked": "Транзакция уже участвует в другой связи."
+      },
+      "withdrawal": {
+        "source_not_outgoing": "Вывод в кеш доступен только для исходящих транзакций.",
+        "account_not_cash": "Выбранный счёт не является кеш-счётом.",
+        "invalid_amount": "Сумма должна быть положительным числом.",
+        "rate_unavailable": "Курс на эту дату не найден."
       }
     },
+    "withdrawToCash": "Вывод в кеш",
+    "withdrawNoCashAccounts": "Нет ни одного кеш-счёта",
+    "withdrawModalTitle": "Зачислить поступление на кеш-счёт",
+    "withdrawAccountLabel": "Кеш-счёт",
+    "withdrawAmountLabel": "Сумма поступления",
+    "withdrawSubmit": "Создать",
+    "withdrawRateLoading": "Загрузка курса…",
+    "withdrawRateUnavailable": "Курс на эту дату не найден, введите сумму вручную.",
     "empty": "Нет транзакций по выбранным фильтрам.",
     "correctingLabel": "Корректирующая транзакция",
     "commentPlaceholder": "—",

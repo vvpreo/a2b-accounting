@@ -164,8 +164,22 @@
         "same_account": "Can't link transactions on the same account.",
         "same_direction": "Linked transactions must be one incoming and one outgoing.",
         "already_linked": "This transaction is already part of another link."
+      },
+      "withdrawal": {
+        "source_not_outgoing": "Withdraw to cash is only available for outgoing transactions.",
+        "account_not_cash": "Selected account is not a cash account.",
+        "invalid_amount": "Amount must be a positive number.",
+        "rate_unavailable": "No exchange rate available for this date."
       }
     },
+    "withdrawToCash": "Withdraw to cash",
+    "withdrawNoCashAccounts": "No cash accounts available",
+    "withdrawModalTitle": "Record cash withdrawal",
+    "withdrawAccountLabel": "Cash account",
+    "withdrawAmountLabel": "Amount received",
+    "withdrawSubmit": "Create",
+    "withdrawRateLoading": "Loading rate…",
+    "withdrawRateUnavailable": "No exchange rate for this date — enter the amount manually.",
     "empty": "No transactions match the selected filters.",
     "correctingLabel": "Correcting entry",
     "commentPlaceholder": "—",
