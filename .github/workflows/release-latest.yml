@@ -112,11 +112,23 @@ jobs:
             exit 0
           fi
           short_sha="${FULL_SHA:0:7}"
-          if [ "$BUILD_RESULT" = "success" ]; then
-            text="$(printf '✅ A2B Finances: latest сборка готова (%s)\nРелиз: %s/releases/tag/latest' "$short_sha" "$REPO_URL")"
-          else
-            text="$(printf '❌ A2B Finances: latest сборка упала (%s, result=%s)\nЛоги: %s' "$short_sha" "$BUILD_RESULT" "$RUN_URL")"
-          fi
+          # Three outcome buckets:
+          #   success   — green tick, links to the rolling release;
+          #   cancelled — yellow circle, just an FYI (typically caused by
+          #               concurrency: cancel-in-progress when the next commit
+          #               supersedes this run, not an actual error);
+          #   anything else (failure / timed_out / skipped) — red cross.
+          case "$BUILD_RESULT" in
+            success)
+              text="$(printf '✅ A2B Finances: latest сборка готова (%s)\nРелиз: %s/releases/tag/latest' "$short_sha" "$REPO_URL")"
+              ;;
+            cancelled)
+              text="$(printf '🟡 A2B Finances: сборка отменена (%s) — обычно из-за нового коммита поверх\nЛоги: %s' "$short_sha" "$RUN_URL")"
+              ;;
+            *)
+              text="$(printf '❌ A2B Finances: latest сборка упала (%s, result=%s)\nЛоги: %s' "$short_sha" "$BUILD_RESULT" "$RUN_URL")"
+              ;;
+          esac
           # Split TG_ACCOUNTS on commas and broadcast. Whitespace around each
           # entry is trimmed so the secret can be either "id1,id2" or
           # "id1, id2" without surprises. Failures on individual chats are
