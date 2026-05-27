@@ -69,6 +69,17 @@ export function CategoriesCell({
     }
   }
 
+  async function handleClear() {
+    setPickerAnchor(null);
+    setError(null);
+    try {
+      await setTransactionCategories({ transactionId, items: [] });
+      onChanged();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   if (entries.length === 0) {
     return (
       <td className="txn-categories-cell-host col-category">
@@ -208,6 +219,7 @@ export function CategoriesCell({
           excludeIds={[]}
           anchorRect={pickerAnchor}
           onPick={handlePick}
+          onClear={handleClear}
           onClose={() => setPickerAnchor(null)}
         />
       )}

@@ -217,6 +217,7 @@
       "pickerEmptyIncome": "No income categories yet. Create one on the Categories tab.",
       "pickerEmptyExpense": "No expense categories yet. Create one on the Categories tab.",
       "pickerNoMatches": "No matches",
+      "pickerClear": "Clear categories",
       "cellEmpty": "No categories",
       "cellMore": "+{count}",
       "cellUncategorized": "Uncategorized",

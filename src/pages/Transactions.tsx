@@ -734,9 +734,13 @@ export function TransactionsPage({
               {showComment && (
                 <th className="col-comment">{t("transactions.tableComment")}</th>
               )}
-              {showPeer && <th>{t("transactions.tablePeer")}</th>}
+              {showPeer && (
+                <th className="col-peer">{t("transactions.tablePeer")}</th>
+              )}
               {showBankDescription && (
-                <th>{t("transactions.tableBankDescription")}</th>
+                <th className="col-bank-description">
+                  {t("transactions.tableBankDescription")}
+                </th>
               )}
             </tr>
           </thead>
@@ -1012,6 +1016,27 @@ export function TransactionsPage({
                           className="inline-edit"
                           defaultValue={x.comment ?? ""}
                           placeholder={t("transactions.commentPlaceholder")}
+                          // Truncated-content tooltip: only fires when the
+                          // input is wider than its visible width, so a
+                          // short comment doesn't trigger a redundant
+                          // popup. Hides as soon as the user focuses
+                          // the input — they're actively typing and the
+                          // popup would just overlap the field.
+                          onMouseEnter={(e) => {
+                            const el = e.currentTarget;
+                            if (el === document.activeElement) return;
+                            const text = el.value;
+                            if (!text.trim()) return;
+                            if (el.scrollWidth <= el.clientWidth) return;
+                            const r = el.getBoundingClientRect();
+                            setTooltip({
+                              x: r.left + r.width / 2,
+                              y: r.top,
+                              text,
+                            });
+                          }}
+                          onMouseLeave={() => setTooltip(null)}
+                          onFocus={() => setTooltip(null)}
                           onBlur={(e) => {
                             const next =
                               e.target.value.trim() === ""
@@ -1033,14 +1058,36 @@ export function TransactionsPage({
                       </td>
                     )}
                     {showPeer && (
-                      <td>
-                        {x.isCorrecting
-                          ? t("transactions.correctingLabel")
-                          : x.peer ?? ""}
-                      </td>
+                      <TruncatedCell
+                        className="col-peer"
+                        text={
+                          x.isCorrecting
+                            ? t("transactions.correctingLabel")
+                            : x.peer ?? ""
+                        }
+                        onShowTooltip={(text, rect) =>
+                          setTooltip({
+                            x: rect.left + rect.width / 2,
+                            y: rect.top,
+                            text,
+                          })
+                        }
+                        onHideTooltip={() => setTooltip(null)}
+                      />
                     )}
                     {showBankDescription && (
-                      <td>{x.bankDescription ?? ""}</td>
+                      <TruncatedCell
+                        className="col-bank-description"
+                        text={x.bankDescription ?? ""}
+                        onShowTooltip={(text, rect) =>
+                          setTooltip({
+                            x: rect.left + rect.width / 2,
+                            y: rect.top,
+                            text,
+                          })
+                        }
+                        onHideTooltip={() => setTooltip(null)}
+                      />
                     )}
                   </tr>,
                 );
@@ -1347,6 +1394,38 @@ function WithdrawToCashModal({
         </div>
       </form>
     </div>
+  );
+}
+
+// Plain-text table cell with ellipsis truncation and a hover tooltip that
+// reveals the full text. Only triggers when the rendered span is wider
+// than its visible area — short content doesn't fire a redundant popup.
+// Used for the Peer and Bank Description columns where the value is
+// opaque text that can be long and wraps awkwardly.
+function TruncatedCell({
+  className,
+  text,
+  onShowTooltip,
+  onHideTooltip,
+}: {
+  className: string;
+  text: string;
+  onShowTooltip: (text: string, rect: DOMRect) => void;
+  onHideTooltip: () => void;
+}) {
+  return (
+    <td
+      className={className}
+      onMouseEnter={(e) => {
+        const el = e.currentTarget;
+        if (!text.trim()) return;
+        if (el.scrollWidth <= el.clientWidth) return;
+        onShowTooltip(text, el.getBoundingClientRect());
+      }}
+      onMouseLeave={onHideTooltip}
+    >
+      {text}
+    </td>
   );
 }
 

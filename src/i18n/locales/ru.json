@@ -221,6 +221,7 @@
       "pickerEmptyIncome": "Нет категорий для поступлений. Создайте их на вкладке «Категории».",
       "pickerEmptyExpense": "Нет категорий для расходов. Создайте их на вкладке «Категории».",
       "pickerNoMatches": "Ничего не найдено",
+      "pickerClear": "Очистить категории",
       "cellEmpty": "Без категорий",
       "cellMore": "+{count}",
       "cellUncategorized": "Без категории",

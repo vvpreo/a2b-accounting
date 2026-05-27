@@ -185,6 +185,29 @@ body {
   width: 100%;
 }
 
+/* The three "long text" columns truncate with an ellipsis when their
+ * content doesn't fit, instead of pushing the table wider than the
+ * viewport. The `max-width: 0` trick lets the cell shrink to whatever
+ * the auto table-layout doles out; combined with `overflow: hidden`
+ * + `text-overflow: ellipsis` + `white-space: nowrap` the visible row
+ * always fits the screen. Full content is revealed via the floating
+ * tooltip wired up in Transactions.tsx. */
+.page--transactions td.col-comment,
+.page--transactions td.col-peer,
+.page--transactions td.col-bank-description {
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The comment input lives inside its cell — it must shrink with the
+ * cell rather than asserting its own natural width. */
+.page--transactions td.col-comment .inline-edit {
+  width: 100%;
+  min-width: 0;
+}
+
 .app-header {
   margin-bottom: 24px;
 }
@@ -3212,6 +3235,61 @@ code {
 .category-picker-row.is-excluded {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.category-picker-row--clear {
+  color: #b91c1c;
+  margin: 4px 6px 0;
+  width: calc(100% - 12px);
+  border-top: 1px dashed #fecaca;
+  padding-top: 8px;
+  border-radius: 0;
+}
+
+.category-picker-row--clear:hover:not(:disabled) {
+  background: #fef2f2;
+}
+
+.categories-swatch--clear {
+  background: transparent;
+  border: 1px dashed #b91c1c;
+  position: relative;
+}
+
+.categories-swatch--clear::before,
+.categories-swatch--clear::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 7px;
+  border-top: 1.5px solid #b91c1c;
+  transform-origin: center;
+}
+
+.categories-swatch--clear::before {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.categories-swatch--clear::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+@media (prefers-color-scheme: dark) {
+  .category-picker-row--clear {
+    color: #fca5a5;
+    border-top-color: #7f1d1d;
+  }
+  .category-picker-row--clear:hover:not(:disabled) {
+    background: #450a0a;
+  }
+  .categories-swatch--clear {
+    border-color: #fca5a5;
+  }
+  .categories-swatch--clear::before,
+  .categories-swatch--clear::after {
+    border-top-color: #fca5a5;
+  }
 }
 
 .category-picker-name {

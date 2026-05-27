@@ -15,6 +15,13 @@ interface Props {
   anchorRect: DOMRect;
   onPick: (category: Category) => void;
   onClose: () => void;
+  /// When provided, the popover shows a destructive "Clear categories"
+  /// action above the category list. Used from the Transactions cell so
+  /// the user can wipe a transaction's categorisation in one click,
+  /// without opening the distribution modal first. Callers that don't
+  /// need this (e.g. the distribution modal adding more categories to
+  /// an existing split) just omit the prop.
+  onClear?: () => void;
 }
 
 export function CategoryPickerPopover({
@@ -23,6 +30,7 @@ export function CategoryPickerPopover({
   anchorRect,
   onPick,
   onClose,
+  onClear,
 }: Props) {
   const t = useT();
   const [categories, setCategories] = useState<Category[] | null>(null);
@@ -124,6 +132,21 @@ export function CategoryPickerPopover({
           placeholder={t("transactions.categories.pickerSearchPlaceholder")}
         />
       </div>
+      {onClear && (
+        <button
+          type="button"
+          className="category-picker-row category-picker-row--clear"
+          onClick={onClear}
+        >
+          <span
+            className="categories-swatch categories-swatch--clear"
+            aria-hidden="true"
+          />
+          <span className="category-picker-name">
+            {t("transactions.categories.pickerClear")}
+          </span>
+        </button>
+      )}
       <div className="category-picker-body">
         {categories === null ? (
           <p className="hint">{t("common.loading")}</p>
