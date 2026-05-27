@@ -853,7 +853,21 @@ export function TransactionsPage({
                       setHovered((cur) => (cur?.id === x.id ? null : cur))
                     }
                   >
-                    <td className="col-fixed col-account">{accLabel}</td>
+                    <td
+                      className="col-fixed col-account"
+                      onMouseEnter={(e) => {
+                        if (!acc) return;
+                        const r = e.currentTarget.getBoundingClientRect();
+                        setTooltip({
+                          x: r.left + r.width / 2,
+                          y: r.top,
+                          text: buildAccountTooltip(acc, t),
+                        });
+                      }}
+                      onMouseLeave={() => setTooltip(null)}
+                    >
+                      {accLabel}
+                    </td>
                     <td
                       className="col-fixed col-date"
                       title={formatInstantUtc(x.occurredAtUtc)}
@@ -1483,6 +1497,21 @@ function DeltaCell({
       {primary ?? ""}
     </span>
   );
+}
+
+function buildAccountTooltip(
+  acc: Account,
+  t: (key: string, vars?: Record<string, string | number>) => string,
+): string {
+  const lines: string[] = [];
+  if (acc.name) lines.push(`${t("accounts.fieldName")}: ${acc.name}`);
+  if (acc.bank) lines.push(`${t("accounts.fieldBank")}: ${acc.bank}`);
+  lines.push(`${t("accounts.fieldCurrency")}: ${acc.currency}`);
+  if (acc.accountNumber)
+    lines.push(`${t("accounts.fieldAccountNumber")}: ${acc.accountNumber}`);
+  if (acc.ownerName)
+    lines.push(`${t("accounts.fieldOwner")}: ${acc.ownerName}`);
+  return lines.join("\n");
 }
 
 function formatInstantLocal(iso: string): string {
