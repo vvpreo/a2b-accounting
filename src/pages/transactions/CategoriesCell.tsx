@@ -9,10 +9,7 @@ import {
 } from "../../lib/api";
 import { CategoryPickerPopover } from "../../components/CategoryPickerPopover";
 import { CategoryDistributionModal } from "../../components/CategoryDistributionModal";
-import {
-  addEqualToCategorized,
-  percentOf,
-} from "../../lib/distribution";
+import { percentOf } from "../../lib/distribution";
 import { formatMinorAsMoney } from "../../lib/money";
 
 const MAX_VISIBLE_BARS = 3;
@@ -56,39 +53,16 @@ export function CategoriesCell({
     setPickerAnchor(null);
     setError(null);
     try {
-      if (entries.length === 0) {
-        // First pick: 100% on this category.
-        await setTransactionCategories({
-          transactionId,
-          items: [
-            { categoryId: c.id, shareMinor: totalMinor, position: 0 },
-          ],
-        });
-      } else {
-        // Subsequent: split categorized pool equally.
-        const oldShares = [
-          ...entries.map((e) => e.shareMinor),
-          uncategorized,
-        ];
-        const newShares = addEqualToCategorized(oldShares, totalMinor);
-        const newCats = newShares.slice(0, -1);
-        const meta = [
-          ...entries.map((e) => ({ categoryId: e.categoryId })),
-          { categoryId: c.id },
-        ];
-        // Sort by descending share to compute final positions.
-        const ordered = meta
-          .map((m, i) => ({ m, share: newCats[i] }))
-          .sort((a, b) => b.share - a.share || a.m.categoryId - b.m.categoryId);
-        const items = ordered
-          .map((row, idx) => ({
-            categoryId: row.m.categoryId,
-            shareMinor: row.share,
-            position: idx,
-          }))
-          .filter((it) => it.shareMinor > 0);
-        await setTransactionCategories({ transactionId, items });
-      }
+      // Picking from the cell always *replaces* the entire categorisation
+      // with a single 100% assignment to the chosen category. Splitting a
+      // transaction across multiple categories is an explicit action: the
+      // user opens the distribution modal via the ✎ button. This keeps
+      // the common case (re-categorising a mis-tagged transaction) one
+      // click instead of two-clicks-then-edit.
+      await setTransactionCategories({
+        transactionId,
+        items: [{ categoryId: c.id, shareMinor: totalMinor, position: 0 }],
+      });
       onChanged();
     } catch (e) {
       setError(String(e));
@@ -231,7 +205,7 @@ export function CategoriesCell({
       {pickerAnchor && (
         <CategoryPickerPopover
           kind={kind}
-          excludeIds={entries.map((e) => e.categoryId)}
+          excludeIds={[]}
           anchorRect={pickerAnchor}
           onPick={handlePick}
           onClose={() => setPickerAnchor(null)}
