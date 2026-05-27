@@ -83,3 +83,58 @@ jobs:
           Install: see README → «Установка собранного DMG»." \
             --prerelease \
             --target "$GITHUB_SHA"
+
+  # Telegram fan-out for the build outcome. Runs on a separate ubuntu runner
+  # (cheaper than macOS) and uses `if: always()` so it fires for both success
+  # and failure of the build job. Two repo secrets are expected:
+  #   - TG_CICD_BOT     — Telegram bot token (`<bot_id>:<bot_hash>` format)
+  #   - TG_ACCOUNTS     — comma-separated chat_ids to broadcast to
+  # If either secret is missing the step exits 0 — handy for forks / contributors
+  # who don't have notification access set up.
+  notify:
+    runs-on: ubuntu-latest
+    needs: build-macos-arm64
+    if: always()
+    timeout-minutes: 3
+    steps:
+      - name: Send Telegram notification
+        env:
+          TG_CICD_BOT: ${{ secrets.TG_CICD_BOT }}
+          TG_ACCOUNTS: ${{ secrets.TG_ACCOUNTS }}
+          BUILD_RESULT: ${{ needs.build-macos-arm64.result }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FULL_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TG_CICD_BOT:-}" ] || [ -z "${TG_ACCOUNTS:-}" ]; then
+            echo "TG_CICD_BOT or TG_ACCOUNTS not set — skipping Telegram notification" >&2
+            exit 0
+          fi
+          short_sha="${FULL_SHA:0:7}"
+          if [ "$BUILD_RESULT" = "success" ]; then
+            text="$(printf '✅ A2B Finances: latest сборка готова (%s)\nРелиз: %s/releases/tag/latest' "$short_sha" "$REPO_URL")"
+          else
+            text="$(printf '❌ A2B Finances: latest сборка упала (%s, result=%s)\nЛоги: %s' "$short_sha" "$BUILD_RESULT" "$RUN_URL")"
+          fi
+          # Split TG_ACCOUNTS on commas and broadcast. Whitespace around each
+          # entry is trimmed so the secret can be either "id1,id2" or
+          # "id1, id2" without surprises. Failures on individual chats are
+          # tolerated — we want the rest of the fan-out to still go through.
+          IFS=',' read -ra accounts <<< "$TG_ACCOUNTS"
+          fail_count=0
+          for raw in "${accounts[@]}"; do
+            chat="$(echo -n "$raw" | tr -d '[:space:]')"
+            [ -z "$chat" ] && continue
+            if ! curl -sS --fail \
+              -X POST "https://api.telegram.org/bot${TG_CICD_BOT}/sendMessage" \
+              -d "chat_id=${chat}" \
+              --data-urlencode "text=${text}" \
+              > /dev/null; then
+              echo "Telegram delivery failed for chat ${chat}" >&2
+              fail_count=$((fail_count + 1))
+            fi
+          done
+          if [ "$fail_count" -gt 0 ]; then
+            echo "::warning::Telegram delivery failed for ${fail_count} chat(s)"
+          fi
