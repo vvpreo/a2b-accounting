@@ -48,6 +48,8 @@ open "/Applications/A2B Finances.app"
 
 **Где живут данные:** `~/Library/Application Support/net.vvpreo.finances/finances.db` (плюс WAL-файлы). Это путь по умолчанию для production-DMG. Между обновлениями приложение сохраняет БД и применяет новые миграции на старте автоматически (см. `db.rs` и идемпотентную таблицу `schema_migrations`).
 
+Пользователь может перенаправить хранение в произвольную папку прямо из настроек (Settings → «Директория хранения данных»). Выбор записывается в pointer-файл `~/Library/Application Support/net.vvpreo.finances/data-dir.txt` — он всегда лежит в стандартной директории и указывает на актуальное место. Env-переменная `FINANCES_DATA_DIR` (dev) переопределяет и UI-выбор, и дефолт. Через те же настройки доступен бэкап/восстановление БД в ZIP-архив (см. ниже).
+
 ## Architecture
 
 Два слоя, общающиеся через Tauri `invoke`:
@@ -168,7 +170,7 @@ finances-v2/
 │       ├── Settings.tsx              селектор языка (хранится в БД)
 │       └── ImportDialog.tsx          двухшаговый мастер импорта CSV (preview + import)
 ├── src-tauri/                        Rust backend
-│   ├── Cargo.toml                    зависимости: rusqlite, rust_decimal, chrono, thiserror, tauri-plugin-window-state
+│   ├── Cargo.toml                    зависимости: rusqlite, rust_decimal, chrono, thiserror, tauri-plugin-window-state, tauri-plugin-dialog, zip
 │   ├── tauri.conf.json               конфигурация окна и бандла
 │   ├── capabilities/default.json     permissions webview
 │   ├── migrations/
@@ -193,7 +195,8 @@ finances-v2/
 │       ├── categories.rs             create/list/update/delete + наследование kind + тесты
 │       ├── transaction_categories.rs set/list с проверкой kind, инварианта суммы и каскадов + тесты
 │       ├── currencies.rs             list_currencies (справочник валют + rate_source) + тесты
-│       └── settings.rs               get_setting / set_setting (UPSERT в app_settings)
+│       ├── settings.rs               get_setting / set_setting (UPSERT в app_settings)
+│       └── backup.rs                 backup_to_zip / restore_from_zip / data_dir_info / set_data_dir / reset_data_dir / restart_app + тесты
 ├── scripts/
 │   ├── dev.sh                        запуск dev (проверяет FINANCES_DATA_DIR, нормализует в абсолют)
 │   └── build.sh                      релизная сборка
@@ -306,6 +309,8 @@ occurred_at,credit,debit,balance,peer,bank_description,comment
 - Связи переводов между своими счетами: колонка 🔗 на вкладке «Транзакции», двухкликовая привязка с проверками (разные счета, противоположное направление, не повторно), разрыв связи через подтверждение. В отчёте взаимно покрывающиеся пары исключаются автоматически.
 - i18n (ru/en), хранение выбранного языка в БД.
 - Сохранение позиции и размера окна между запусками.
+- Бэкап и восстановление БД через UI (Settings): выгрузка в ZIP с предварительным `wal_checkpoint(TRUNCATE)`, восстановление с валидацией архива (валидная SQLite + наличие `schema_migrations`) и автоматическим переименованием текущей `finances.db` в `finances.db.bak-<UTC-timestamp>`. После восстановления приложение перезапускается.
+- Смена директории хранения данных через UI: «switch»-модель — выбор переписывает pointer-файл `data-dir.txt` в дефолтной appdata-директории и перезапускает приложение; если в новой папке уже есть `finances.db`, открывается она, иначе создаётся пустая. Можно вернуть дефолт. UI блокируется, если путь задан env-переменной `FINANCES_DATA_DIR`.
 
 В очереди (`TO REVIEW` в [TODO.md](TODO.md)):
 - Приёмка справочника категорий.

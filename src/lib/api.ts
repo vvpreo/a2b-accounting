@@ -101,6 +101,54 @@ export function dataDir(): Promise<string> {
   return invoke<string>("data_dir");
 }
 
+/// Snapshot of where the DB lives and how that path was decided. `source`
+/// values: `"default"` (platform appdata), `"env"` (FINANCES_DATA_DIR env
+/// override — UI must hide the "change directory" action), `"pointer"`
+/// (user-set via Settings). `defaultPath` is the platform-default that
+/// `reset_data_dir` would revert to.
+export interface DataDirInfo {
+  path: string;
+  defaultPath: string;
+  source: "default" | "env" | "pointer";
+  envOverride: boolean;
+}
+
+export function dataDirInfo(): Promise<DataDirInfo> {
+  return invoke<DataDirInfo>("data_dir_info");
+}
+
+/// Switch the data dir for the *next* launch. The command only writes a
+/// pointer file in the platform-default appdata directory — the running
+/// app keeps using the current DB until the caller triggers a restart.
+export function setDataDir(path: string): Promise<void> {
+  return invoke<void>("set_data_dir", { path });
+}
+
+/// Clear the data-dir pointer, restoring the platform-default location on
+/// next launch.
+export function resetDataDir(): Promise<void> {
+  return invoke<void>("reset_data_dir");
+}
+
+/// Dump the current DB (after a WAL checkpoint) to a single-entry ZIP at
+/// the given absolute path.
+export function backupToZip(zipPath: string): Promise<void> {
+  return invoke<void>("backup_to_zip", { zipPath });
+}
+
+/// Validate and install a previously-created ZIP backup. The current
+/// `finances.db` is renamed to `finances.db.bak-<utc-timestamp>` before
+/// the new file is moved into place. Caller must restart afterwards.
+export function restoreFromZip(zipPath: string): Promise<void> {
+  return invoke<void>("restore_from_zip", { zipPath });
+}
+
+/// Cleanly restart the running app. Used after backup/restore/dir-change
+/// to reopen the DB on the new on-disk state.
+export function restartApp(): Promise<void> {
+  return invoke<void>("restart_app");
+}
+
 export function createAccount(args: {
   name: string;
   kind?: AccountKind;

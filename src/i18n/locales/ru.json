@@ -358,6 +358,53 @@
       "clearing": "Удаляю...",
       "errorClearing": "Не удалось очистить данные: {message}"
     },
+    "backup": {
+      "title": "Бэкап и восстановление",
+      "hint": "Скачайте копию данных в ZIP-архиве или восстановите ранее сохранённый бэкап. ZIP содержит только finances.db с предварительным сливом WAL — этого достаточно для полного восстановления.",
+      "backupButton": "Сохранить ZIP-архив",
+      "backupSaving": "Сохраняю...",
+      "backupDefaultName": "a2b-finances-backup-{date}.zip",
+      "backupSuccess": "Бэкап сохранён: {path}",
+      "backupError": "Не удалось сохранить бэкап: {message}",
+      "restoreButton": "Восстановить из ZIP",
+      "restoreConfirmTitle": "Восстановить данные из ZIP?",
+      "restoreConfirmText": "Текущие данные будут переименованы в finances.db.bak-<метка-времени> в той же директории. Затем будет установлена БД из архива и приложение перезапустится. Продолжить?",
+      "restoreConfirmYes": "Да, восстановить и перезапустить",
+      "restoreRestoring": "Восстанавливаю...",
+      "restoreError": "Не удалось восстановить: {message}",
+      "errorCodes": {
+        "backup.no_db": "finances.db не найден в текущей директории данных.",
+        "restore.missing_db_in_zip": "В архиве нет finances.db.",
+        "restore.invalid_sqlite": "Файл finances.db в архиве не открывается как SQLite.",
+        "restore.no_schema_migrations": "В архиве не та схема — отсутствует таблица schema_migrations."
+      }
+    },
+    "dataDir": {
+      "title": "Директория хранения данных",
+      "hint": "Здесь лежит finances.db и связанные WAL-файлы. По умолчанию — стандартная папка приложения macOS. Можно указать любую другую папку (например, в iCloud Drive или на внешнем диске). После смены приложение перезапустится.",
+      "currentLabel": "Текущая папка",
+      "defaultLabel": "Папка по умолчанию",
+      "sourceDefault": "по умолчанию",
+      "sourcePointer": "выбрана пользователем",
+      "sourceEnv": "переопределена через FINANCES_DATA_DIR (env)",
+      "envHint": "Путь задан через переменную окружения FINANCES_DATA_DIR. Смена через UI отключена — измените переменную и перезапустите приложение.",
+      "changeButton": "Выбрать другую папку",
+      "resetButton": "Вернуть папку по умолчанию",
+      "confirmTitle": "Перейти на новую папку с данными?",
+      "confirmText": "Приложение перезапустится. Если в выбранной папке уже есть finances.db — будет открыта она; если нет — будет создана пустая БД. Старые данные останутся на прежнем месте нетронутыми. Новый путь: {path}",
+      "confirmYes": "Да, перезапустить",
+      "resetConfirmTitle": "Вернуть папку по умолчанию?",
+      "resetConfirmText": "Приложение перезапустится и будет использовать папку: {path}",
+      "errorChanging": "Не удалось переключить директорию: {message}",
+      "errorCodes": {
+        "set_data_dir.empty_path": "Пустой путь.",
+        "set_data_dir.not_absolute": "Путь должен быть абсолютным.",
+        "set_data_dir.env_override": "Путь зафиксирован переменной окружения FINANCES_DATA_DIR — смена через UI невозможна.",
+        "set_data_dir.create_dir": "Не удалось создать папку.",
+        "set_data_dir.write_pointer": "Не удалось записать указатель папки.",
+        "set_data_dir.commit_pointer": "Не удалось зафиксировать указатель папки."
+      }
+    },
     "tabs": {
       "general": "Общие",
       "currencies": "Валюты"

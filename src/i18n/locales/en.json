@@ -348,6 +348,53 @@
       "clearing": "Clearing...",
       "errorClearing": "Failed to clear data: {message}"
     },
+    "backup": {
+      "title": "Backup & restore",
+      "hint": "Download a ZIP copy of your data or restore from a previously saved backup. The ZIP contains only finances.db (with a WAL checkpoint applied) — that's all you need for a full restore.",
+      "backupButton": "Save ZIP backup",
+      "backupSaving": "Saving...",
+      "backupDefaultName": "a2b-finances-backup-{date}.zip",
+      "backupSuccess": "Backup saved: {path}",
+      "backupError": "Failed to save backup: {message}",
+      "restoreButton": "Restore from ZIP",
+      "restoreConfirmTitle": "Restore data from ZIP?",
+      "restoreConfirmText": "Your current data will be renamed to finances.db.bak-<timestamp> in the same directory. The DB from the archive will be installed in its place and the app will restart. Continue?",
+      "restoreConfirmYes": "Yes, restore and restart",
+      "restoreRestoring": "Restoring...",
+      "restoreError": "Failed to restore: {message}",
+      "errorCodes": {
+        "backup.no_db": "finances.db was not found in the current data directory.",
+        "restore.missing_db_in_zip": "The archive does not contain finances.db.",
+        "restore.invalid_sqlite": "The finances.db file in the archive does not open as a valid SQLite database.",
+        "restore.no_schema_migrations": "The archive has the wrong schema — schema_migrations table is missing."
+      }
+    },
+    "dataDir": {
+      "title": "Data directory",
+      "hint": "Where finances.db and its WAL files live. Defaults to the standard macOS app directory. You can pick any other folder (e.g. inside iCloud Drive or an external drive). The app restarts after switching.",
+      "currentLabel": "Current folder",
+      "defaultLabel": "Default folder",
+      "sourceDefault": "default",
+      "sourcePointer": "custom",
+      "sourceEnv": "overridden via FINANCES_DATA_DIR (env)",
+      "envHint": "The path is fixed by the FINANCES_DATA_DIR environment variable. The UI switcher is disabled — change the variable and restart the app instead.",
+      "changeButton": "Pick a different folder",
+      "resetButton": "Reset to default folder",
+      "confirmTitle": "Switch to the new data folder?",
+      "confirmText": "The app will restart. If the target folder already contains finances.db it will be opened; otherwise an empty DB will be created. Your existing data stays where it is, untouched. New path: {path}",
+      "confirmYes": "Yes, restart",
+      "resetConfirmTitle": "Reset to the default folder?",
+      "resetConfirmText": "The app will restart and use: {path}",
+      "errorChanging": "Failed to switch directory: {message}",
+      "errorCodes": {
+        "set_data_dir.empty_path": "Path is empty.",
+        "set_data_dir.not_absolute": "Path must be absolute.",
+        "set_data_dir.env_override": "Path is locked by the FINANCES_DATA_DIR environment variable — UI switch is disabled.",
+        "set_data_dir.create_dir": "Failed to create the folder.",
+        "set_data_dir.write_pointer": "Failed to write the data-dir pointer.",
+        "set_data_dir.commit_pointer": "Failed to commit the data-dir pointer."
+      }
+    },
     "tabs": {
       "general": "General",
       "currencies": "Currencies"

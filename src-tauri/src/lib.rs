@@ -1,5 +1,6 @@
 mod account_status;
 mod accounts;
+mod backup;
 mod cash_transactions;
 mod cash_withdrawals;
 mod categories;
@@ -17,46 +18,125 @@ mod transaction_links;
 mod transactions;
 mod transfer_deltas;
 
+use std::fs;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 use tauri::Manager;
 
 const ENV_DATA_DIR: &str = "FINANCES_DATA_DIR";
+const DATA_DIR_POINTER_FILE: &str = "data-dir.txt";
 
-static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+/// Where the actual `finances.db` lives, *and* how we decided that. The
+/// platform-default appdata path travels alongside — even when the user
+/// has redirected storage to a custom location, the pointer file that
+/// records that choice still lives in the canonical appdata directory so
+/// the next launch can find it.
+pub struct DataDirContext {
+    pub appdata_default: PathBuf,
+    pub data_dir: PathBuf,
+    pub source: DataDirSource,
+}
 
-fn resolve_data_dir(app_handle: &tauri::AppHandle) -> PathBuf {
-    let path = match std::env::var(ENV_DATA_DIR) {
-        Ok(value) if !value.is_empty() => PathBuf::from(value),
-        _ => app_handle
-            .path()
-            .app_data_dir()
-            .expect("failed to resolve platform app data dir"),
-    };
-    std::fs::create_dir_all(&path).unwrap_or_else(|e| {
-        panic!("failed to create data directory {}: {e}", path.display());
-    });
-    path
+#[derive(Clone, Copy)]
+pub enum DataDirSource {
+    /// No env var, no pointer file — we're on the platform-default path.
+    Default,
+    /// `FINANCES_DATA_DIR` env var is set. UI must not let the user
+    /// switch the directory in this mode (would be silently ignored).
+    Env,
+    /// Pointer file in the platform-default appdata dir redirects us
+    /// elsewhere. UI can change this freely.
+    Pointer,
+}
+
+static DATA_DIR_CTX: OnceLock<DataDirContext> = OnceLock::new();
+
+pub fn data_dir_context() -> &'static DataDirContext {
+    DATA_DIR_CTX
+        .get()
+        .expect("data dir context not initialised — call resolve_data_dir during setup")
+}
+
+fn resolve_data_dir(app_handle: &tauri::AppHandle) -> DataDirContext {
+    // The platform-default path is what `path().app_data_dir()` returns —
+    // typically `~/Library/Application Support/<bundle id>/` on macOS. We
+    // need it regardless of which mode we end up in because the pointer
+    // file always lives here.
+    let appdata_default = app_handle
+        .path()
+        .app_data_dir()
+        .expect("failed to resolve platform app data dir");
+    if let Err(e) = fs::create_dir_all(&appdata_default) {
+        panic!(
+            "failed to create platform appdata dir {}: {e}",
+            appdata_default.display()
+        );
+    }
+
+    // Env override wins — used in dev (via .envrc) and as a last-ditch
+    // escape hatch for production. We never touch the pointer file in
+    // this mode; the env var is purely runtime.
+    if let Ok(value) = std::env::var(ENV_DATA_DIR) {
+        if !value.is_empty() {
+            let path = PathBuf::from(value);
+            if let Err(e) = fs::create_dir_all(&path) {
+                panic!("failed to create FINANCES_DATA_DIR {}: {e}", path.display());
+            }
+            return DataDirContext {
+                appdata_default,
+                data_dir: path,
+                source: DataDirSource::Env,
+            };
+        }
+    }
+
+    // Pointer file: a single line containing the absolute path to the
+    // data dir. Empty / missing / malformed → fall back to default.
+    let pointer = appdata_default.join(DATA_DIR_POINTER_FILE);
+    if let Ok(s) = fs::read_to_string(&pointer) {
+        let trimmed = s.trim();
+        if !trimmed.is_empty() {
+            let path = PathBuf::from(trimmed);
+            // We try to create the directory — if the user moved the
+            // external drive away we don't want to crash, just log and
+            // fall back to default so the app still launches.
+            if fs::create_dir_all(&path).is_ok() {
+                return DataDirContext {
+                    appdata_default,
+                    data_dir: path,
+                    source: DataDirSource::Pointer,
+                };
+            } else {
+                eprintln!(
+                    "data-dir pointer points at unreachable path {} — falling back to default",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    DataDirContext {
+        appdata_default: appdata_default.clone(),
+        data_dir: appdata_default,
+        source: DataDirSource::Default,
+    }
 }
 
 #[tauri::command]
 fn data_dir() -> String {
-    DATA_DIR
-        .get()
-        .expect("data dir not initialized")
-        .to_string_lossy()
-        .into_owned()
+    data_dir_context().data_dir.to_string_lossy().into_owned()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let dir = resolve_data_dir(app.handle());
-            let conn = db::open(&dir).unwrap_or_else(|e| {
-                panic!("failed to open database in {}: {e}", dir.display());
+            let ctx = resolve_data_dir(app.handle());
+            let conn = db::open(&ctx.data_dir).unwrap_or_else(|e| {
+                panic!("failed to open database in {}: {e}", ctx.data_dir.display());
             });
             seed::seed_if_first_launch(&conn).unwrap_or_else(|e| {
                 panic!("failed to seed demo data: {e}");
@@ -65,7 +145,10 @@ pub fn run() {
                 panic!("failed to ensure accounting report: {e}");
             });
             app.manage::<db::DbState>(Mutex::new(conn));
-            DATA_DIR.set(dir).expect("data dir already initialized");
+            DATA_DIR_CTX
+                .set(ctx)
+                .ok()
+                .expect("data dir context already initialised");
             // After managed state is in place: spawn background rate fetches
             // for any currency that has accounts but no rates yet (covers both
             // first-launch demo seeding and pre-existing user data that
@@ -77,6 +160,12 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             data_dir,
+            backup::data_dir_info,
+            backup::set_data_dir,
+            backup::reset_data_dir,
+            backup::backup_to_zip,
+            backup::restore_from_zip,
+            backup::restart_app,
             accounts::create_account,
             accounts::list_accounts,
             accounts::update_account,
