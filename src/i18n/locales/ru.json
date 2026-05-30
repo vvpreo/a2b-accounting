@@ -483,7 +483,17 @@
     "fold": "Свернуть",
     "unfold": "Развернуть",
     "loading": "Считаю...",
-    "errorLoading": "Не удалось построить отчёт: {message}"
+    "errorLoading": "Не удалось построить отчёт: {message}",
+    "cellTxns": {
+      "empty": "Нет транзакций",
+      "total": "Итого",
+      "colDate": "Дата",
+      "colAccount": "Счёт",
+      "colAmount": "Сумма",
+      "colPeer": "Контрагент",
+      "colDescription": "Описание",
+      "colComment": "Комментарий"
+    }
   },
   "errors": {
     "missingOccurredAt": "Строка {row}: отсутствует occurred_at",

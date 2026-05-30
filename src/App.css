@@ -4277,6 +4277,93 @@ code {
   font-weight: 500;
 }
 
+/* Non-zero value/Total cells open the transaction drill-down on click. */
+.pivot-value-cell--clickable {
+  cursor: pointer;
+}
+
+.pivot-value-cell--clickable:hover {
+  background: #eef2ff;
+  box-shadow: inset 0 0 0 1px #c7d2fe;
+}
+
+/* ----- Cell drill-down modal ----- */
+.cell-txns-modal {
+  width: min(1100px, 96vw);
+}
+
+.cell-txns-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.cell-txns-subtitle {
+  font-size: 13px;
+  color: #71717a;
+}
+
+.cell-txns-body {
+  padding: 0;
+}
+
+.cell-txns-empty {
+  padding: 24px 16px;
+  color: #71717a;
+  text-align: center;
+}
+
+.cell-txns-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  table-layout: fixed;
+}
+
+.cell-txns-table th,
+.cell-txns-table td {
+  padding: 6px 12px;
+  border-bottom: 1px solid #f1f5f9;
+  text-align: left;
+}
+
+.cell-txns-table thead th {
+  position: sticky;
+  top: 0;
+  background: #f8fafc;
+  font-weight: 600;
+  color: #52525b;
+  z-index: 1;
+}
+
+.cell-txns-table .cell-txns-amount {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cell-txns-table .cell-txns-date {
+  white-space: nowrap;
+}
+
+.cell-txns-ellipsis {
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cell-txns-footer {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.cell-txns-total {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Sign-colored cells in the Metrics section. Default (zero) keeps the inherited
    text color so the row reads neutral when nothing happened that period. */
 .pivot-value-cell--positive {

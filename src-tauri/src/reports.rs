@@ -91,6 +91,47 @@ pub struct ReportResponse {
     pub internal_transfers: InternalTransferMetrics,
 }
 
+/// Identifies a single report cell the user clicked, so the backend can
+/// reconstruct exactly which transactions (and what share of each) rolled into
+/// that number. Mirrors the aggregation in `compute_report_inner` — same scope,
+/// same link exclusion, same uncategorized attribution — so the drill-down
+/// total always equals the displayed cell.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellTarget {
+    /// "income" | "expense" — which section the clicked row belongs to.
+    pub section: String,
+    /// `None` => the virtual "Без категории" row.
+    pub category_id: Option<i64>,
+    /// `true` for a group row (parent + its selected descendants, the subtree
+    /// total the report shows). `false` for a leaf / "own" row (direct shares
+    /// of exactly this category).
+    pub include_subtree: bool,
+    /// `None` => the rightmost "Итого" column (the whole `[from, to]` range).
+    pub period_key: Option<String>,
+}
+
+/// One contributing transaction with the portion (`share_minor`) that landed in
+/// the clicked cell. Money fields are decimal strings, matching the frontend
+/// `Transaction` shape.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellTransaction {
+    pub id: i64,
+    pub account_id: i64,
+    pub occurred_at_utc: String,
+    pub credit: String,
+    pub debit: String,
+    pub balance: String,
+    pub peer: Option<String>,
+    pub bank_description: Option<String>,
+    pub comment: Option<String>,
+    pub is_correcting: bool,
+    /// Portion of this transaction attributed to the clicked cell, in minor
+    /// units. The sum of this across all returned rows equals the cell value.
+    pub share_minor: i64,
+}
+
 // ---------- Pure helpers (covered by unit tests) ----------
 
 fn parse_granularity(s: &str) -> Result<Granularity, String> {
@@ -620,6 +661,61 @@ fn load_shares(conn: &Connection, txn_ids: &[i64]) -> Result<Vec<ShareRow>, Stri
         .map_err(|e| e.to_string())
 }
 
+/// Full transaction details for the drill-down modal, keyed by id. Unlike
+/// `load_transactions` (which only needs id/date/amounts for aggregation) this
+/// fetches every display field. Money columns are formatted to decimal strings.
+fn load_cell_txn_details(
+    conn: &Connection,
+    txn_ids: &[i64],
+) -> Result<HashMap<i64, CellTransaction>, String> {
+    let mut out: HashMap<i64, CellTransaction> = HashMap::new();
+    if txn_ids.is_empty() {
+        return Ok(out);
+    }
+    let placeholders: Vec<String> = (1..=txn_ids.len()).map(|i| format!("?{i}")).collect();
+    let sql = format!(
+        "SELECT id, account_id, occurred_at_utc, credit, debit, balance,
+                peer, bank_description, comment, is_correcting
+         FROM transactions
+         WHERE id IN ({})",
+        placeholders.join(",")
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let params_vec: Vec<Box<dyn rusqlite::ToSql>> = txn_ids
+        .iter()
+        .map(|id| Box::new(*id) as Box<dyn rusqlite::ToSql>)
+        .collect();
+    let params_refs: Vec<&dyn rusqlite::ToSql> =
+        params_vec.iter().map(|b| b.as_ref()).collect();
+    let rows = stmt
+        .query_map(params_refs.as_slice(), |r| {
+            let id: i64 = r.get(0)?;
+            let credit: i64 = r.get(3)?;
+            let debit: i64 = r.get(4)?;
+            let balance: i64 = r.get(5)?;
+            Ok(CellTransaction {
+                id,
+                account_id: r.get(1)?,
+                occurred_at_utc: r.get(2)?,
+                credit: format_minor(credit),
+                debit: format_minor(debit),
+                balance: format_minor(balance),
+                peer: r.get(6)?,
+                bank_description: r.get(7)?,
+                comment: r.get(8)?,
+                is_correcting: r.get::<_, i64>(9)? != 0,
+                // Filled in by the caller once the cell share is known.
+                share_minor: 0,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    for row in rows {
+        let txn = row.map_err(|e| e.to_string())?;
+        out.insert(txn.id, txn);
+    }
+    Ok(out)
+}
+
 #[tauri::command]
 pub fn compute_report(
     state: State<'_, DbState>,
@@ -627,6 +723,160 @@ pub fn compute_report(
 ) -> Result<ReportResponse, String> {
     let conn = state.lock().map_err(|e| e.to_string())?;
     compute_report_inner(&conn, &request)
+}
+
+#[tauri::command]
+pub fn report_cell_transactions(
+    state: State<'_, DbState>,
+    request: ReportRequest,
+    target: CellTarget,
+) -> Result<Vec<CellTransaction>, String> {
+    let conn = state.lock().map_err(|e| e.to_string())?;
+    report_cell_transactions_inner(&conn, &request, &target)
+}
+
+/// Reconstructs the list of transactions behind a single report cell. Reuses
+/// the exact same scope/exclusion/attribution rules as `compute_report_inner`
+/// so the returned shares sum to the displayed cell value.
+pub(crate) fn report_cell_transactions_inner(
+    conn: &Connection,
+    req: &ReportRequest,
+    target: &CellTarget,
+) -> Result<Vec<CellTransaction>, String> {
+    let from = parse_iso_date(&req.from)?;
+    let to = parse_iso_date(&req.to)?;
+    if to < from {
+        return Err("`to` must be on or after `from`".to_string());
+    }
+    let gran = parse_granularity(&req.granularity)?;
+
+    let is_income = match target.section.as_str() {
+        "income" => true,
+        "expense" => false,
+        other => return Err(format!("invalid section '{other}'")),
+    };
+    let expected_kind = if is_income { "income" } else { "expense" };
+    let selected_ids: &[i64] = if is_income {
+        &req.income_category_ids
+    } else {
+        &req.expense_category_ids
+    };
+    let selected_set: HashSet<i64> = selected_ids.iter().copied().collect();
+
+    let cats = load_categories(conn)?;
+    let layout = section_layout(selected_ids, &cats);
+
+    // The set of category ids whose shares feed the clicked cell. Empty in
+    // "uncategorized" mode (category_id == None), where attribution follows the
+    // residual/unselected rule instead.
+    let uncat_mode = target.category_id.is_none();
+    let mut target_set: HashSet<i64> = HashSet::new();
+    if let Some(cid) = target.category_id {
+        let pos = layout
+            .iter()
+            .position(|(id, _)| *id == cid)
+            .ok_or_else(|| format!("category {cid} is not part of the selected section"))?;
+        target_set.insert(cid);
+        if target.include_subtree {
+            let base_depth = layout[pos].1;
+            for (id, depth) in layout.iter().skip(pos + 1) {
+                if *depth <= base_depth {
+                    break;
+                }
+                target_set.insert(*id);
+            }
+        }
+    }
+
+    let txns = load_transactions(conn, &req.account_ids, from, to)?;
+    let txn_ids: Vec<i64> = txns.iter().map(|t| t.id).collect();
+    let shares = load_shares(conn, &txn_ids)?;
+    let excluded_by_link = excluded_by_paired_link(conn, &txn_ids)?;
+
+    let mut shares_by_txn: HashMap<i64, Vec<&ShareRow>> = HashMap::new();
+    for s in &shares {
+        shares_by_txn.entry(s.transaction_id).or_default().push(s);
+    }
+
+    // (txn_id, share_into_cell) for every contributing transaction.
+    let mut contributions: Vec<(i64, i64)> = Vec::new();
+    for txn in &txns {
+        let local = local_date(&txn.occurred_at_utc, &txn.timezone_offset)?;
+        if local < from || local > to {
+            continue;
+        }
+        let key = period_key(local, gran);
+        if let Some(want) = &target.period_key {
+            if want != &key {
+                continue;
+            }
+        }
+        // Internal-transfer halves never count toward income/expense, so they
+        // can't sit behind a category cell either.
+        if excluded_by_link.contains(&txn.id) {
+            continue;
+        }
+        let direction_is_income = txn.credit > 0;
+        if direction_is_income != is_income {
+            continue;
+        }
+        let total_minor = txn.credit + txn.debit;
+        if total_minor == 0 {
+            continue;
+        }
+
+        let txn_shares = shares_by_txn.get(&txn.id).cloned().unwrap_or_default();
+        let mut allocated = 0_i64;
+        let mut in_target = 0_i64;
+        let mut unselected = 0_i64;
+        for s in &txn_shares {
+            let cat = match cats.get(&s.category_id) {
+                Some(c) => c,
+                None => continue,
+            };
+            if cat.kind != expected_kind {
+                continue;
+            }
+            allocated += s.share_minor;
+            if selected_set.contains(&s.category_id) {
+                if target_set.contains(&s.category_id) {
+                    in_target += s.share_minor;
+                }
+            } else {
+                unselected += s.share_minor;
+            }
+        }
+
+        let share = if uncat_mode {
+            let residual = total_minor - allocated;
+            unselected + if residual > 0 { residual } else { 0 }
+        } else {
+            in_target
+        };
+        if share > 0 {
+            contributions.push((txn.id, share));
+        }
+    }
+
+    if contributions.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let ids: Vec<i64> = contributions.iter().map(|(id, _)| *id).collect();
+    let mut details = load_cell_txn_details(conn, &ids)?;
+    let mut out: Vec<CellTransaction> = Vec::with_capacity(contributions.len());
+    for (id, share) in contributions {
+        if let Some(mut txn) = details.remove(&id) {
+            txn.share_minor = share;
+            out.push(txn);
+        }
+    }
+    out.sort_by(|a, b| {
+        a.occurred_at_utc
+            .cmp(&b.occurred_at_utc)
+            .then(a.id.cmp(&b.id))
+    });
+    Ok(out)
 }
 
 pub(crate) fn compute_report_inner(
@@ -1803,5 +2053,241 @@ mod tests {
         );
         assert_eq!(resp.internal_transfers.outflows, vec!["500.00", "0.00"]);
         assert_eq!(resp.internal_transfers.inflows, vec!["0.00", "500.00"]);
+    }
+
+    // ---------- Cell drill-down tests ----------
+
+    fn target(
+        section: &str,
+        category_id: Option<i64>,
+        include_subtree: bool,
+        period_key: Option<&str>,
+    ) -> CellTarget {
+        CellTarget {
+            section: section.to_string(),
+            category_id,
+            include_subtree,
+            period_key: period_key.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn cell_leaf_category_over_period_returns_share() {
+        let f = open_fixture("RUB");
+        let salary = insert_root_cat(&f, "Salary", "income");
+        let t1 = insert_txn(&f, "2026-04-15T09:00:00Z", 50000_00, 0, false);
+        let t2 = insert_txn(&f, "2026-05-15T09:00:00Z", 60000_00, 0, false);
+        link(&f, t1, salary, 50000_00, 0);
+        link(&f, t2, salary, 60000_00, 0);
+        let r = req(&[f.account_id], &[], &[salary], "2026-04-01", "2026-05-31", "month");
+
+        let rows = report_cell_transactions_inner(
+            &f.conn,
+            &r,
+            &target("income", Some(salary), false, Some("2026-04")),
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, t1);
+        assert_eq!(rows[0].share_minor, 50000_00);
+        assert_eq!(rows[0].credit, "50000.00");
+    }
+
+    #[test]
+    fn cell_group_includes_subtree_but_own_does_not() {
+        let f = open_fixture("RUB");
+        let food = insert_root_cat(&f, "Food", "expense");
+        let cafe = insert_child_cat(&f, "Cafe", food, "expense");
+        let t_food = insert_txn(&f, "2026-04-10T10:00:00Z", 0, 1000_00, false);
+        let t_cafe = insert_txn(&f, "2026-04-12T10:00:00Z", 0, 500_00, false);
+        link(&f, t_food, food, 1000_00, 0);
+        link(&f, t_cafe, cafe, 500_00, 0);
+        let r = req(&[f.account_id], &[food, cafe], &[], "2026-04-01", "2026-04-30", "month");
+
+        // Group row (parent + descendants) — both transactions.
+        let group = report_cell_transactions_inner(
+            &f.conn,
+            &r,
+            &target("expense", Some(food), true, Some("2026-04")),
+        )
+        .unwrap();
+        let group_sum: i64 = group.iter().map(|t| t.share_minor).sum();
+        assert_eq!(group.len(), 2);
+        assert_eq!(group_sum, 1500_00);
+
+        // The same value the report shows for the Food group row.
+        let report = compute_report_inner(&f.conn, &r).unwrap();
+        let food_row = report
+            .expense
+            .rows
+            .iter()
+            .find(|row| row.category_id == Some(food))
+            .unwrap();
+        // Report row stores the own value; the rendered "group" subtree adds the
+        // child — assert our drill-down matches own(1000)+cafe(500).
+        assert_eq!(food_row.values[0], "1000.00");
+        assert_eq!(format_minor(group_sum), "1500.00");
+
+        // Own row (direct shares only) — just the Food transaction.
+        let own = report_cell_transactions_inner(
+            &f.conn,
+            &r,
+            &target("expense", Some(food), false, Some("2026-04")),
+        )
+        .unwrap();
+        assert_eq!(own.len(), 1);
+        assert_eq!(own[0].id, t_food);
+        assert_eq!(own[0].share_minor, 1000_00);
+    }
+
+    #[test]
+    fn cell_uncategorized_collects_residual_and_unselected() {
+        let f = open_fixture("RUB");
+        let food = insert_root_cat(&f, "Food", "expense");
+        let cafe = insert_child_cat(&f, "Cafe", food, "expense");
+        let fully = insert_txn(&f, "2026-04-05T10:00:00Z", 0, 1000_00, false);
+        let partial = insert_txn(&f, "2026-04-10T10:00:00Z", 0, 1000_00, false);
+        let unselected = insert_txn(&f, "2026-04-12T10:00:00Z", 0, 200_00, false);
+        link(&f, fully, food, 1000_00, 0); // fully categorised → not in uncat
+        link(&f, partial, food, 600_00, 0); // residual 400 → uncat
+        link(&f, unselected, cafe, 200_00, 0); // Cafe not selected → uncat
+        // Only Food is selected.
+        let r = req(&[f.account_id], &[food], &[], "2026-04-01", "2026-04-30", "month");
+
+        let rows = report_cell_transactions_inner(
+            &f.conn,
+            &r,
+            &target("expense", None, false, Some("2026-04")),
+        )
+        .unwrap();
+        let sum: i64 = rows.iter().map(|t| t.share_minor).sum();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(sum, 600_00); // 400 residual + 200 unselected
+
+        // Matches the report's uncategorized row.
+        let report = compute_report_inner(&f.conn, &r).unwrap();
+        let uncat = report
+            .expense
+            .rows
+            .iter()
+            .find(|row| row.category_id.is_none())
+            .unwrap();
+        assert_eq!(uncat.total, "600.00");
+    }
+
+    #[test]
+    fn cell_total_column_sums_all_periods() {
+        let f = open_fixture("RUB");
+        let salary = insert_root_cat(&f, "Salary", "income");
+        let t1 = insert_txn(&f, "2026-04-15T09:00:00Z", 50000_00, 0, false);
+        let t2 = insert_txn(&f, "2026-05-15T09:00:00Z", 60000_00, 0, false);
+        link(&f, t1, salary, 50000_00, 0);
+        link(&f, t2, salary, 60000_00, 0);
+        let r = req(&[f.account_id], &[], &[salary], "2026-04-01", "2026-05-31", "month");
+
+        // period_key=None → the rightmost "Итого" column over the whole range.
+        let rows = report_cell_transactions_inner(
+            &f.conn,
+            &r,
+            &target("income", Some(salary), false, None),
+        )
+        .unwrap();
+        let sum: i64 = rows.iter().map(|t| t.share_minor).sum();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(sum, 110000_00);
+    }
+
+    #[test]
+    fn cell_split_transaction_returns_only_its_share() {
+        let f = open_fixture("RUB");
+        let food = insert_root_cat(&f, "Food", "expense");
+        let transport = insert_root_cat(&f, "Transport", "expense");
+        let t = insert_txn(&f, "2026-04-15T10:00:00Z", 0, 1000_00, false);
+        link(&f, t, food, 600_00, 0);
+        link(&f, t, transport, 400_00, 1);
+        let r = req(&[f.account_id], &[food, transport], &[], "2026-04-01", "2026-04-30", "month");
+
+        let rows = report_cell_transactions_inner(
+            &f.conn,
+            &r,
+            &target("expense", Some(food), false, Some("2026-04")),
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, t);
+        // The cell shows the 600 share, NOT the full 1000 transaction.
+        assert_eq!(rows[0].share_minor, 600_00);
+        assert_eq!(rows[0].debit, "1000.00"); // full amount still available for display
+    }
+
+    #[test]
+    fn cell_excludes_linked_internal_transfer() {
+        let (_dir, conn, a1, a2, b1, b2) = fixture_two_accounts_for_transfers();
+        let salary: i64 = conn
+            .query_row(
+                "INSERT INTO categories (name, color, kind) VALUES ('Salary', '#000', 'income') RETURNING id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        // Real salary income on A1.
+        let real: i64 = conn
+            .query_row(
+                "INSERT INTO transactions
+                 (account_id, import_batch_id, occurred_at_utc, credit, debit, balance)
+                 VALUES (?1, ?2, '2026-04-05T09:00:00Z', 500_00, 0, 0) RETURNING id",
+                params![a1, b1],
+                |r| r.get(0),
+            )
+            .unwrap();
+        // Internal transfer A1 → A2, the incoming side miscategorised as Salary.
+        let out: i64 = conn
+            .query_row(
+                "INSERT INTO transactions
+                 (account_id, import_batch_id, occurred_at_utc, credit, debit, balance)
+                 VALUES (?1, ?2, '2026-04-10T10:00:00Z', 0, 1000_00, 0) RETURNING id",
+                params![a1, b1],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let inc: i64 = conn
+            .query_row(
+                "INSERT INTO transactions
+                 (account_id, import_batch_id, occurred_at_utc, credit, debit, balance)
+                 VALUES (?1, ?2, '2026-04-10T10:00:00Z', 1000_00, 0, 0) RETURNING id",
+                params![a2, b2],
+                |r| r.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO transaction_categories (transaction_id, category_id, share_minor, position)
+             VALUES (?1, ?3, 500_00, 0), (?2, ?3, 1000_00, 0)",
+            params![real, inc, salary],
+        )
+        .unwrap();
+        raw_insert_link(&conn, out, inc);
+
+        let r = ReportRequest {
+            account_ids: vec![a1, a2],
+            expense_category_ids: vec![],
+            income_category_ids: vec![salary],
+            from: "2026-04-01".to_string(),
+            to: "2026-04-30".to_string(),
+            granularity: "month".to_string(),
+        };
+        let rows = report_cell_transactions_inner(
+            &conn,
+            &r,
+            &target("income", Some(salary), false, Some("2026-04")),
+        )
+        .unwrap();
+        // Only the real salary survives; the linked transfer half is excluded.
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, real);
+        assert_eq!(rows[0].share_minor, 500_00);
+
+        // And it matches the report's Salary row.
+        let report = compute_report_inner(&conn, &r).unwrap();
+        assert_eq!(report.income.rows[0].total, "500.00");
     }
 }

@@ -8,6 +8,7 @@ import {
   ALL_METRIC_KEYS,
   BalanceMetrics,
   Category,
+  CellTarget,
   computeReport,
   firstTransactionDate,
   Granularity,
@@ -18,6 +19,7 @@ import {
   RangePreset,
   ReportConfig,
   ReportRange,
+  ReportRequest,
   ReportResponse,
   ReportRow,
   ReportView,
@@ -26,6 +28,17 @@ import {
 } from "../lib/api";
 import { formatMinorAsMoney, formatMoney, parseMoneyToMinor } from "../lib/money";
 import { CategoryPickerModal, computeInitialOrder } from "./report/CategoryPicker";
+import { CellTransactionsModal } from "./report/CellTransactionsModal";
+
+// Everything the drill-down modal needs about a clicked cell: the backend
+// target plus display labels echoed in the modal header.
+export interface CellClickInfo {
+  target: CellTarget;
+  categoryLabel: string;
+  periodLabel: string;
+  sectionKind: "income" | "expense";
+  amount: string;
+}
 
 interface Props {
   view: ReportView;
@@ -210,6 +223,10 @@ export function ReportViewPage({ view, onSaved }: Props) {
   // header's gear icon.
   const [metricsSettingsOpen, setMetricsSettingsOpen] = useState(false);
 
+  // The report cell the user clicked, if any — drives the transaction
+  // drill-down modal. `null` while closed.
+  const [cellModal, setCellModal] = useState<CellClickInfo | null>(null);
+
   const [response, setResponse] = useState<ReportResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -294,25 +311,40 @@ export function ReportViewPage({ view, onSaved }: Props) {
     setIncomeSelected(new Set(initialConfig.incomeCategoryIds));
   }, [view.id, view.name, initialConfig, categoriesLoaded, categories]);
 
-  // Recompute the report whenever any input that affects the data changes.
-  useEffect(() => {
-    let cancelled = false;
+  // The exact request that produces the currently displayed report. Memoized
+  // so the cell drill-down modal can replay the same scope/filters and get a
+  // transaction list consistent with the rendered numbers.
+  const reportRequest = useMemo<ReportRequest | null>(() => {
     const resolved = resolveRange(range, earliestTxnDate);
-    if (!resolved) return;
+    if (!resolved) return null;
     const { from, to } = resolved;
-    if (!from || !to || to < from) return;
-    setLoading(true);
-    setError(null);
-    const expenseSelOrdered = expenseOrder.filter((id) => expenseSelected.has(id));
-    const incomeSelOrdered = incomeOrder.filter((id) => incomeSelected.has(id));
-    computeReport({
+    if (!from || !to || to < from) return null;
+    return {
       accountIds,
-      expenseCategoryIds: expenseSelOrdered,
-      incomeCategoryIds: incomeSelOrdered,
+      expenseCategoryIds: expenseOrder.filter((id) => expenseSelected.has(id)),
+      incomeCategoryIds: incomeOrder.filter((id) => incomeSelected.has(id)),
       from,
       to,
       granularity,
-    })
+    };
+  }, [
+    range,
+    earliestTxnDate,
+    accountIds,
+    expenseOrder,
+    expenseSelected,
+    incomeOrder,
+    incomeSelected,
+    granularity,
+  ]);
+
+  // Recompute the report whenever the resolved request changes.
+  useEffect(() => {
+    if (!reportRequest) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    computeReport(reportRequest)
       .then((r) => {
         if (!cancelled) setResponse(r);
       })
@@ -325,16 +357,7 @@ export function ReportViewPage({ view, onSaved }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [
-    range,
-    granularity,
-    accountIds,
-    earliestTxnDate,
-    expenseOrder,
-    expenseSelected,
-    incomeOrder,
-    incomeSelected,
-  ]);
+  }, [reportRequest]);
 
   // ---- auto-save ----
   // We persist the active form state to the backend on a short debounce. The
@@ -448,6 +471,15 @@ export function ReportViewPage({ view, onSaved }: Props) {
     id: a.id,
     label: `${a.name || a.accountNumber || `#${a.id}`} · ${a.currency}`,
   }));
+
+  // id → display label, shared with the cell drill-down modal.
+  const accountNameById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const a of accounts) {
+      m.set(a.id, `${a.name || a.accountNumber || `#${a.id}`} · ${a.currency}`);
+    }
+    return m;
+  }, [accounts]);
 
   // Display options collapsed into a single multi-select dropdown — keeps
   // the toolbar compact even as we add more boolean toggles. The dropdown's
@@ -623,6 +655,16 @@ export function ReportViewPage({ view, onSaved }: Props) {
           onOpenMetricsSettings={() => setMetricsSettingsOpen(true)}
           onOpenIncomeSettings={() => setIncomePickerOpen(true)}
           onOpenExpenseSettings={() => setExpensePickerOpen(true)}
+          onCellClick={setCellModal}
+        />
+      )}
+
+      {cellModal && reportRequest && (
+        <CellTransactionsModal
+          request={reportRequest}
+          info={cellModal}
+          accountNameById={accountNameById}
+          onClose={() => setCellModal(null)}
         />
       )}
 
@@ -655,6 +697,9 @@ interface PivotProps {
   // each section's header.
   onOpenIncomeSettings: () => void;
   onOpenExpenseSettings: () => void;
+  // Fired when the user clicks a category/uncategorized value cell (or the
+  // Total column). Opens the transaction drill-down modal.
+  onCellClick: (info: CellClickInfo) => void;
 }
 
 function PivotTable({
@@ -666,6 +711,7 @@ function PivotTable({
   onOpenMetricsSettings,
   onOpenIncomeSettings,
   onOpenExpenseSettings,
+  onCellClick,
 }: PivotProps) {
   const t = useT();
   const { periods, expense, income, balances, internalTransfers } = response;
@@ -708,10 +754,12 @@ function PivotTable({
   // renderSection. Calling t() without params returns the raw template.
   const groupNameTemplate = t("report.groupRowName");
   const nPeriods = periods.length;
+  const totalLabel = t("report.totalColumn");
   const incomeRows = renderSection({
     section: income,
     sectionKey: "income",
     nPeriods,
+    periods,
     sectionCollapsed: incomeCollapsed,
     onToggleSection: () => setIncomeCollapsed((v) => !v),
     rowCollapsed: collapsed,
@@ -725,11 +773,14 @@ function PivotTable({
     showZeroRows,
     onOpenSettings: onOpenIncomeSettings,
     settingsLabel: t("report.incomeCategoriesSettings"),
+    onCellClick,
+    totalLabel,
   });
   const expenseRows = renderSection({
     section: expense,
     sectionKey: "expense",
     nPeriods,
+    periods,
     sectionCollapsed: expenseCollapsed,
     onToggleSection: () => setExpenseCollapsed((v) => !v),
     rowCollapsed: collapsed,
@@ -743,6 +794,8 @@ function PivotTable({
     showZeroRows,
     onOpenSettings: onOpenExpenseSettings,
     settingsLabel: t("report.expenseCategoriesSettings"),
+    onCellClick,
+    totalLabel,
   });
 
   const metricsRows = renderMetricsSection({
@@ -805,6 +858,9 @@ interface RenderSectionArgs {
   // header's per-period cells when the section has zero rows (in which case
   // we can't infer the column count from `rows[0]`).
   nPeriods: number;
+  // Period columns — needed to map a clicked value cell back to its period key
+  // and label for the drill-down modal.
+  periods: ReportResponse["periods"];
   sectionCollapsed: boolean;
   onToggleSection: () => void;
   rowCollapsed: Set<number>;
@@ -826,6 +882,11 @@ interface RenderSectionArgs {
   // modal upstream. Optional — older callers can omit both fields.
   onOpenSettings?: () => void;
   settingsLabel?: string;
+  // Opens the transaction drill-down modal for a clicked value/Total cell.
+  onCellClick: (info: CellClickInfo) => void;
+  // Label for the rightmost "Итого" column, echoed in the modal header when a
+  // Total cell is clicked.
+  totalLabel: string;
 }
 
 // One row in the visual plan. A backend row that has selected descendants is
@@ -898,6 +959,7 @@ function renderSection({
   section,
   sectionKey,
   nPeriods,
+  periods,
   sectionCollapsed,
   onToggleSection,
   rowCollapsed,
@@ -911,6 +973,8 @@ function renderSection({
   showZeroRows,
   onOpenSettings,
   settingsLabel,
+  onCellClick,
+  totalLabel,
 }: RenderSectionArgs): React.ReactElement[] {
   const { rows } = section;
   const { parents, hasDescendants, subtreeValues, subtreeMinor, subtreeTotal, subtreeTotalMinor } =
@@ -1016,6 +1080,32 @@ function renderSection({
     if (isGroup) rowClasses.push("pivot-row--group");
     if (entry.kind === "own") rowClasses.push("pivot-row--own");
 
+    const displayName = isUncat
+      ? uncategorizedLabel
+      : isGroup
+      ? groupNameTemplate.replace("{name}", sourceRow.name)
+      : sourceRow.name;
+
+    // Build the drill-down payload for a value/Total cell. `periodKey === null`
+    // targets the whole range (the "Итого" column).
+    const sectionKind = sectionKey as "income" | "expense";
+    const makeCellInfo = (
+      periodKey: string | null,
+      periodLabel: string,
+      amount: string,
+    ): CellClickInfo => ({
+      target: {
+        section: sectionKind,
+        categoryId: isUncat ? null : sourceRow.categoryId,
+        includeSubtree: isGroup,
+        periodKey,
+      },
+      categoryLabel: displayName,
+      periodLabel,
+      sectionKind,
+      amount,
+    });
+
     out.push(
       <tr
         key={`row-${sectionKey}-${pi}`}
@@ -1045,24 +1135,55 @@ function renderSection({
               aria-hidden
             />
           )}
-          <span className="pivot-name-text">
-            {isUncat
-              ? uncategorizedLabel
-              : isGroup
-              ? groupNameTemplate.replace("{name}", sourceRow.name)
-              : sourceRow.name}
-          </span>
+          <span className="pivot-name-text">{displayName}</span>
         </td>
-        {entry.values.map((v, idx) => (
-          <td key={idx} className="pivot-value-cell">
-            {formatMoney(v)}
-          </td>
-        ))}
-        {showTotal && (
-          <td className="pivot-value-cell pivot-value-cell--total">
-            {formatMoney(entry.total)}
-          </td>
-        )}
+        {entry.values.map((v, idx) => {
+          const clickable = (parseMoneyToMinor(v) ?? 0) !== 0;
+          const period = periods[idx];
+          return (
+            <td
+              key={idx}
+              className={
+                clickable
+                  ? "pivot-value-cell pivot-value-cell--clickable"
+                  : "pivot-value-cell"
+              }
+              onClick={
+                clickable && period
+                  ? () =>
+                      onCellClick(
+                        makeCellInfo(period.key, period.label, formatMoney(v)),
+                      )
+                  : undefined
+              }
+            >
+              {formatMoney(v)}
+            </td>
+          );
+        })}
+        {showTotal &&
+          (() => {
+            const clickable = (parseMoneyToMinor(entry.total) ?? 0) !== 0;
+            return (
+              <td
+                className={
+                  clickable
+                    ? "pivot-value-cell pivot-value-cell--total pivot-value-cell--clickable"
+                    : "pivot-value-cell pivot-value-cell--total"
+                }
+                onClick={
+                  clickable
+                    ? () =>
+                        onCellClick(
+                          makeCellInfo(null, totalLabel, formatMoney(entry.total)),
+                        )
+                    : undefined
+                }
+              >
+                {formatMoney(entry.total)}
+              </td>
+            );
+          })()}
       </tr>,
     );
 

@@ -211,6 +211,7 @@ pub fn run() {
             report_views::delete_report_view,
             report_views::reorder_report_views,
             reports::compute_report,
+            reports::report_cell_transactions,
             seed::seed_demo_data,
             seed::clear_all_data,
         ])

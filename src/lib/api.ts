@@ -728,6 +728,45 @@ export function computeReport(request: ReportRequest): Promise<ReportResponse> {
   return invoke<ReportResponse>("compute_report", { request });
 }
 
+// Drill-down: which report cell the user clicked. The backend replays the same
+// aggregation as `compute_report` for this single cell, so the returned shares
+// sum to the displayed value.
+export interface CellTarget {
+  section: "income" | "expense";
+  // null => the "Без категории" row.
+  categoryId: number | null;
+  // true for a group row (parent + selected descendants); false for a leaf/own
+  // row (direct shares of exactly this category).
+  includeSubtree: boolean;
+  // null => the rightmost "Итого" column (the whole [from, to] range).
+  periodKey: string | null;
+}
+
+export interface CellTransaction {
+  id: number;
+  accountId: number;
+  occurredAtUtc: string;
+  credit: string;
+  debit: string;
+  balance: string;
+  peer: string | null;
+  bankDescription: string | null;
+  comment: string | null;
+  isCorrecting: boolean;
+  // Portion of this transaction attributed to the clicked cell, in minor units.
+  shareMinor: number;
+}
+
+export function reportCellTransactions(
+  request: ReportRequest,
+  target: CellTarget,
+): Promise<CellTransaction[]> {
+  return invoke<CellTransaction[]>("report_cell_transactions", {
+    request,
+    target,
+  });
+}
+
 export function seedDemoData(): Promise<void> {
   return invoke<void>("seed_demo_data");
 }

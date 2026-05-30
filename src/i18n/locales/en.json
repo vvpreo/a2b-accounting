@@ -473,7 +473,17 @@
     "fold": "Collapse",
     "unfold": "Expand",
     "loading": "Computing...",
-    "errorLoading": "Failed to build the report: {message}"
+    "errorLoading": "Failed to build the report: {message}",
+    "cellTxns": {
+      "empty": "No transactions",
+      "total": "Total",
+      "colDate": "Date",
+      "colAccount": "Account",
+      "colAmount": "Amount",
+      "colPeer": "Peer",
+      "colDescription": "Description",
+      "colComment": "Comment"
+    }
   },
   "errors": {
     "missingOccurredAt": "Row {row}: missing occurred_at",
