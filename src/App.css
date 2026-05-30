@@ -378,6 +378,13 @@ body {
   white-space: nowrap;
 }
 
+.account-row-actions {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .account-edit-btn {
   flex-shrink: 0;
   width: 22px;

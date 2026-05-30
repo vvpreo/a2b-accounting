@@ -94,6 +94,7 @@
     },
     "empty": "No accounts yet.",
     "actionDetails": "Details",
+    "actionImport": "Import transactions",
     "detailsTitle": "Account #{id}",
     "detailsTabGeneral": "General",
     "detailsTabBatches": "Imports",

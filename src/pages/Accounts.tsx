@@ -338,9 +338,18 @@ interface Props {
   /// each non-`pre_account` cell becomes a button that asks the host to jump
   /// to the Transactions tab pre-filtered to this account and month.
   onOpenMonth?: (accountId: number, yearMonth: string) => void;
+  /// Opens the import dialog with this account preselected. Wired to the
+  /// per-row Import button so the user can import a statement straight from
+  /// the Accounts screen instead of going through the Transactions tab.
+  onImportAccount?: (accountId: number) => void;
 }
 
-export function AccountsPage({ onCreateAccount, version, onOpenMonth }: Props) {
+export function AccountsPage({
+  onCreateAccount,
+  version,
+  onOpenMonth,
+  onImportAccount,
+}: Props) {
   const t = useT();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -671,15 +680,31 @@ export function AccountsPage({ onCreateAccount, version, onOpenMonth }: Props) {
                   <td>{a.id}</td>
                   <td className="account-name-cell">
                     <span className="account-name-text">{a.name}</span>
-                    <button
-                      type="button"
-                      className="account-edit-btn"
-                      onClick={() => setDetailAccountId(a.id)}
-                      aria-label={t("accounts.actionDetails")}
-                      title={t("accounts.actionDetails")}
-                    >
-                      ✎
-                    </button>
+                    <span className="account-row-actions">
+                      {/* Cash accounts have no file statements to import —
+                          they're filled via manual entry in the detail modal,
+                          so the import shortcut is bank-accounts only. */}
+                      {a.kind !== "cash" && onImportAccount && (
+                        <button
+                          type="button"
+                          className="account-edit-btn"
+                          onClick={() => onImportAccount(a.id)}
+                          aria-label={t("accounts.actionImport")}
+                          title={t("accounts.actionImport")}
+                        >
+                          ⤓
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="account-edit-btn"
+                        onClick={() => setDetailAccountId(a.id)}
+                        aria-label={t("accounts.actionDetails")}
+                        title={t("accounts.actionDetails")}
+                      >
+                        ✎
+                      </button>
+                    </span>
                   </td>
                   <td>{a.bank}</td>
                   <td>{a.currency}</td>

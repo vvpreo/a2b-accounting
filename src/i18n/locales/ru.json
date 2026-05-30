@@ -94,6 +94,7 @@
     },
     "empty": "Пока нет счетов.",
     "actionDetails": "Подробнее",
+    "actionImport": "Импорт транзакций",
     "detailsTitle": "Счёт #{id}",
     "detailsTabGeneral": "Общее",
     "detailsTabBatches": "Загрузки",
