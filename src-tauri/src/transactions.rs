@@ -338,7 +338,7 @@ fn synthesize_corrections(
 
     let mut interval_stmt = conn
         .prepare(
-            "SELECT occurred_at_utc, credit, debit, balance, peer, bank_description, comment
+            "SELECT occurred_at_utc, credit, debit, balance
              FROM transactions
              WHERE account_id = ?1 AND occurred_at_utc >= ?2 AND occurred_at_utc <= ?3
              ORDER BY occurred_at_utc ASC, id ASC",
@@ -352,7 +352,7 @@ fn synthesize_corrections(
 
     let head: Option<DbRecord> = conn
         .query_row(
-            "SELECT occurred_at_utc, credit, debit, balance, peer, bank_description, comment
+            "SELECT occurred_at_utc, credit, debit, balance
              FROM transactions
              WHERE account_id = ?1 AND occurred_at_utc < ?2
              ORDER BY occurred_at_utc DESC, id DESC
@@ -365,7 +365,7 @@ fn synthesize_corrections(
 
     let tail: Option<DbRecord> = conn
         .query_row(
-            "SELECT occurred_at_utc, credit, debit, balance, peer, bank_description, comment
+            "SELECT occurred_at_utc, credit, debit, balance
              FROM transactions
              WHERE account_id = ?1 AND occurred_at_utc > ?2
              ORDER BY occurred_at_utc ASC, id ASC
@@ -739,9 +739,6 @@ struct DbRecord {
     credit: i64,
     debit: i64,
     balance: i64,
-    peer: Option<String>,
-    bank_description: Option<String>,
-    comment: Option<String>,
 }
 
 fn db_record_from_row(row: &Row) -> rusqlite::Result<DbRecord> {
@@ -750,9 +747,6 @@ fn db_record_from_row(row: &Row) -> rusqlite::Result<DbRecord> {
         credit: row.get(1)?,
         debit: row.get(2)?,
         balance: row.get(3)?,
-        peer: row.get(4)?,
-        bank_description: row.get(5)?,
-        comment: row.get(6)?,
     })
 }
 
@@ -778,15 +772,47 @@ fn origin_priority(o: &ItemOrigin) -> u8 {
     }
 }
 
+/// Transaction identity for de-duplication. Two rows are the same transaction
+/// iff they share the same minute, credit, debit and resulting balance — money
+/// fields alone pin a ledger position (two distinct ops can't leave the same
+/// balance at the same time), so the free-form description/peer/comment are
+/// deliberately excluded. This keeps dedup robust against description drift
+/// (CSV↔PDF, parser changes, manual edits) and sub-minute time differences
+/// between sources. Applies to every import format, since all funnel through
+/// `compute_preview_issues`.
 #[derive(Hash, Eq, PartialEq, Clone)]
 struct DupeKey {
-    occurred_at_utc: String,
+    occurred_at_minute: String,
     credit: i64,
     debit: i64,
     balance: i64,
-    peer: Option<String>,
-    bank_description: Option<String>,
-    comment: Option<String>,
+}
+
+/// Truncate an RFC3339 UTC timestamp to minute precision for dedup matching
+/// ("2026-04-21T00:08:30.500Z" → "2026-04-21T00:08"). Falls back to the raw
+/// string if it can't be parsed (shouldn't happen — both DB and parsed rows go
+/// through `parse_row`).
+fn dedupe_minute(occurred_at_utc: &str) -> String {
+    DateTime::parse_from_rfc3339(occurred_at_utc)
+        .map(|dt| dt.with_timezone(&Utc).format("%Y-%m-%dT%H:%M").to_string())
+        .unwrap_or_else(|_| occurred_at_utc.to_string())
+}
+
+/// Start of the minute containing `occurred_at_utc` ("…T10:00:05.500Z" →
+/// "…T10:00:00.000Z"). Used to widen the DB lookup window so a duplicate logged
+/// with different seconds still falls inside the interval scanned for dupes.
+fn minute_floor(occurred_at_utc: &str) -> String {
+    DateTime::parse_from_rfc3339(occurred_at_utc)
+        .map(|dt| dt.with_timezone(&Utc).format("%Y-%m-%dT%H:%M:00.000Z").to_string())
+        .unwrap_or_else(|_| occurred_at_utc.to_string())
+}
+
+/// End of the minute containing `occurred_at_utc` ("…T10:00:05.500Z" →
+/// "…T10:00:59.999Z"). Counterpart to [`minute_floor`] for the upper bound.
+fn minute_ceil(occurred_at_utc: &str) -> String {
+    DateTime::parse_from_rfc3339(occurred_at_utc)
+        .map(|dt| dt.with_timezone(&Utc).format("%Y-%m-%dT%H:%M:59.999Z").to_string())
+        .unwrap_or_else(|_| occurred_at_utc.to_string())
 }
 
 #[tauri::command]
@@ -840,37 +866,42 @@ fn compute_preview_issues(
     sorted_idx.sort_by(|&a, &b| parsed[a].occurred_at_utc.cmp(&parsed[b].occurred_at_utc));
     let min_t = parsed[sorted_idx[0]].occurred_at_utc.clone();
     let max_t = parsed[*sorted_idx.last().unwrap()].occurred_at_utc.clone();
+    // Widen to whole-minute boundaries: dedup matches at minute precision, so a
+    // DB twin logged with different seconds must still land inside the scanned
+    // interval (not be split off into head/tail).
+    let min_bound = minute_floor(&min_t);
+    let max_bound = minute_ceil(&max_t);
 
     let mut interval_stmt = conn.prepare(
-        "SELECT occurred_at_utc, credit, debit, balance, peer, bank_description, comment
+        "SELECT occurred_at_utc, credit, debit, balance
          FROM transactions
          WHERE account_id = ?1 AND occurred_at_utc >= ?2 AND occurred_at_utc <= ?3
          ORDER BY occurred_at_utc ASC, id ASC",
     )?;
     let interval: Vec<DbRecord> = interval_stmt
-        .query_map(params![account_id, min_t, max_t], db_record_from_row)?
+        .query_map(params![account_id, min_bound, max_bound], db_record_from_row)?
         .collect::<rusqlite::Result<_>>()?;
 
     let head: Option<DbRecord> = conn
         .query_row(
-            "SELECT occurred_at_utc, credit, debit, balance, peer, bank_description, comment
+            "SELECT occurred_at_utc, credit, debit, balance
              FROM transactions
              WHERE account_id = ?1 AND occurred_at_utc < ?2
              ORDER BY occurred_at_utc DESC, id DESC
              LIMIT 1",
-            params![account_id, min_t],
+            params![account_id, min_bound],
             db_record_from_row,
         )
         .optional()?;
 
     let tail: Option<DbRecord> = conn
         .query_row(
-            "SELECT occurred_at_utc, credit, debit, balance, peer, bank_description, comment
+            "SELECT occurred_at_utc, credit, debit, balance
              FROM transactions
              WHERE account_id = ?1 AND occurred_at_utc > ?2
              ORDER BY occurred_at_utc ASC, id ASC
              LIMIT 1",
-            params![account_id, max_t],
+            params![account_id, max_bound],
             db_record_from_row,
         )
         .optional()?;
@@ -883,26 +914,20 @@ fn compute_preview_issues(
     let db_keys: HashSet<DupeKey> = interval
         .iter()
         .map(|r| DupeKey {
-            occurred_at_utc: r.occurred_at_utc.clone(),
+            occurred_at_minute: dedupe_minute(&r.occurred_at_utc),
             credit: r.credit,
             debit: r.debit,
             balance: r.balance,
-            peer: r.peer.clone(),
-            bank_description: r.bank_description.clone(),
-            comment: r.comment.clone(),
         })
         .collect();
     let mut seen_imports: HashMap<DupeKey, usize> = HashMap::new();
     let mut dup_set: HashSet<usize> = HashSet::new();
     for (idx, p) in parsed.iter().enumerate() {
         let key = DupeKey {
-            occurred_at_utc: p.occurred_at_utc.clone(),
+            occurred_at_minute: dedupe_minute(&p.occurred_at_utc),
             credit: p.credit,
             debit: p.debit,
             balance: p.balance,
-            peer: p.peer.clone(),
-            bank_description: p.bank_description.clone(),
-            comment: p.comment.clone(),
         };
         if db_keys.contains(&key) {
             dup_set.insert(idx);
@@ -1431,18 +1456,92 @@ mod tests {
     }
 
     #[test]
-    fn preview_full_dupe_key_distinguishes_by_description() {
+    fn preview_money_identity_dedupes_despite_description() {
+        // Dedup keys on money + minute only, not the free-form description. Two
+        // rows with the same time/credit/debit/balance but different peer and
+        // bank_description are the same transaction — the later one is a dupe.
         let (_dir, conn, a, _b) = fixture_account_with_batch();
         let rows = vec![
             parsed("2026-04-01T10:00:00Z", "p1", 0, 0, 1000, "alpha"),
-            parsed("2026-04-01T10:00:00Z", "p1", 0, 0, 1000, "beta"),
+            parsed("2026-04-01T10:00:00Z", "p2", 0, 0, 1000, "beta"),
         ];
         let issues = compute_preview_issues(&conn, a, &rows).unwrap();
         let dupe: Vec<_> = issues
             .iter()
-            .filter(|i| i.kind.starts_with("duplicate"))
+            .filter(|i| i.kind == "duplicate_file")
             .collect();
-        assert!(dupe.is_empty(), "different description => not a duplicate");
+        assert_eq!(dupe.len(), 1, "different description still dedupes");
+        assert_eq!(dupe[0].row_index, 1);
+    }
+
+    #[test]
+    fn preview_db_dupe_despite_description_has_no_phantom_balance() {
+        // Real-world bug: an import row matching a DB row on money but with a
+        // drifted description (e.g. a page-wrapped detail lost on re-parse) must
+        // be a duplicate_db — NOT a phantom balance discrepancy from being
+        // double-counted against its own DB twin in the chain.
+        let (_dir, conn, a, b) = fixture_account_with_batch();
+        insert_db_txn(
+            &conn,
+            a,
+            b,
+            "2026-04-21T07:08:00.000Z",
+            "To PromptPay X6534 BUNTHAM KHAITHONG ++",
+            0,
+            5000,
+            553190,
+            "Transfer Withdrawal · K PLUS · To PromptPay X6534 BUNTHAM KHAITHONG ++",
+        );
+        // Re-import where the wrapped detail tail got dropped → different peer
+        // and bank_description, identical money.
+        let rows = vec![parsed(
+            "2026-04-21T07:08:00.000Z",
+            "To PromptPay X6534 BUNTHAM",
+            0,
+            5000,
+            553190,
+            "Transfer Withdrawal · K PLUS · To PromptPay X6534 BUNTHAM",
+        )];
+        let issues = compute_preview_issues(&conn, a, &rows).unwrap();
+        assert!(
+            issues.iter().any(|i| i.row_index == 0 && i.kind == "duplicate_db"),
+            "money-identical row is a DB duplicate"
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.row_index == 0 && i.kind.starts_with("balance")),
+            "no phantom balance discrepancy on the duplicate row"
+        );
+    }
+
+    #[test]
+    fn preview_dedupe_tolerates_sub_minute_time_difference() {
+        // Dedup matches at minute precision, so the same transaction logged with
+        // different seconds across sources still counts as a duplicate.
+        let (_dir, conn, a, b) = fixture_account_with_batch();
+        insert_db_txn(
+            &conn,
+            a,
+            b,
+            "2026-04-01T10:00:05.000Z",
+            "shop",
+            0,
+            300,
+            700,
+            "groceries",
+        );
+        let rows = vec![parsed("2026-04-01T10:00:40.000Z", "shop", 0, 300, 700, "groceries")];
+        let issues = compute_preview_issues(&conn, a, &rows).unwrap();
+        assert!(
+            issues.iter().any(|i| i.row_index == 0 && i.kind == "duplicate_db"),
+            "sub-minute time drift still dedupes"
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.row_index == 0 && i.kind.starts_with("balance")),
+        );
     }
 
     #[test]
