@@ -37,7 +37,11 @@ import {
 } from "../lib/api";
 import { formatMoney, parseMoneyToMinor } from "../lib/money";
 import { TransactionModal } from "../components/TransactionModal";
+import { BulkCategorizeModal } from "../components/BulkCategorizeModal";
 import { CategoriesCell } from "./transactions/CategoriesCell";
+import { BulkActionsMenu } from "./transactions/BulkActionsMenu";
+import { SelectCheckbox } from "./transactions/SelectCheckbox";
+import { rangeIds } from "./transactions/selection";
 
 type RowKind =
   | "correcting"
@@ -144,6 +148,14 @@ export function TransactionsPage({
   const [localRefresh, setLocalRefresh] = useState(0);
   // The transaction whose view/edit modal is open, if any.
   const [detailTxnId, setDetailTxnId] = useState<number | null>(null);
+  // Bulk-selection state. `selectedTxnIds` holds the chosen transactions;
+  // `lastSelectedId` is the anchor for long-press range selection. `bulkOpen`
+  // gates the bulk-categorise confirmation/progress modal.
+  const [selectedTxnIds, setSelectedTxnIds] = useState<Set<number>>(
+    () => new Set(),
+  );
+  const [lastSelectedId, setLastSelectedId] = useState<number | null>(null);
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedKinds, setSelectedKinds] = useState<RowKind[]>(() => [
     ...ROW_KINDS,
@@ -420,9 +432,9 @@ export function TransactionsPage({
   const showComment = visibleColumns.includes("comment");
   const showPeer = visibleColumns.includes("peer");
   const showBankDescription = visibleColumns.includes("bank_description");
-  // 5 fixed money/date columns + always-visible 🔗 and Δ columns + optional
-  // togglables.
-  const visibleColCount = 5 + 2 + visibleColumns.length;
+  // 1 selection column + 5 fixed money/date columns + always-visible 🔗 and Δ
+  // columns + optional togglables.
+  const visibleColCount = 1 + 5 + 2 + visibleColumns.length;
 
   const visibleTxns = useMemo(() => {
     const fromMs = dateFrom ? Date.parse(dateFrom + "T00:00:00Z") : null;
@@ -437,6 +449,68 @@ export function TransactionsPage({
       return selectedKinds.some((k) => rowMatchesKind(x, k));
     });
   }, [txns, selectedAccountIds, selectedKinds, dateFrom, dateTo]);
+
+  // Drop any selected ids that are no longer visible (filters changed). This
+  // guarantees a bulk action can only ever touch rows the user can currently
+  // see — never something hidden behind a filter.
+  useEffect(() => {
+    setSelectedTxnIds((prev) => {
+      if (prev.size === 0) return prev;
+      const visibleIds = new Set(visibleTxns.map((x) => x.id));
+      let changed = false;
+      const next = new Set<number>();
+      for (const id of prev) {
+        if (visibleIds.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [visibleTxns]);
+
+  // Short tap on a row's checkbox: toggle that single row and make it the
+  // anchor for the next range selection.
+  function toggleSelectOne(id: number) {
+    setSelectedTxnIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    setLastSelectedId(id);
+  }
+
+  // Long press: select the inclusive range between the previous anchor and the
+  // pressed row (display order), then re-anchor on the pressed row.
+  function selectRangeTo(id: number) {
+    const orderedIds = visibleTxns.map((x) => x.id);
+    const ids = rangeIds(orderedIds, lastSelectedId, id);
+    setSelectedTxnIds((prev) => {
+      const next = new Set(prev);
+      for (const r of ids) next.add(r);
+      return next;
+    });
+    setLastSelectedId(id);
+  }
+
+  const allVisibleSelected =
+    visibleTxns.length > 0 &&
+    visibleTxns.every((x) => selectedTxnIds.has(x.id));
+
+  function toggleSelectAllVisible() {
+    if (allVisibleSelected) {
+      setSelectedTxnIds(new Set());
+      setLastSelectedId(null);
+    } else {
+      setSelectedTxnIds(new Set(visibleTxns.map((x) => x.id)));
+    }
+  }
+
+  // The concrete target set for a bulk action: the selected, currently-visible
+  // transactions. Order follows the table.
+  const bulkTargets = useMemo(
+    () => visibleTxns.filter((x) => selectedTxnIds.has(x.id)),
+    [visibleTxns, selectedTxnIds],
+  );
 
   // Only scroll to the bottom when the *filter shape* changes (or on
   // first mount). Row-level edits and additions keep the user's current
@@ -697,6 +771,10 @@ export function TransactionsPage({
                 applyLabel={t("transactions.applyButton")}
               />
             </label>
+            <BulkActionsMenu
+              selectedCount={bulkTargets.length}
+              onAssignCategory={() => setBulkOpen(true)}
+            />
             <button
               type="button"
               className="btn-primary filter-bar-action"
@@ -722,6 +800,21 @@ export function TransactionsPage({
         <table>
           <thead ref={theadRef}>
             <tr>
+              <th className="col-select">
+                <input
+                  type="checkbox"
+                  aria-label={t("transactions.bulk.selectAll")}
+                  title={t("transactions.bulk.selectAll")}
+                  checked={allVisibleSelected}
+                  ref={(el) => {
+                    if (el) {
+                      el.indeterminate =
+                        !allVisibleSelected && selectedTxnIds.size > 0;
+                    }
+                  }}
+                  onChange={toggleSelectAllVisible}
+                />
+              </th>
               <th className="col-fixed col-account">{t("transactions.tableAccount")}</th>
               <th className="col-fixed col-date">{t("transactions.tableDate")}</th>
               <th className="col-fixed num">{t("transactions.tableCredit")}</th>
@@ -802,11 +895,13 @@ export function TransactionsPage({
                 const isLinkPartnerOfHover =
                   hovered !== null &&
                   linkPartnerById.get(hovered.id) === x.id;
+                const isSelected = selectedTxnIds.has(x.id);
                 const rowClasses = [
                   x.isCorrecting ? "is-correcting" : "",
                   hovered?.accountId === x.accountId ? "is-hover-account" : "",
                   hovered?.id === x.id ? "is-hover-row" : "",
                   isLinkPartnerOfHover ? "is-link-partner" : "",
+                  isSelected ? "is-selected" : "",
                 ]
                   .filter(Boolean)
                   .join(" ");
@@ -885,6 +980,14 @@ export function TransactionsPage({
                       setHovered((cur) => (cur?.id === x.id ? null : cur))
                     }
                   >
+                    <td className="col-select">
+                      <SelectCheckbox
+                        selected={isSelected}
+                        onShortPress={() => toggleSelectOne(x.id)}
+                        onLongPress={() => selectRangeTo(x.id)}
+                        ariaLabel={t("transactions.bulk.selectRow")}
+                      />
+                    </td>
                     <td
                       className="col-fixed col-account"
                       onMouseEnter={(e) => {
@@ -1240,6 +1343,20 @@ export function TransactionsPage({
           onClose={() => setDetailTxnId(null)}
           onChanged={() => {
             setLocalRefresh((v) => v + 1);
+            setCategoriesVersion((v) => v + 1);
+          }}
+        />
+      )}
+      {bulkOpen && (
+        <BulkCategorizeModal
+          transactions={bulkTargets}
+          categoriesByTxn={categoriesByTxn}
+          accountById={accountById}
+          onClose={() => setBulkOpen(false)}
+          onDone={() => {
+            setBulkOpen(false);
+            setSelectedTxnIds(new Set());
+            setLastSelectedId(null);
             setCategoriesVersion((v) => v + 1);
           }}
         />

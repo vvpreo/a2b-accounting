@@ -235,6 +235,28 @@
       "modalMoveDown": "Ниже",
       "modalDistribution": "Распределение",
       "modalUncategorized": "Без категории"
+    },
+    "bulk": {
+      "actions": "Действия",
+      "actionsWithCount": "Действия ({count})",
+      "assignCategory": "Присвоить категорию",
+      "selectFirstHint": "Сначала выберите транзакции",
+      "selectAll": "Выбрать все видимые",
+      "selectRow": "Выбрать транзакцию",
+      "confirmIntro": "Категория будет проставлена для {count} выбранных транзакций. Действие необратимо.",
+      "reassignLabel": "Переназначать уже категоризированные (перезаписать существующие категории)",
+      "counts": "Будет обработано: {process}, пропущено (уже есть категория): {skipped}",
+      "pickerIncome": "Для доходных ({count})",
+      "pickerExpense": "Для расходных ({count})",
+      "pickCategory": "Выбрать категорию",
+      "colAmount": "Сумма",
+      "apply": "Применить",
+      "running": "Обработка...",
+      "progress": "Обработано {done} из {total}...",
+      "doneProcessed": "Готово: обработано {count}",
+      "doneSkippedExisting": "Пропущено (уже есть категория): {count}",
+      "doneSkippedZero": "Пропущено (нулевая сумма): {count}",
+      "doneErrors": "Ошибок: {count}"
     }
   },
   "import": {

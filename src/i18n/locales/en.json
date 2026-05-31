@@ -231,6 +231,28 @@
       "modalMoveDown": "Move down",
       "modalDistribution": "Distribution",
       "modalUncategorized": "Uncategorized"
+    },
+    "bulk": {
+      "actions": "Actions",
+      "actionsWithCount": "Actions ({count})",
+      "assignCategory": "Assign category",
+      "selectFirstHint": "Select transactions first",
+      "selectAll": "Select all visible",
+      "selectRow": "Select transaction",
+      "confirmIntro": "This will set a category on the {count} selected transaction(s). The action cannot be undone.",
+      "reassignLabel": "Reassign already-categorised transactions (overwrite existing categories)",
+      "counts": "Will process: {process}, skipped (already categorised): {skipped}",
+      "pickerIncome": "For income ({count})",
+      "pickerExpense": "For expenses ({count})",
+      "pickCategory": "Pick a category",
+      "colAmount": "Amount",
+      "apply": "Apply",
+      "running": "Processing...",
+      "progress": "Processing {done} of {total}...",
+      "doneProcessed": "Done: {count} processed",
+      "doneSkippedExisting": "Skipped (already categorised): {count}",
+      "doneSkippedZero": "Skipped (zero amount): {count}",
+      "doneErrors": "Errors: {count}"
     }
   },
   "import": {

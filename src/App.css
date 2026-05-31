@@ -4771,3 +4771,265 @@ code {
     color: #fca5a5;
   }
 }
+
+/* ============================================================
+   Bulk transaction selection + bulk-categorise modal
+   ============================================================ */
+
+/* Leftmost selection column: narrow, centered, holds the per-row checkbox
+   (and the select-all checkbox in the header). */
+.page--transactions th.col-select,
+.page--transactions td.col-select {
+  width: 34px;
+  min-width: 34px;
+  max-width: 34px;
+  text-align: center;
+  padding: 0;
+}
+
+/* Custom (non-native) row checkbox so we own the pointer lifecycle and can
+   tell a short tap from a >1s hold. touch-action:none keeps a long-press from
+   turning into a scroll/gesture on touch devices (planned tablet build). */
+.txn-select-checkbox {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid #b4b4bb;
+  border-radius: 4px;
+  background: #fff;
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+  user-select: none;
+}
+.txn-select-checkbox:hover {
+  border-color: #2563eb;
+}
+.txn-select-checkbox.is-checked {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+tbody tr.is-selected {
+  background: #eff6ff;
+}
+tbody tr.is-selected td.col-select {
+  box-shadow: inset 3px 0 0 #2563eb;
+}
+
+/* "Actions ▾" dropdown in the filter bar. */
+.bulk-actions-menu {
+  position: relative;
+  display: inline-flex;
+}
+.bulk-actions-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.bulk-actions-caret {
+  font-size: 10px;
+}
+.bulk-actions-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 50;
+  min-width: 220px;
+  background: #fff;
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.15);
+  padding: 4px;
+}
+.bulk-actions-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 8px 10px;
+  font: inherit;
+  color: inherit;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.bulk-actions-item:hover:not(:disabled) {
+  background: #f1f1f4;
+}
+.bulk-actions-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.bulk-actions-hint {
+  margin: 4px 8px 6px;
+  font-size: 12px;
+  color: #71717a;
+}
+
+/* Secondary button — used across modals/menus; previously relied on UA
+   defaults, now given a neutral outline style consistent with .btn-ghost. */
+.btn-secondary {
+  font-family: inherit;
+  font-size: 13px;
+  padding: 6px 12px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background: #fff;
+  color: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.btn-secondary:hover:not(:disabled) {
+  background: #f1f1f4;
+}
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Bulk-categorise confirmation + progress modal. */
+.bulk-intro {
+  margin: 0;
+  color: #52525b;
+}
+.bulk-reassign {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.bulk-counts {
+  margin: 0;
+  font-size: 13px;
+  color: #52525b;
+}
+.bulk-pickers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.bulk-picker-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.bulk-picker-label {
+  font-size: 12px;
+  color: #71717a;
+}
+.bulk-picker-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.bulk-list {
+  flex: 1;
+  min-height: 120px;
+  overflow: auto;
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+}
+.bulk-list table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.bulk-list th,
+.bulk-list td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid #f1f1f4;
+}
+.bulk-list th {
+  position: sticky;
+  top: 0;
+  background: #fafafa;
+  z-index: 1;
+  font-weight: 600;
+}
+.bulk-list th.num,
+.bulk-list td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.bulk-list tr.is-skipped {
+  color: #a1a1aa;
+  text-decoration: line-through;
+}
+
+.bulk-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.progress-bar {
+  height: 10px;
+  background: #e4e4e7;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: #2563eb;
+  transition: width 0.15s ease;
+}
+.bulk-done-main {
+  margin: 0;
+  font-weight: 600;
+}
+.bulk-done-line {
+  margin: 0;
+  font-size: 13px;
+  color: #52525b;
+}
+.bulk-done-errors {
+  color: #b91c1c;
+}
+
+@media (prefers-color-scheme: dark) {
+  .txn-select-checkbox {
+    background: #1f1f22;
+    border-color: #52525b;
+  }
+  .txn-select-checkbox.is-checked {
+    background: #2563eb;
+    border-color: #2563eb;
+  }
+  tbody tr.is-selected {
+    background: #1e293b;
+  }
+  .bulk-actions-popover {
+    background: #232327;
+    border-color: #3f3f46;
+  }
+  .bulk-actions-item:hover:not(:disabled) {
+    background: #2a2a30;
+  }
+  .btn-secondary {
+    background: #232327;
+    border-color: #3f3f46;
+  }
+  .btn-secondary:hover:not(:disabled) {
+    background: #2a2a30;
+  }
+  .bulk-list {
+    border-color: #3f3f46;
+  }
+  .bulk-list th {
+    background: #1f1f22;
+  }
+  .bulk-list th,
+  .bulk-list td {
+    border-bottom-color: #2a2a30;
+  }
+  .progress-bar {
+    background: #3f3f46;
+  }
+}
