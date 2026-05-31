@@ -485,6 +485,27 @@
       "colComment": "Comment"
     }
   },
+  "transaction": {
+    "title": "Transaction",
+    "correcting": "Correcting",
+    "cashBadge": "Cash",
+    "fieldDate": "Date",
+    "fieldDirection": "Direction",
+    "fieldAmount": "Amount",
+    "fieldCredit": "Credit",
+    "fieldDebit": "Debit",
+    "fieldBalance": "Balance",
+    "fieldPeer": "Peer",
+    "fieldDescription": "Description",
+    "fieldComment": "Comment",
+    "directionIn": "In",
+    "directionOut": "Out",
+    "peerPlaceholder": "Peer",
+    "commentPlaceholder": "Comment",
+    "categories": "Categories",
+    "editCategories": "Edit categories",
+    "confirmDelete": "Delete transaction?"
+  },
   "errors": {
     "missingOccurredAt": "Row {row}: missing occurred_at",
     "missingBalance": "Row {row}: missing balance",

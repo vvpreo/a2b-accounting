@@ -192,6 +192,8 @@ pub fn run() {
             transactions::validate_balance_chain,
             transactions::validate_import_preview,
             transactions::update_transaction_comment,
+            transactions::get_transaction,
+            transactions::update_transaction_fields,
             cash_transactions::create_cash_transaction,
             cash_transactions::update_cash_transaction,
             cash_transactions::delete_cash_transaction,

@@ -36,6 +36,7 @@ import {
   updateTransactionComment,
 } from "../lib/api";
 import { formatMoney, parseMoneyToMinor } from "../lib/money";
+import { TransactionModal } from "../components/TransactionModal";
 import { CategoriesCell } from "./transactions/CategoriesCell";
 
 type RowKind =
@@ -138,6 +139,11 @@ export function TransactionsPage({
     [],
   );
   const [categoriesVersion, setCategoriesVersion] = useState(0);
+  // Bumped after an inline edit / per-transaction modal save to reload the
+  // transaction list locally (the `version` prop is owned by the host).
+  const [localRefresh, setLocalRefresh] = useState(0);
+  // The transaction whose view/edit modal is open, if any.
+  const [detailTxnId, setDetailTxnId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedKinds, setSelectedKinds] = useState<RowKind[]>(() => [
     ...ROW_KINDS,
@@ -202,7 +208,7 @@ export function TransactionsPage({
     return () => {
       cancelled = true;
     };
-  }, [version]);
+  }, [version, localRefresh]);
 
   useEffect(() => {
     let cancelled = false;
@@ -895,8 +901,9 @@ export function TransactionsPage({
                       {accLabel}
                     </td>
                     <td
-                      className="col-fixed col-date"
+                      className="col-fixed col-date txn-open-cell"
                       title={formatInstantUtc(x.occurredAtUtc)}
+                      onClick={() => setDetailTxnId(x.id)}
                     >
                       {formatInstantLocal(x.occurredAtUtc)}{" "}
                       <span className="dow">
@@ -1223,6 +1230,17 @@ export function TransactionsPage({
             setWithdrawModalOpen(false);
             setPendingLinkTxnId(null);
             setLinkError(null);
+          }}
+        />
+      )}
+
+      {detailTxnId !== null && (
+        <TransactionModal
+          transactionId={detailTxnId}
+          onClose={() => setDetailTxnId(null)}
+          onChanged={() => {
+            setLocalRefresh((v) => v + 1);
+            setCategoriesVersion((v) => v + 1);
           }}
         />
       )}

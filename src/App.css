@@ -4364,6 +4364,203 @@ code {
   font-variant-numeric: tabular-nums;
 }
 
+.cell-txns-row {
+  cursor: pointer;
+}
+
+.cell-txns-row:hover {
+  background: #eef2ff;
+}
+
+/* ----- Single-transaction view/edit modal ----- */
+/* Date cell in the Transactions table doubles as the modal opener. */
+.txn-open-cell {
+  cursor: pointer;
+}
+
+.txn-open-cell:hover {
+  background: #eef2ff;
+}
+
+.txn-modal {
+  width: min(640px, 94vw);
+}
+
+.txn-modal-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.txn-modal-subtitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #71717a;
+}
+
+.txn-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.txn-badge--correcting {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.txn-badge--cash {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.txn-modal-body {
+  gap: 14px;
+}
+
+.txn-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.txn-field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #52525b;
+}
+
+.txn-field input,
+.txn-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  font: inherit;
+}
+
+.txn-field textarea {
+  resize: vertical;
+}
+
+.txn-field-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.txn-readonly-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border-radius: 6px;
+}
+
+.txn-readonly {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.txn-direction {
+  display: inline-flex;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  overflow: hidden;
+  width: fit-content;
+}
+
+.txn-dir-btn {
+  appearance: none;
+  background: #fff;
+  border: none;
+  padding: 6px 14px;
+  font: inherit;
+  cursor: pointer;
+  color: #52525b;
+}
+
+.txn-dir-btn + .txn-dir-btn {
+  border-left: 1px solid #d4d4d8;
+}
+
+.txn-dir-btn--active {
+  background: #1f2937;
+  color: #fff;
+}
+
+.txn-cats {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.txn-cats-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.txn-cats-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.txn-cat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid #d4d4d8;
+  border-radius: 12px;
+  font-size: 12px;
+}
+
+.txn-cat-chip--uncat {
+  color: #71717a;
+  font-style: italic;
+}
+
+.txn-cat-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.txn-cat-amount {
+  font-variant-numeric: tabular-nums;
+  color: #52525b;
+}
+
+.txn-modal-footer {
+  align-items: center;
+}
+
+.txn-delete-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: auto;
+  font-size: 13px;
+}
+
+.btn-small {
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
 /* Sign-colored cells in the Metrics section. Default (zero) keeps the inherited
    text color so the row reads neutral when nothing happened that period. */
 .pivot-value-cell--positive {

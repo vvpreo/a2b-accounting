@@ -495,6 +495,27 @@
       "colComment": "Комментарий"
     }
   },
+  "transaction": {
+    "title": "Транзакция",
+    "correcting": "Корректирующая",
+    "cashBadge": "Наличные",
+    "fieldDate": "Дата",
+    "fieldDirection": "Направление",
+    "fieldAmount": "Сумма",
+    "fieldCredit": "Приход",
+    "fieldDebit": "Расход",
+    "fieldBalance": "Баланс",
+    "fieldPeer": "Контрагент",
+    "fieldDescription": "Описание",
+    "fieldComment": "Комментарий",
+    "directionIn": "Приход",
+    "directionOut": "Расход",
+    "peerPlaceholder": "Контрагент",
+    "commentPlaceholder": "Комментарий",
+    "categories": "Категории",
+    "editCategories": "Изменить категории",
+    "confirmDelete": "Удалить транзакцию?"
+  },
   "errors": {
     "missingOccurredAt": "Строка {row}: отсутствует occurred_at",
     "missingBalance": "Строка {row}: отсутствует balance",

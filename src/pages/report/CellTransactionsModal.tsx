@@ -8,6 +8,7 @@ import {
   reportCellTransactions,
 } from "../../lib/api";
 import { formatMinorAsMoney } from "../../lib/money";
+import { TransactionModal } from "../../components/TransactionModal";
 import type { CellClickInfo } from "../ReportView";
 
 interface CellTransactionsModalProps {
@@ -46,15 +47,19 @@ export function CellTransactionsModal({
   const { t } = useI18n();
   const [rows, setRows] = useState<CellTransaction[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The clicked transaction whose view/edit modal is open, if any.
+  const [detailTxnId, setDetailTxnId] = useState<number | null>(null);
+  // Bumped after an edit in the per-transaction modal to re-fetch this list.
+  const [refresh, setRefresh] = useState(0);
 
-  // ESC closes the modal.
+  // ESC closes the modal (only when no per-transaction modal sits on top).
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape" && detailTxnId === null) onClose();
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  }, [onClose, detailTxnId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -70,7 +75,7 @@ export function CellTransactionsModal({
     return () => {
       cancelled = true;
     };
-  }, [request, info]);
+  }, [request, info, refresh]);
 
   const total = useMemo(
     () => (rows ? rows.reduce((acc, r) => acc + r.shareMinor, 0) : 0),
@@ -131,7 +136,11 @@ export function CellTransactionsModal({
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={r.id}>
+                  <tr
+                    key={r.id}
+                    className="cell-txns-row"
+                    onClick={() => setDetailTxnId(r.id)}
+                  >
                     <td className="cell-txns-date">{formatLocal(r.occurredAtUtc)}</td>
                     <td className="cell-txns-ellipsis" title={accountNameById.get(r.accountId) ?? ""}>
                       {accountNameById.get(r.accountId) ?? `#${r.accountId}`}
@@ -166,6 +175,14 @@ export function CellTransactionsModal({
             {t("common.close")}
           </button>
         </footer>
+
+        {detailTxnId !== null && (
+          <TransactionModal
+            transactionId={detailTxnId}
+            onClose={() => setDetailTxnId(null)}
+            onChanged={() => setRefresh((v) => v + 1)}
+          />
+        )}
       </div>
     </div>,
     document.body,

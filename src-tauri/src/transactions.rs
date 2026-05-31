@@ -671,6 +671,55 @@ pub fn update_transaction_comment(
     Ok(())
 }
 
+/// Fetch a single transaction by id. Used by the per-transaction view/edit
+/// modal, which can be opened from any screen that lists transactions.
+#[tauri::command]
+pub fn get_transaction(state: State<'_, DbState>, id: i64) -> Result<Transaction, String> {
+    let conn = state.lock().map_err(|e| e.to_string())?;
+    crate::cash_transactions::fetch_transaction(&conn, id)
+}
+
+/// Update the free-text fields of any transaction (bank or cash): counterparty
+/// (`peer`), bank description and comment. These are safe to edit on imported
+/// statement rows — unlike amounts/dates/balance they don't touch the
+/// balance-chain invariant. Cash-account amounts/dates are edited through
+/// `update_cash_transaction` instead, which recomputes running balances.
+/// Empty/whitespace strings normalize to NULL.
+#[tauri::command]
+pub fn update_transaction_fields(
+    state: State<'_, DbState>,
+    id: i64,
+    peer: Option<String>,
+    bank_description: Option<String>,
+    comment: Option<String>,
+) -> Result<Transaction, String> {
+    let conn = state.lock().map_err(|e| e.to_string())?;
+    update_transaction_fields_inner(&conn, id, peer, bank_description, comment)
+}
+
+pub(crate) fn update_transaction_fields_inner(
+    conn: &Connection,
+    id: i64,
+    peer: Option<String>,
+    bank_description: Option<String>,
+    comment: Option<String>,
+) -> Result<Transaction, String> {
+    let norm = |v: Option<String>| v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let peer = norm(peer);
+    let bank_description = norm(bank_description);
+    let comment = norm(comment);
+    let updated = conn
+        .execute(
+            "UPDATE transactions SET peer = ?1, bank_description = ?2, comment = ?3 WHERE id = ?4",
+            params![peer, bank_description, comment, id],
+        )
+        .map_err(|e| e.to_string())?;
+    if updated == 0 {
+        return Err(format!("transaction {id} does not exist"));
+    }
+    crate::cash_transactions::fetch_transaction(conn, id)
+}
+
 #[tauri::command]
 pub fn validate_balance_chain(
     state: State<'_, DbState>,
@@ -1751,5 +1800,54 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM transactions WHERE account_id = ?1", [a2], |r| r.get(0))
             .unwrap();
         assert_eq!(a2_count, 0);
+    }
+
+    #[test]
+    fn update_transaction_fields_overwrites_text_columns() {
+        let (_dir, conn, a, b) = fixture_account_with_batch();
+        insert_db_txn(&conn, a, b, "2026-04-01T10:00:00Z", "Old peer", 1000_00, 0, 1000_00, "Old desc");
+        let id: i64 = conn
+            .query_row("SELECT id FROM transactions LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+
+        let updated = update_transaction_fields_inner(
+            &conn,
+            id,
+            Some("  New peer  ".to_string()),
+            Some("New desc".to_string()),
+            Some("A comment".to_string()),
+        )
+        .unwrap();
+        assert_eq!(updated.peer.as_deref(), Some("New peer")); // trimmed
+        assert_eq!(updated.bank_description.as_deref(), Some("New desc"));
+        assert_eq!(updated.comment.as_deref(), Some("A comment"));
+    }
+
+    #[test]
+    fn update_transaction_fields_blanks_normalize_to_null() {
+        let (_dir, conn, a, b) = fixture_account_with_batch();
+        insert_db_txn(&conn, a, b, "2026-04-01T10:00:00Z", "Peer", 1000_00, 0, 1000_00, "Desc");
+        let id: i64 = conn
+            .query_row("SELECT id FROM transactions LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+
+        let updated = update_transaction_fields_inner(
+            &conn,
+            id,
+            Some("   ".to_string()),
+            None,
+            Some("".to_string()),
+        )
+        .unwrap();
+        assert!(updated.peer.is_none());
+        assert!(updated.bank_description.is_none());
+        assert!(updated.comment.is_none());
+    }
+
+    #[test]
+    fn update_transaction_fields_missing_id_errors() {
+        let (_dir, conn, _a, _b) = fixture_account_with_batch();
+        let res = update_transaction_fields_inner(&conn, 99999, None, None, None);
+        assert!(res.is_err());
     }
 }

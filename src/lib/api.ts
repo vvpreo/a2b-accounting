@@ -480,6 +480,23 @@ export function updateTransactionComment(
   return invoke<void>("update_transaction_comment", { id, comment });
 }
 
+// Fetch a single transaction by id (for the per-transaction view/edit modal).
+export function getTransaction(id: number): Promise<Transaction> {
+  return invoke<Transaction>("get_transaction", { id });
+}
+
+// Update the free-text fields of any transaction (bank or cash). Safe on
+// imported statement rows — does not touch amounts/date/balance. Returns the
+// refreshed transaction.
+export function updateTransactionFields(args: {
+  id: number;
+  peer: string | null;
+  bankDescription: string | null;
+  comment: string | null;
+}): Promise<Transaction> {
+  return invoke<Transaction>("update_transaction_fields", args);
+}
+
 export function validateImportPreview(args: {
   accountId: number;
   defaultTimezoneOffset: string;
