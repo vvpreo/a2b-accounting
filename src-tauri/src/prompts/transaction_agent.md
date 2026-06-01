@@ -31,8 +31,11 @@ Rules for `suggestedCategory`:
 - "—" (no category / uncategorized) is an explicit, valid choice — use it when
   nothing in the list clearly fits, and lower your confidence accordingly.
 
-Write the explanation in the same language as the transaction data and the
-category names. Do not use code fences. Put nothing after the YAML block.
+Always write the human-readable explanation in {{LANGUAGE}}, regardless of the
+language of the transaction data or the category names. The `suggestedCategory`
+value is the one exception: copy the category name exactly as it appears in the
+list below, even if it is in another language. Do not use code fences. Put
+nothing after the YAML block.
 
 ## Transaction
 

@@ -36,9 +36,33 @@ const CONFIG_KEY: &str = "ai_provider_config";
 /// The agent's system prompt template. Kept in a standalone markdown file
 /// (`prompts/transaction_agent.md`) so it's easy to read and tweak without
 /// hunting through Rust string literals. Two placeholders are substituted at
-/// runtime: `{{TRANSACTION}}` (the transaction fields, minus balance) and
-/// `{{CATEGORIES}}` (the known category list).
+/// runtime: `{{TRANSACTION}}` (the transaction fields, minus balance),
+/// `{{CATEGORIES}}` (the known category list) and `{{LANGUAGE}}` (the human
+/// language the agent must answer in, taken from the app's locale setting).
 const SYSTEM_PROMPT_TEMPLATE: &str = include_str!("prompts/transaction_agent.md");
+
+/// Resolve the human language the agent should reply in from the app locale
+/// stored in `app_settings.locale` (`"ru"`/`"en"`, written by the frontend).
+/// We deliberately bind the answer language to the UI locale rather than to the
+/// transaction's own language, which may be Thai/English from a bank export.
+/// Falls back to English when the setting is missing or unrecognised.
+fn reply_language(conn: &Connection) -> String {
+    let locale: Option<String> = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'locale'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    match locale.as_deref().map(str::trim).unwrap_or("") {
+        s if s.eq_ignore_ascii_case("ru") || s.to_lowercase().starts_with("ru") => {
+            "Russian".to_string()
+        }
+        _ => "English".to_string(),
+    }
+}
 
 /// Provider configuration, parsed from the `ai_provider_config` setting.
 #[derive(Debug, Clone, Deserialize)]
@@ -209,6 +233,7 @@ fn build_system_prompt(conn: &Connection, transaction_id: i64) -> Result<String,
     );
 
     Ok(SYSTEM_PROMPT_TEMPLATE
+        .replace("{{LANGUAGE}}", &reply_language(conn))
         .replace("{{TRANSACTION}}", transaction_block.trim_end())
         .replace("{{CATEGORIES}}", category_lines.trim_end()))
 }
@@ -400,6 +425,33 @@ mod tests {
     #[test]
     fn resolve_literal_key() {
         assert_eq!(resolve_api_key("sk-abc").unwrap(), "sk-abc");
+    }
+
+    #[test]
+    fn reply_language_follows_app_locale() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT)",
+            [],
+        )
+        .unwrap();
+        // No locale row yet -> default to English.
+        assert_eq!(reply_language(&conn), "English");
+
+        let set = |v: &str| {
+            conn.execute(
+                "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('locale', ?1)",
+                [v],
+            )
+            .unwrap();
+        };
+        set("ru");
+        assert_eq!(reply_language(&conn), "Russian");
+        set("en");
+        assert_eq!(reply_language(&conn), "English");
+        // Unknown locales fall back to English.
+        set("th");
+        assert_eq!(reply_language(&conn), "English");
     }
 
     #[test]
