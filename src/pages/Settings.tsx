@@ -14,8 +14,9 @@ import {
 } from "../lib/api";
 import { LANGUAGES, LocaleCode, useI18n, useT } from "../i18n";
 import { CurrenciesTab } from "./settings/CurrenciesTab";
+import { AiProviderTab } from "./settings/AiProviderTab";
 
-type SettingsTab = "general" | "currencies";
+type SettingsTab = "general" | "currencies" | "ai";
 
 export function SettingsPage() {
   const { t, locale, setLocale } = useI18n();
@@ -41,6 +42,13 @@ export function SettingsPage() {
           onClick={() => setTab("currencies")}
         >
           {t("settings.tabs.currencies")}
+        </button>
+        <button
+          type="button"
+          className={"settings-tab-button" + (tab === "ai" ? " active" : "")}
+          onClick={() => setTab("ai")}
+        >
+          {t("settings.tabs.ai")}
         </button>
       </div>
 
@@ -69,6 +77,8 @@ export function SettingsPage() {
       )}
 
       {tab === "currencies" && <CurrenciesTab />}
+
+      {tab === "ai" && <AiProviderTab />}
     </section>
   );
 }

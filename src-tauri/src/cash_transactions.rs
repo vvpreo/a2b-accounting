@@ -93,7 +93,7 @@ fn ensure_cash_transaction(
 pub(crate) fn fetch_transaction(conn: &Connection, txn_id: i64) -> Result<Transaction, String> {
     conn.query_row(
         "SELECT id, account_id, import_batch_id, occurred_at_utc, credit, debit, balance,
-                peer, bank_description, comment, is_correcting
+                peer, bank_description, comment, is_correcting, agent
          FROM transactions WHERE id = ?1",
         [txn_id],
         |r| {
@@ -112,6 +112,7 @@ pub(crate) fn fetch_transaction(conn: &Connection, txn_id: i64) -> Result<Transa
                 bank_description: r.get(8)?,
                 comment: r.get(9)?,
                 is_correcting: r.get(10)?,
+                agent: r.get(11)?,
             })
         },
     )

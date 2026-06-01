@@ -1,5 +1,6 @@
 mod account_status;
 mod accounts;
+mod ai;
 mod backup;
 mod cash_transactions;
 mod cash_withdrawals;
@@ -144,6 +145,9 @@ pub fn run() {
             seed::ensure_default_report_view(&conn).unwrap_or_else(|e| {
                 panic!("failed to ensure accounting report: {e}");
             });
+            seed::ensure_ai_provider_config(&conn).unwrap_or_else(|e| {
+                panic!("failed to ensure ai provider config: {e}");
+            });
             app.manage::<db::DbState>(Mutex::new(conn));
             DATA_DIR_CTX
                 .set(ctx)
@@ -200,6 +204,9 @@ pub fn run() {
             cash_withdrawals::create_cash_withdrawal,
             settings::get_setting,
             settings::set_setting,
+            ai::ai_test_connection,
+            ai::ai_transaction_chat,
+            ai::set_transaction_agent,
             exchange_rates::list_exchange_rates,
             exchange_rates::upsert_exchange_rate,
             exchange_rates::delete_exchange_rate,

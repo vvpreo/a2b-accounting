@@ -146,6 +146,7 @@
     "tableDebit": "Списание",
     "tableBalance": "Баланс",
     "tableCategory": "Категория",
+    "tableAgent": "ИИ",
     "tablePeer": "Контрагент",
     "tableBankDescription": "Описание банка",
     "tableComment": "Комментарий",
@@ -213,6 +214,7 @@
     },
     "column": {
       "category": "Категория",
+      "agent": "ИИ",
       "comment": "Комментарий",
       "peer": "Контрагент",
       "bank_description": "Описание банка"
@@ -431,7 +433,24 @@
     },
     "tabs": {
       "general": "Общие",
-      "currencies": "Валюты"
+      "currencies": "Валюты",
+      "ai": "ИИ"
+    },
+    "ai": {
+      "title": "ИИ-провайдер",
+      "hint": "Настройте OpenAI-совместимого провайдера для агента по транзакциям. По умолчанию — OpenRouter.",
+      "presetLabel": "Пресет",
+      "baseUrlLabel": "Базовый URL",
+      "modelLabel": "Модель",
+      "apiKeyLabel": "API-ключ",
+      "apiKeyHint": "Используйте «env:ИМЯ», чтобы читать ключ из переменной окружения (рекомендуется), а не хранить его. Литеральный ключ сохраняется в локальной базе в открытом виде.",
+      "temperatureLabel": "Температура",
+      "testButton": "Проверить соединение",
+      "testing": "Проверяю…",
+      "testSuccess": "Успех — {message}",
+      "testError": "Ошибка: {message}",
+      "saveButton": "Сохранить",
+      "saved": "Сохранено"
     },
     "currencies": {
       "empty": "Пока нет загруженных курсов. Создайте счёт в любой валюте — курсы скачаются автоматически.",
@@ -536,7 +555,22 @@
     "commentPlaceholder": "Комментарий",
     "categories": "Категории",
     "editCategories": "Изменить категории",
-    "confirmDelete": "Удалить транзакцию?"
+    "confirmDelete": "Удалить транзакцию?",
+    "agent": {
+      "title": "ИИ-агент",
+      "analyze": "Проанализировать ИИ",
+      "clear": "Очистить анализ",
+      "showJson": "YAML",
+      "showChat": "Чат",
+      "send": "Отправить",
+      "thinking": "Думаю…",
+      "placeholder": "Спросите агента об этой транзакции…",
+      "suggested": "Предложенная категория",
+      "confidence": "Уверенность",
+      "reasoning": "Рассуждение",
+      "none": "—",
+      "empty": "Агент ещё не анализировал эту транзакцию."
+    }
   },
   "errors": {
     "missingOccurredAt": "Строка {row}: отсутствует occurred_at",

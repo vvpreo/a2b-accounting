@@ -39,6 +39,7 @@ import { formatMoney, parseMoneyToMinor } from "../lib/money";
 import { TransactionModal } from "../components/TransactionModal";
 import { BulkCategorizeModal } from "../components/BulkCategorizeModal";
 import { CategoriesCell } from "./transactions/CategoriesCell";
+import { AgentCell } from "./transactions/AgentCell";
 import { BulkActionsMenu } from "./transactions/BulkActionsMenu";
 import { SelectCheckbox } from "./transactions/SelectCheckbox";
 import { rangeIds } from "./transactions/selection";
@@ -70,9 +71,10 @@ type DeltaMode = "percent" | "absolute";
 const DELTA_MODES: DeltaMode[] = ["percent", "absolute"];
 const DELTA_MODE_SETTING_KEY = "transactions.delta_display_mode";
 
-type ColumnKey = "category" | "comment" | "peer" | "bank_description";
+type ColumnKey = "category" | "agent" | "comment" | "peer" | "bank_description";
 const COLUMN_KEYS: ColumnKey[] = [
   "category",
+  "agent",
   "comment",
   "peer",
   "bank_description",
@@ -429,6 +431,7 @@ export function TransactionsPage({
     pendingSourceTxn.debit !== "0.00" &&
     pendingSourceTxn.credit === "0.00";
   const showCategory = visibleColumns.includes("category");
+  const showAgent = visibleColumns.includes("agent");
   const showComment = visibleColumns.includes("comment");
   const showPeer = visibleColumns.includes("peer");
   const showBankDescription = visibleColumns.includes("bank_description");
@@ -852,6 +855,9 @@ export function TransactionsPage({
               {showCategory && (
                 <th className="col-category">{t("transactions.tableCategory")}</th>
               )}
+              {showAgent && (
+                <th className="col-agent">{t("transactions.tableAgent")}</th>
+              )}
               {showComment && (
                 <th className="col-comment">{t("transactions.tableComment")}</th>
               )}
@@ -1141,6 +1147,14 @@ export function TransactionsPage({
                         />
                       );
                     })()}
+                    {showAgent && (
+                      <AgentCell
+                        transactionId={x.id}
+                        agent={x.agent}
+                        onOpen={() => setDetailTxnId(x.id)}
+                        onAnalyzed={() => setLocalRefresh((v) => v + 1)}
+                      />
+                    )}
                     {showComment && (
                       <td className="col-comment">
                         <input

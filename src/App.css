@@ -185,6 +185,66 @@ body {
   width: 100%;
 }
 
+/* AI agent column: suggested category + truncated reasoning, clickable to
+ * open the transaction modal. */
+.page--transactions th.col-agent,
+.page--transactions td.col-agent {
+  min-width: 220px;
+  max-width: 320px;
+}
+
+.agent-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.agent-cell-category {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.agent-cell-confidence {
+  font-weight: 400;
+  color: #71717a;
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-cell-reasoning {
+  font-size: 12px;
+  color: #71717a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-cell-run {
+  background: none;
+  border: 1px dashed #c4b5fd;
+  border-radius: 12px;
+  color: #6d28d9;
+  font-size: 12px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.agent-cell-run:hover {
+  background: #f5f3ff;
+}
+
+.agent-cell-busy {
+  font-size: 12px;
+  color: #71717a;
+  font-style: italic;
+}
+
+.agent-cell-error {
+  color: #dc2626;
+  font-weight: 700;
+  margin-left: 4px;
+}
+
 /* The three "long text" columns truncate with an ellipsis when their
  * content doesn't fit, instead of pushing the table wider than the
  * viewport. The `max-width: 0` trick lets the cell shrink to whatever
@@ -4542,6 +4602,167 @@ code {
 .txn-cat-amount {
   font-variant-numeric: tabular-nums;
   color: #52525b;
+}
+
+/* AI agent section inside the transaction modal */
+.txn-agent {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid #e4e4e7;
+  padding-top: 12px;
+}
+
+.txn-agent-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.txn-agent-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.txn-agent-verdict {
+  background: #f4f4f5;
+  border: 1px solid #e4e4e7;
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.txn-agent-verdict-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.txn-agent-category {
+  font-weight: 600;
+}
+
+.txn-agent-confidence {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: #52525b;
+  font-size: 12px;
+}
+
+.txn-agent-reasoning {
+  margin: 0;
+  font-size: 13px;
+  color: #3f3f46;
+  white-space: pre-wrap;
+}
+
+.txn-agent-log {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.txn-agent-msg {
+  padding: 6px 9px;
+  border-radius: 8px;
+  font-size: 13px;
+  white-space: pre-wrap;
+  max-width: 90%;
+}
+
+.txn-agent-msg--user {
+  align-self: flex-end;
+  background: #e0e7ff;
+}
+
+.txn-agent-msg--assistant {
+  align-self: flex-start;
+  background: #f4f4f5;
+}
+
+.txn-agent-msg-reasoning {
+  margin-top: 4px;
+}
+
+.txn-agent-reasoning-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: 11px;
+  color: #6d28d9;
+}
+
+.txn-agent-reasoning-toggle:hover {
+  text-decoration: underline;
+}
+
+.txn-agent-msg-reasoning .txn-agent-reasoning {
+  margin: 4px 0 0;
+  padding-left: 8px;
+  border-left: 2px solid #ddd6fe;
+  color: #52525b;
+}
+
+.txn-agent-yaml {
+  max-height: 340px;
+  overflow: auto;
+  background: #1e1e2e;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #cdd6f4;
+}
+
+.txn-agent-yaml .yml-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.txn-agent-yaml .yml-key {
+  color: #89b4fa;
+}
+
+.txn-agent-yaml .yml-str {
+  color: #a6e3a1;
+}
+
+.txn-agent-yaml .yml-num {
+  color: #fab387;
+}
+
+.txn-agent-yaml .yml-null {
+  color: #f38ba8;
+  font-style: italic;
+}
+
+.txn-agent-yaml .yml-punct {
+  color: #9399b2;
+}
+
+.txn-agent-input {
+  display: flex;
+  gap: 6px;
+  align-items: flex-end;
+}
+
+/* Unified multi-line text entry — same look as the .txn-field textarea
+ * (Комментарий), so every multi-line input in the modal is consistent. */
+.txn-agent-input textarea {
+  flex: 1;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  font: inherit;
+  resize: vertical;
 }
 
 .txn-modal-footer {

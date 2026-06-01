@@ -17,6 +17,7 @@ import {
 } from "../lib/api";
 import { formatMinorAsMoney, formatMoney, parseMoneyToMinor } from "../lib/money";
 import { CategoryDistributionModal } from "./CategoryDistributionModal";
+import { AgentSection } from "./AgentSection";
 
 interface Props {
   transactionId: number;
@@ -395,6 +396,15 @@ export function TransactionModal({ transactionId, onClose, onChanged }: Props) {
                   )}
                 </div>
               </div>
+
+              {/* AI agent dialog scoped to this transaction. */}
+              <AgentSection
+                transactionId={txn.id}
+                agent={txn.agent}
+                onChanged={() => {
+                  void reload().catch((e) => setError(String(e)));
+                }}
+              />
             </>
           )}
         </div>

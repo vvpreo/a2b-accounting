@@ -142,6 +142,7 @@
     "tableDebit": "Debit",
     "tableBalance": "Balance",
     "tableCategory": "Category",
+    "tableAgent": "AI",
     "tablePeer": "Counterparty",
     "tableBankDescription": "Bank description",
     "tableComment": "Comment",
@@ -209,6 +210,7 @@
     },
     "column": {
       "category": "Category",
+      "agent": "AI",
       "comment": "Comment",
       "peer": "Counterparty",
       "bank_description": "Bank description"
@@ -421,7 +423,24 @@
     },
     "tabs": {
       "general": "General",
-      "currencies": "Currencies"
+      "currencies": "Currencies",
+      "ai": "AI"
+    },
+    "ai": {
+      "title": "AI provider",
+      "hint": "Configure an OpenAI-compatible provider used by the per-transaction agent. OpenRouter is the default.",
+      "presetLabel": "Preset",
+      "baseUrlLabel": "Base URL",
+      "modelLabel": "Model",
+      "apiKeyLabel": "API key",
+      "apiKeyHint": "Use \"env:NAME\" to read the key from an environment variable (recommended) instead of storing it. A literal key is saved unencrypted in the local database.",
+      "temperatureLabel": "Temperature",
+      "testButton": "Test connection",
+      "testing": "Testing…",
+      "testSuccess": "OK — {message}",
+      "testError": "Failed: {message}",
+      "saveButton": "Save",
+      "saved": "Saved"
     },
     "currencies": {
       "empty": "No exchange rates downloaded yet. Create an account in any currency — rates will be downloaded automatically.",
@@ -526,7 +545,22 @@
     "commentPlaceholder": "Comment",
     "categories": "Categories",
     "editCategories": "Edit categories",
-    "confirmDelete": "Delete transaction?"
+    "confirmDelete": "Delete transaction?",
+    "agent": {
+      "title": "AI agent",
+      "analyze": "Analyze with AI",
+      "clear": "Clear analysis",
+      "showJson": "YAML",
+      "showChat": "Chat",
+      "send": "Send",
+      "thinking": "Thinking…",
+      "placeholder": "Ask the agent about this transaction…",
+      "suggested": "Suggested category",
+      "confidence": "Confidence",
+      "reasoning": "Reasoning",
+      "none": "—",
+      "empty": "The agent hasn't analyzed this transaction yet."
+    }
   },
   "errors": {
     "missingOccurredAt": "Row {row}: missing occurred_at",

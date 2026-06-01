@@ -35,6 +35,9 @@ pub struct Transaction {
     pub bank_description: Option<String>,
     pub comment: Option<String>,
     pub is_correcting: bool,
+    /// Structured JSON produced by the AI agent (suggested category,
+    /// confidence, reasoning and chat history). `None` until the agent runs.
+    pub agent: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -185,11 +188,12 @@ fn txn_from_row(row: &Row) -> rusqlite::Result<Transaction> {
         bank_description: row.get(8)?,
         comment: row.get(9)?,
         is_correcting: row.get(10)?,
+        agent: row.get(11)?,
     })
 }
 
 const TXN_COLUMNS: &str =
-    "id, account_id, import_batch_id, occurred_at_utc, credit, debit, balance, peer, bank_description, comment, is_correcting";
+    "id, account_id, import_batch_id, occurred_at_utc, credit, debit, balance, peer, bank_description, comment, is_correcting, agent";
 
 fn batch_from_row(row: &Row) -> rusqlite::Result<ImportBatch> {
     Ok(ImportBatch {

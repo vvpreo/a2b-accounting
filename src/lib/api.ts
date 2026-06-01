@@ -31,6 +31,10 @@ export interface Transaction {
   bankDescription: string | null;
   comment: string | null;
   isCorrecting: boolean;
+  /** Structured JSON produced by the AI agent (see `AgentState`), or `null`
+   *  until the agent has been run on this transaction. Parse with
+   *  `parseAgentState`. */
+  agent: string | null;
 }
 
 export type CategoryKind = "income" | "expense";
@@ -511,6 +515,113 @@ export function getSetting(key: string): Promise<string | null> {
 
 export function setSetting(key: string, value: string): Promise<void> {
   return invoke<void>("set_setting", { key, value });
+}
+
+// ---- AI agent ----
+
+/** Provider configuration, stored as JSON under the `ai_provider_config`
+ *  setting key. `apiKey` may be a literal key or an `env:VAR_NAME` reference
+ *  resolved by the backend from the process environment. */
+export interface AiProviderConfig {
+  presetId: string;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+  temperature?: number;
+}
+
+export const AI_CONFIG_KEY = "ai_provider_config";
+
+export async function loadAiConfig(): Promise<AiProviderConfig | null> {
+  const raw = await getSetting(AI_CONFIG_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as AiProviderConfig;
+  } catch {
+    return null;
+  }
+}
+
+export function saveAiConfig(config: AiProviderConfig): Promise<void> {
+  return setSetting(AI_CONFIG_KEY, JSON.stringify(config));
+}
+
+export interface ChatMsg {
+  role: "user" | "assistant";
+  /** The model's verbatim answer (single source of truth — the verdict marker
+   *  lines are part of it and hidden at display time via stripVerdictMarkers). */
+  content: string;
+}
+
+/** Structured answer from the agent for a single chat turn. The model answers
+ *  in plain text; the backend parses the verdict out of marker lines. */
+export interface AgentReply {
+  /** The model's verbatim answer (stored as-is). */
+  reply: string;
+  suggestedCategory: string | null;
+  confidence: number | null;
+}
+
+/** The human-readable part of an agent answer: everything before the `---`
+ *  separator that precedes the YAML verdict block. Used for a clean chat
+ *  display without storing a second stripped copy of the text. */
+export function agentReplyText(text: string): string {
+  const lines = text.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const t = lines[i].trim();
+    if (t.length >= 3 && /^-+$/.test(t)) {
+      return lines.slice(0, i).join("\n").trim();
+    }
+  }
+  return text.trim();
+}
+
+/** Full agent state persisted in `Transaction.agent` as JSON: the latest
+ *  verdict (category + confidence) plus the running dialog history. */
+export interface AgentState {
+  suggestedCategory: string | null;
+  confidence: number | null;
+  messages: ChatMsg[];
+  updatedAt: string;
+}
+
+export function parseAgentState(raw: string | null): AgentState | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<AgentState>;
+    return {
+      suggestedCategory: parsed.suggestedCategory ?? null,
+      confidence: parsed.confidence ?? null,
+      messages: Array.isArray(parsed.messages) ? parsed.messages : [],
+      updatedAt: parsed.updatedAt ?? "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Send a tiny prompt to the configured provider to validate it. Returns a
+ *  short human-readable summary (model + reply snippet). */
+export function aiTestConnection(): Promise<string> {
+  return invoke<string>("ai_test_connection");
+}
+
+/** Run the agent over one transaction. `messages` is the dialog history; the
+ *  backend prepends a per-transaction system prompt with the transaction
+ *  fields (minus balance) and the category list. */
+export function aiTransactionChat(
+  transactionId: number,
+  messages: ChatMsg[],
+): Promise<AgentReply> {
+  return invoke<AgentReply>("ai_transaction_chat", { transactionId, messages });
+}
+
+/** Persist the agent JSON blob for a transaction (`null` clears it). */
+export function setTransactionAgent(
+  transactionId: number,
+  agent: string | null,
+): Promise<void> {
+  return invoke<void>("set_transaction_agent", { transactionId, agent });
 }
 
 export interface Currency {
