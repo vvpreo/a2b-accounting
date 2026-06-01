@@ -18,14 +18,17 @@ export const AI_PROVIDER_PRESETS: AiProviderPreset[] = [
     id: "openrouter",
     name: "OpenRouter",
     baseUrl: "https://openrouter.ai/api/v1",
-    defaultModel: "openai/gpt-4o-mini",
+    defaultModel: "qwen/qwen3-30b-a3b",
     requiresApiKey: true,
+    // Open-weight models that can later be self-hosted locally (Ollama/MLX),
+    // chosen for tool calling + multilingual (RU/TH) support. Larger sizes
+    // first, then the compact fallbacks for low-RAM local runs.
     models: [
+      "qwen/qwen3-30b-a3b",
+      "qwen/qwen3-14b",
+      "qwen/qwen3-8b",
+      "mistralai/mistral-small-3.2-24b-instruct",
       "openai/gpt-4o-mini",
-      "openai/gpt-4o",
-      "anthropic/claude-3.5-sonnet",
-      "google/gemini-2.0-flash-001",
-      "meta-llama/llama-3.1-70b-instruct",
     ],
   },
   {
@@ -55,7 +58,7 @@ export function defaultAiConfig(): AiProviderConfig {
   return {
     presetId: "openrouter",
     baseUrl: "https://openrouter.ai/api/v1",
-    model: "openai/gpt-4o-mini",
+    model: "qwen/qwen3-30b-a3b",
     apiKey: "env:OPENROUTER_API_KEY",
     temperature: 0,
   };

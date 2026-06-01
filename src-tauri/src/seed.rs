@@ -2214,7 +2214,7 @@ pub fn ensure_ai_provider_config(conn: &Connection) -> rusqlite::Result<()> {
     let config = serde_json::json!({
         "presetId": "openrouter",
         "baseUrl": "https://openrouter.ai/api/v1",
-        "model": "openai/gpt-4o-mini",
+        "model": "qwen/qwen3-30b-a3b",
         "apiKey": "env:OPENROUTER_API_KEY",
         "temperature": 0
     });
