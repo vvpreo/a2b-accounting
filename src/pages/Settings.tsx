@@ -13,6 +13,7 @@ import {
   setDataDir,
 } from "../lib/api";
 import { LANGUAGES, LocaleCode, useI18n, useT } from "../i18n";
+import { ThemeMode, useTheme } from "../theme";
 import { CurrenciesTab } from "./settings/CurrenciesTab";
 import { AiProviderTab } from "./settings/AiProviderTab";
 
@@ -20,6 +21,7 @@ type SettingsTab = "general" | "currencies" | "ai";
 
 export function SettingsPage() {
   const { t, locale, setLocale } = useI18n();
+  const { mode, setMode } = useTheme();
   const [tab, setTab] = useState<SettingsTab>("general");
 
   return (
@@ -66,6 +68,19 @@ export function SettingsPage() {
                   {l.name}
                 </option>
               ))}
+            </select>
+          </div>
+
+          <div className="settings-row">
+            <label htmlFor="settings-theme">{t("settings.theme")}</label>
+            <select
+              id="settings-theme"
+              value={mode}
+              onChange={(e) => setMode(e.target.value as ThemeMode)}
+            >
+              <option value="light">{t("settings.themeLight")}</option>
+              <option value="dark">{t("settings.themeDark")}</option>
+              <option value="system">{t("settings.themeSystem")}</option>
             </select>
           </div>
 

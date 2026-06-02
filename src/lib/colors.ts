@@ -103,6 +103,30 @@ export function deriveChildColor(parentHex: string, depth: number): string {
   return hslToHex({ h, s: sAdjusted, l: targetL });
 }
 
+// Relative luminance (sRGB, WCAG) of a hex color, 0 (black) .. 1 (white).
+function relativeLuminance(hex: string): number {
+  const m = hex.replace("#", "").trim();
+  const full =
+    m.length === 3
+      ? m.split("").map((c) => c + c).join("")
+      : m.padEnd(6, "0").substring(0, 6);
+  const channel = (i: number) => {
+    const v = parseInt(full.substring(i, i + 2), 16) / 255;
+    return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * channel(0) + 0.7152 * channel(2) + 0.0722 * channel(4);
+}
+
+/**
+ * Pick a legible text color (near-black or white) to render on top of an
+ * arbitrary background color. Category colors range from saturated mids to very
+ * light tints (deep child categories), so white text is unreadable on the light
+ * ones — choose by the background's luminance instead of always using white.
+ */
+export function readableTextColor(backgroundHex: string): string {
+  return relativeLuminance(backgroundHex) > 0.55 ? "#18181b" : "#ffffff";
+}
+
 // Pick the first palette color not already used by existing root categories.
 // Falls back to the first palette color if all are taken.
 export function nextRootColor(usedColors: string[]): string {

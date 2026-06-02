@@ -356,6 +356,10 @@
   "settings": {
     "title": "Settings",
     "language": "Interface language",
+    "theme": "Theme",
+    "themeLight": "Light",
+    "themeDark": "Dark",
+    "themeSystem": "System",
     "demo": {
       "title": "Demo data",
       "hint": "Replaces all current data with a demo set: a single USD account, a family budget category tree, ~800 transactions over 3 years, and a saved \"Отчёт учёта\" report.",

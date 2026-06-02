@@ -11,6 +11,7 @@ import { CategoryPickerPopover } from "../../components/CategoryPickerPopover";
 import { CategoryDistributionModal } from "../../components/CategoryDistributionModal";
 import { percentOf } from "../../lib/distribution";
 import { formatMinorAsMoney } from "../../lib/money";
+import { readableTextColor } from "../../lib/colors";
 
 const MAX_VISIBLE_BARS = 3;
 
@@ -131,7 +132,12 @@ export function CategoriesCell({
           <div
             key={v.categoryId}
             className="txn-categories-bar"
-            style={{ flex: v.shareMinor, backgroundColor: v.categoryColor }}
+            style={{
+              flex: v.shareMinor,
+              backgroundColor: v.categoryColor,
+              color: readableTextColor(v.categoryColor),
+              textShadow: "none",
+            }}
             title={`${v.categoryName} · ${formatMinorAsMoney(v.shareMinor)}`}
           >
             <span className="txn-categories-bar-label">{v.categoryName}</span>
