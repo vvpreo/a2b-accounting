@@ -1603,6 +1603,16 @@ button.activity-cell:focus-visible {
   color: #52525b;
 }
 
+.export-range {
+  display: flex;
+  gap: 16px;
+  margin: 4px 0 8px;
+}
+
+.export-actions {
+  margin: 12px 0;
+}
+
 .batches-panel ul {
   list-style: none;
   padding: 0;
@@ -1938,6 +1948,30 @@ button.activity-cell:focus-visible {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 12px;
   resize: none;
+}
+
+.export-section {
+  padding: 4px 0;
+}
+
+.export-section + .export-section {
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid #e4e4e7;
+}
+
+.export-section h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #52525b;
+}
+
+.update-result-breakdown {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: #52525b;
 }
 
 .file-input-label {
@@ -2761,6 +2795,14 @@ code {
 :root[data-theme="dark"] .file-input-label {
     background: #18181b;
     border-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .export-section + .export-section {
+    border-top-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .update-result-breakdown {
+    color: #a1a1aa;
   }
 
 :root[data-theme="dark"] .preview-table-wrap {

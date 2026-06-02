@@ -35,6 +35,12 @@ export function parseUniversalCsv(
   text: string,
   t: Translate,
 ): CsvParseResult {
+  // Strip a leading UTF-8 BOM (our own export writes one so Excel reads it as
+  // UTF-8; Excel may also re-add one on save). Left in place it would corrupt
+  // the first header name and make every row fail with "missing occurred_at".
+  if (text.charCodeAt(0) === 0xfeff) {
+    text = text.slice(1);
+  }
   const delimiter = detectDelimiter(text);
   if (delimiter === null) {
     return {

@@ -257,6 +257,20 @@ pub fn restart_app(app_handle: AppHandle) {
     app_handle.restart();
 }
 
+/// Write a UTF-8 text file to an absolute path the user picked via the save
+/// dialog. Used by the per-account CSV export: the frontend serializes the
+/// transactions and hands us the final contents, since the project ships no
+/// generic fs plugin. Parent directories are created if missing.
+#[tauri::command]
+pub fn write_text_file(path: String, contents: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    if let Some(parent) = path_buf.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("write_text_file.create_parent: {e}"))?;
+    }
+    fs::write(&path_buf, contents).map_err(|e| format!("write_text_file.write: {e}"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

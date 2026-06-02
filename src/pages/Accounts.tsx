@@ -1,4 +1,5 @@
 import {
+  ChangeEvent,
   Fragment,
   FormEvent,
   useCallback,
@@ -38,10 +39,16 @@ import {
   listImportBatches,
   listTransactions,
   setSetting,
+  bulkUpdateTransactionFields,
   updateAccount,
   updateCashTransaction,
   validateBalanceChain,
+  writeTextFile,
 } from "../lib/api";
+import type { BulkUpdateResult } from "../lib/api";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { buildAccountCsv } from "../lib/csv-export";
+import { parseByFormat } from "../lib/import-formats";
 import { ACCOUNT_PRESETS, findPresetByName } from "../lib/account-presets";
 import {
   MultiSelectDropdown,
@@ -926,7 +933,7 @@ function ActivityLegendModal({
   );
 }
 
-type DetailTab = "general" | "batches" | "cash";
+type DetailTab = "general" | "batches" | "cash" | "export";
 
 function AccountDetailModal({
   account,
@@ -1029,6 +1036,13 @@ function AccountDetailModal({
               {t("accounts.detailsTabBatches")}
             </button>
           )}
+          <button
+            type="button"
+            className={`modal-tab-button${tab === "export" ? " active" : ""}`}
+            onClick={() => setTab("export")}
+          >
+            {t("accounts.detailsTabExport")}
+          </button>
         </div>
         {tab === "general" ? (
           <form onSubmit={onSubmit}>
@@ -1084,12 +1098,279 @@ function AccountDetailModal({
           </form>
         ) : tab === "cash" ? (
           <CashTransactionsTab account={account} />
+        ) : tab === "export" ? (
+          <ExportTab account={account} />
         ) : (
           <BatchesTab account={account} />
         )}
       </div>
     </div>,
     document.body,
+  );
+}
+
+function ExportTab({ account }: { account: Account }) {
+  const t = useT();
+  // Load the account's transactions once: used both to seed the default export
+  // range (full period = min..max real-transaction date) and to serialize the
+  // export without a second fetch.
+  const [txns, setTxns] = useState<Transaction[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+
+  const [exporting, setExporting] = useState(false);
+  const [exportMsg, setExportMsg] = useState<{
+    kind: "ok" | "error";
+    text: string;
+  } | null>(null);
+
+  const [updateFilename, setUpdateFilename] = useState<string | null>(null);
+  const [updateText, setUpdateText] = useState<string | null>(null);
+  const [updating, setUpdating] = useState(false);
+  const [updateMsg, setUpdateMsg] = useState<
+    | { kind: "error"; text: string }
+    | { kind: "result"; result: BulkUpdateResult }
+    | null
+  >(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    listTransactions([account.id])
+      .then((list) => {
+        if (cancelled) return;
+        setTxns(list);
+        // Default range = whole period: earliest..latest real (non-correcting)
+        // transaction date. Pre-filling these makes "all transactions" the
+        // visible default instead of an empty/today-looking date input.
+        const dates = list
+          .filter((x) => !x.isCorrecting)
+          .map((x) => x.occurredAtUtc.slice(0, 10));
+        if (dates.length > 0) {
+          setFromDate(dates.reduce((a, b) => (a < b ? a : b)));
+          setToDate(dates.reduce((a, b) => (a > b ? a : b)));
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) setLoadError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [account.id]);
+
+  async function onExport() {
+    if (!txns) return;
+    setExportMsg(null);
+    // Inclusive UTC-instant bounds; an empty input means "unbounded". ISO-8601
+    // UTC strings sort chronologically, so a lexicographic compare against
+    // occurredAtUtc is a correct date filter.
+    const lower = fromDate ? `${fromDate}T00:00:00.000Z` : null;
+    const upper = toDate ? `${toDate}T23:59:59.999Z` : null;
+    if (lower && upper && lower > upper) {
+      setExportMsg({ kind: "error", text: t("accounts.exportRangeInvalid") });
+      return;
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const base = (account.name || account.bank || "account").trim();
+    const safeBase = base.replace(/[\\/:*?"<>|]+/g, "_");
+    const suffix =
+      fromDate || toDate ? `${fromDate || "start"}_${toDate || today}` : today;
+
+    let chosen: string | null;
+    try {
+      chosen = await saveDialog({
+        defaultPath: `${safeBase}-${suffix}.csv`,
+        filters: [{ name: "CSV", extensions: ["csv"] }],
+      });
+    } catch (e) {
+      setExportMsg({
+        kind: "error",
+        text: t("accounts.exportCsvError", { message: String(e) }),
+      });
+      return;
+    }
+    if (!chosen) return;
+
+    setExporting(true);
+    try {
+      // Exclude synthetic correction rows up front so the reported count
+      // matches what buildAccountCsv actually writes (it filters them too).
+      const inRange = txns.filter(
+        (tx) =>
+          !tx.isCorrecting &&
+          (!lower || tx.occurredAtUtc >= lower) &&
+          (!upper || tx.occurredAtUtc <= upper),
+      );
+      if (inRange.length === 0) {
+        setExportMsg({ kind: "error", text: t("accounts.exportNoRows") });
+        return;
+      }
+      const csv = buildAccountCsv(inRange);
+      await writeTextFile(chosen, csv);
+      setExportMsg({
+        kind: "ok",
+        text: t("accounts.exportCsvSuccessCount", {
+          path: chosen,
+          count: inRange.length,
+        }),
+      });
+    } catch (e) {
+      setExportMsg({
+        kind: "error",
+        text: t("accounts.exportCsvError", { message: String(e) }),
+      });
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  function onUpdateFileChange(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUpdateMsg(null);
+    setUpdateFilename(file.name);
+    file
+      .text()
+      .then(setUpdateText)
+      .catch((err) =>
+        setUpdateMsg({ kind: "error", text: String(err) }),
+      );
+  }
+
+  async function onUpdateComments() {
+    if (!updateText) return;
+    setUpdating(true);
+    setUpdateMsg(null);
+    try {
+      // Exported timestamps carry an explicit UTC offset, so the default offset
+      // is only a fallback for hand-authored naive datetimes.
+      const parsed = await parseByFormat(
+        "generic-csv-v1",
+        { kind: "text", text: updateText },
+        t,
+      );
+      if (parsed.errors.length > 0) {
+        setUpdateMsg({
+          kind: "error",
+          text: t("accounts.updateParseError", {
+            message: parsed.errors.join("; "),
+          }),
+        });
+        return;
+      }
+      const result = await bulkUpdateTransactionFields({
+        accountId: account.id,
+        defaultTimezoneOffset: "+00:00",
+        rows: parsed.rows,
+      });
+      setUpdateMsg({ kind: "result", result });
+      // Reload so a follow-up export reflects the freshly written comments.
+      listTransactions([account.id])
+        .then(setTxns)
+        .catch(() => {});
+    } catch (e) {
+      setUpdateMsg({ kind: "error", text: String(e) });
+    } finally {
+      setUpdating(false);
+    }
+  }
+
+  return (
+    <div className="modal-body">
+      {loadError && <div className="error">{loadError}</div>}
+
+      <section className="export-section">
+        <h3>{t("accounts.exportSectionTitle")}</h3>
+        <p className="hint">{t("accounts.exportHint")}</p>
+        <div className="export-range">
+          <label className="import-field">
+            <span>{t("accounts.exportRangeFrom")}</span>
+            <input
+              type="date"
+              value={fromDate}
+              max={toDate || undefined}
+              onChange={(e) => setFromDate(e.target.value)}
+            />
+          </label>
+          <label className="import-field">
+            <span>{t("accounts.exportRangeTo")}</span>
+            <input
+              type="date"
+              value={toDate}
+              min={fromDate || undefined}
+              onChange={(e) => setToDate(e.target.value)}
+            />
+          </label>
+        </div>
+        <p className="hint">{t("accounts.exportRangeHint")}</p>
+        <div className="export-actions">
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={onExport}
+            disabled={exporting || txns === null}
+          >
+            {exporting ? t("accounts.exportCsvBusy") : t("accounts.exportCsv")}
+          </button>
+        </div>
+        {exportMsg && (
+          <div className={exportMsg.kind === "ok" ? "ok" : "error"}>
+            {exportMsg.text}
+          </div>
+        )}
+      </section>
+
+      <section className="export-section">
+        <h3>{t("accounts.updateSectionTitle")}</h3>
+        <p className="hint">{t("accounts.updateSectionHint")}</p>
+        <label className="file-input-label">
+          <input type="file" accept=".csv,text/csv" onChange={onUpdateFileChange} />
+          {updateFilename
+            ? t("import.buttonChosen", { filename: updateFilename })
+            : t("import.buttonChooseFile")}
+        </label>
+        <div className="export-actions">
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={onUpdateComments}
+            disabled={updating || !updateText}
+          >
+            {updating
+              ? t("accounts.updateBusy")
+              : t("accounts.updateButton")}
+          </button>
+        </div>
+        {updateMsg?.kind === "error" && (
+          <div className="error">{updateMsg.text}</div>
+        )}
+        {updateMsg?.kind === "result" && (
+          <div className="ok">
+            <p>
+              {t("accounts.updateResultDone", {
+                updated: updateMsg.result.updated,
+              })}
+            </p>
+            <ul className="update-result-breakdown">
+              <li>
+                {t("accounts.updateResultUnmatched", {
+                  count: updateMsg.result.unmatched,
+                })}
+              </li>
+              {updateMsg.result.ambiguous > 0 && (
+                <li>
+                  {t("accounts.updateResultAmbiguous", {
+                    count: updateMsg.result.ambiguous,
+                  })}
+                </li>
+              )}
+            </ul>
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
 

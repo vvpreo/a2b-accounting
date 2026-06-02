@@ -140,6 +140,13 @@ export function backupToZip(zipPath: string): Promise<void> {
   return invoke<void>("backup_to_zip", { zipPath });
 }
 
+/// Write UTF-8 text to an absolute path (picked via the save dialog). Used by
+/// the per-account CSV export — the frontend serializes the CSV and the
+/// backend writes it, since the project ships no generic fs plugin.
+export function writeTextFile(path: string, contents: string): Promise<void> {
+  return invoke<void>("write_text_file", { path, contents });
+}
+
 /// Validate and install a previously-created ZIP backup. The current
 /// `finances.db` is renamed to `finances.db.bak-<utc-timestamp>` before
 /// the new file is moved into place. Caller must restart afterwards.
@@ -482,6 +489,28 @@ export function updateTransactionComment(
   comment: string | null,
 ): Promise<void> {
   return invoke<void>("update_transaction_comment", { id, comment });
+}
+
+/// Outcome of a bulk field-update run (CSV re-import in "update fields" mode).
+/// Every parsed row falls into exactly one bucket.
+export interface BulkUpdateResult {
+  updated: number;
+  unmatched: number;
+  ambiguous: number;
+}
+
+/// Bulk-update the descriptive fields (peer, bank_description, comment) of
+/// existing transactions from a re-imported CSV. Matches each row to a stored
+/// transaction by its (occurred_at, credit, debit, balance) key and fully
+/// overwrites all three fields from the row — including blanks, which clear the
+/// stored value (snapshot semantics). Amounts/dates are untouched; no import
+/// batch is created.
+export function bulkUpdateTransactionFields(args: {
+  accountId: number;
+  defaultTimezoneOffset: string;
+  rows: TxnImportRow[];
+}): Promise<BulkUpdateResult> {
+  return invoke<BulkUpdateResult>("bulk_update_transaction_fields", args);
 }
 
 // Fetch a single transaction by id (for the per-transaction view/edit modal).

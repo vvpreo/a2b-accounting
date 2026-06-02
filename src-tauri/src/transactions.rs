@@ -675,6 +675,112 @@ pub fn update_transaction_comment(
     Ok(())
 }
 
+/// Outcome of a bulk field-update run (CSV re-import in "update fields" mode).
+/// Every parsed row falls into exactly one bucket.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkUpdateResult {
+    /// Matched exactly one transaction; its descriptive fields were overwritten
+    /// from the CSV row.
+    pub updated: i64,
+    /// No transaction matched the row's (time, credit, debit, balance) key.
+    pub unmatched: i64,
+    /// More than one transaction matched the key — skipped to stay safe.
+    pub ambiguous: i64,
+}
+
+/// Bulk-update the descriptive fields (`peer`, `bank_description`, `comment`) of
+/// existing transactions from a re-imported CSV, matching each row to a stored
+/// transaction by its `(occurred_at_utc, credit, debit, balance)` key — the same
+/// identity the duplicate detector uses, which is effectively unique within an
+/// account because the running balance differs row to row.
+///
+/// Rows are parsed with the very same normalization as `import_transactions`
+/// (`parse_row`), so an exported file round-trips exactly. All three descriptive
+/// fields are **fully overwritten** from the CSV row, including blanks: an empty
+/// cell clears the stored value (set to NULL). Amounts, dates and balance are
+/// never touched. Unmatched / ambiguous rows are counted and reported; no new
+/// import batch is created.
+#[tauri::command]
+pub fn bulk_update_transaction_fields(
+    state: State<'_, DbState>,
+    account_id: i64,
+    default_timezone_offset: String,
+    rows: Vec<TxnImportRow>,
+) -> Result<BulkUpdateResult, String> {
+    let mut guard = state.lock().map_err(|e| e.to_string())?;
+    bulk_update_transaction_fields_inner(&mut guard, account_id, &default_timezone_offset, rows)
+}
+
+pub(crate) fn bulk_update_transaction_fields_inner(
+    conn: &mut Connection,
+    account_id: i64,
+    default_timezone_offset: &str,
+    rows: Vec<TxnImportRow>,
+) -> Result<BulkUpdateResult, String> {
+    if rows.is_empty() {
+        return Err("no rows to update".to_string());
+    }
+    let default_offset = parse_offset_str(default_timezone_offset)?;
+    let parsed: Vec<ParsedRow> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, r)| parse_row(r, &default_offset).map_err(|e| format!("row {}: {e}", i + 1)))
+        .collect::<Result<_, _>>()?;
+
+    let account_exists: bool = conn
+        .query_row("SELECT 1 FROM accounts WHERE id = ?1", [account_id], |_| {
+            Ok(true)
+        })
+        .unwrap_or(false);
+    if !account_exists {
+        return Err(format!("account {account_id} does not exist"));
+    }
+
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let mut result = BulkUpdateResult::default();
+
+    for p in &parsed {
+        let ids: Vec<i64> = {
+            let mut stmt = tx
+                .prepare_cached(
+                    "SELECT id FROM transactions
+                     WHERE account_id = ?1 AND occurred_at_utc = ?2
+                       AND credit = ?3 AND debit = ?4 AND balance = ?5",
+                )
+                .map_err(|e| e.to_string())?;
+            let ids = stmt
+                .query_map(
+                    params![account_id, p.occurred_at_utc, p.credit, p.debit, p.balance],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|e| e.to_string())?
+                .collect::<rusqlite::Result<Vec<i64>>>()
+                .map_err(|e| e.to_string())?;
+            ids
+        };
+
+        match ids.as_slice() {
+            [] => result.unmatched += 1,
+            [id] => {
+                // Full overwrite: empty cells normalize to None in parse_row and
+                // are written as NULL, clearing the stored value.
+                tx.execute(
+                    "UPDATE transactions SET peer = ?1, bank_description = ?2, comment = ?3
+                     WHERE id = ?4",
+                    params![p.peer, p.bank_description, p.comment, id],
+                )
+                .map_err(|e| e.to_string())?;
+                result.updated += 1;
+            }
+            _ => result.ambiguous += 1,
+        }
+    }
+
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(result)
+}
+
 /// Fetch a single transaction by id. Used by the per-transaction view/edit
 /// modal, which can be opened from any screen that lists transactions.
 #[tauri::command]
@@ -1162,6 +1268,112 @@ mod tests {
         assert_eq!(errors[0].txn_id, 2);
         assert_eq!(errors[0].expected_balance, "110.00");
         assert_eq!(errors[0].actual_balance, "120.00");
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn imp_row(
+        occurred_at: &str,
+        credit: &str,
+        debit: &str,
+        balance: &str,
+        peer: Option<&str>,
+        bank_description: Option<&str>,
+        comment: Option<&str>,
+    ) -> TxnImportRow {
+        TxnImportRow {
+            occurred_at: occurred_at.to_string(),
+            credit: credit.to_string(),
+            debit: debit.to_string(),
+            balance: balance.to_string(),
+            peer: peer.map(|c| c.to_string()),
+            bank_description: bank_description.map(|c| c.to_string()),
+            comment: comment.map(|c| c.to_string()),
+        }
+    }
+
+    /// Verifies the bulk field-update path (snapshot semantics): a matched row
+    /// overwrites all three descriptive fields — including blanks, which clear
+    /// the stored value — while amounts/dates are untouched; a row with no match
+    /// is counted as unmatched. Stored timestamps use the millis form that
+    /// `import_transactions` produces, so the exact-string match is realistic.
+    #[test]
+    fn bulk_update_overwrites_fields_including_blanks() {
+        let dir = TempDir::new().unwrap();
+        let mut conn = db::open(dir.path()).unwrap();
+        let acc: i64 = conn
+            .query_row(
+                "INSERT INTO accounts (bank, currency, account_number, owner_name)
+                 VALUES ('B', 'USD', '1', 'A') RETURNING id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let batch: i64 = conn
+            .query_row(
+                "INSERT INTO import_batches
+                 (account_id, imported_at, source_filename, row_count, timezone_offset)
+                 VALUES (?1, '2026-01-01T00:00:00Z', NULL, 2, '+00:00') RETURNING id",
+                params![acc],
+                |r| r.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO transactions
+             (account_id, import_batch_id, occurred_at_utc, credit, debit, balance, peer, bank_description, comment)
+             VALUES
+             (?1, ?2, '2026-01-01T10:00:00.000Z', 1000, 0, 1000, NULL, NULL, NULL),
+             (?1, ?2, '2026-01-02T10:00:00.000Z', 500,  0, 1500, 'old peer', 'old bank', 'keep me')",
+            params![acc, batch],
+        )
+        .unwrap();
+
+        let rows = vec![
+            // matches txn 1 — writes all three descriptive fields
+            imp_row(
+                "2026-01-01T10:00:00.000Z",
+                "10.00",
+                "",
+                "10.00",
+                Some("Acme"),
+                Some("card payment"),
+                Some("groceries"),
+            ),
+            // matches txn 2 with empty cells — snapshot overwrite clears them
+            imp_row("2026-01-02T10:00:00.000Z", "5.00", "", "15.00", None, None, Some("  ")),
+            // no transaction has this balance — unmatched
+            imp_row("2026-03-03T10:00:00.000Z", "1.00", "", "99.00", None, None, Some("nope")),
+        ];
+
+        let res =
+            bulk_update_transaction_fields_inner(&mut conn, acc, "+00:00", rows).unwrap();
+        assert_eq!(res.updated, 2);
+        assert_eq!(res.unmatched, 1);
+        assert_eq!(res.ambiguous, 0);
+
+        let (p1, b1, c1): (Option<String>, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT peer, bank_description, comment FROM transactions
+                 WHERE account_id = ?1 AND occurred_at_utc = '2026-01-01T10:00:00.000Z'",
+                params![acc],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(p1.as_deref(), Some("Acme"));
+        assert_eq!(b1.as_deref(), Some("card payment"));
+        assert_eq!(c1.as_deref(), Some("groceries"));
+
+        // txn 2: all three fields cleared by the blank snapshot row.
+        let (p2, b2, c2): (Option<String>, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT peer, bank_description, comment FROM transactions
+                 WHERE account_id = ?1 AND occurred_at_utc = '2026-01-02T10:00:00.000Z'",
+                params![acc],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(p2, None);
+        assert_eq!(b2, None);
+        assert_eq!(c2, None);
     }
 
     fn fixture_two_accounts() -> (TempDir, rusqlite::Connection, i64, i64) {
