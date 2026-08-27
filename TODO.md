@@ -10,8 +10,9 @@
 
 # TO REVIEW
 
+- [ ] Переезд desktop → web: Tauri заменён на axum HTTP-сервер (RPC 1:1, SSE-события, backup download / restore upload), Docker-образ (multi-arch amd64+arm64), CI-публикация в GHCR, docker-compose для локального запуска
 - [ ] Backup & restore in Settings: ZIP export with `wal_checkpoint(TRUNCATE)`, validated restore with auto-bak of current DB, and «switch»-mode data-dir picker driven by a pointer file in the platform-default appdata
-- [ ] CI: rolling macOS DMG release on push to `main` (no signing, arm64 only)
+- [ ] CI: rolling macOS DMG release on push to `main` (no signing, arm64 only) — superseded by the Docker/GHCR pipeline (workflow removed in the web migration)
 - [ ] Categories CRUD (income/expense, hierarchical tree, palette + shade-derived colors)
 - [ ] [Data model & import mechanism (accounts, transactions, import batches)](docs/plans/data-model-and-import.md)
 - [ ] Kasikorn PDF statement import (`kasikorn-pdf-v1`): расшифровка пароля через мастер импорта, позиционный парсер на pdfjs-dist, balance-delta для credit/debit, склейка переносов Channel/Details

@@ -1,0 +1,31 @@
+[package]
+name = "finances-v2"
+version = "0.1.0"
+description = "Personal finances management app — web server"
+authors = ["V3P"]
+edition = "2021"
+
+[lib]
+name = "finances_v2_lib"
+
+[[bin]]
+name = "finances-server"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+tower-http = { version = "0.6", features = ["fs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+rust_decimal = "1"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+sys-locale = "0.3"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3"

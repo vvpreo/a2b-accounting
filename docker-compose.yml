@@ -1,0 +1,20 @@
+# Production-style local deployment: pull the prebuilt image from GHCR and
+# run it with your own data directory. The app listens on
+# http://127.0.0.1:${FINANCES_PORT:-3700} — loopback only, nothing is exposed
+# to the network.
+#
+#   docker login ghcr.io          # once; e.g. gh auth token | docker login ghcr.io -u <user> --password-stdin
+#   FINANCES_DATA_DIR=~/finances-data docker compose up -d
+#
+# The DB (finances.db + WAL) lives in FINANCES_DATA_DIR on the host
+# (default: ./data next to this file). The image itself contains no data and
+# no keys.
+services:
+  app:
+    image: ghcr.io/vvpreo/vvpreo-accounting:latest
+    container_name: finances
+    ports:
+      - "127.0.0.1:${FINANCES_PORT:-3700}:8080"
+    volumes:
+      - "${FINANCES_DATA_DIR:-./data}:/data"
+    restart: unless-stopped

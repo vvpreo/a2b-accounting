@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "../lib/events";
 
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { useI18n, useT } from "../i18n";

@@ -1,15 +1,22 @@
 #!/usr/bin/env bash
-# Build a release bundle of the desktop app.
-# Produces installers under src-tauri/target/release/bundle/.
+# Release build without Docker: frontend to dist/, backend to
+# server/target/release/finances-server. For the production image use
+# `docker build .` instead (see Dockerfile).
 
 set -euo pipefail
 
-# Make sure Rust toolchain is on PATH (rustup installs to ~/.cargo/bin).
 if [ -f "$HOME/.cargo/env" ]; then
   # shellcheck disable=SC1091
   . "$HOME/.cargo/env"
 fi
 
-cd "$(dirname "$0")/.."
+PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$PROJECT_ROOT"
 
-exec npm run tauri build
+npm run build
+cargo build --release --manifest-path server/Cargo.toml
+
+echo
+echo "Frontend: $PROJECT_ROOT/dist/"
+echo "Backend:  $PROJECT_ROOT/server/target/release/finances-server"
+echo "Run:      FINANCES_STATIC_DIR=dist FINANCES_DATA_DIR=... server/target/release/finances-server"

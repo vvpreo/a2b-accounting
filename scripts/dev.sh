@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Run the app in development mode (hot-reload).
+# Run the app in development mode (hot-reload): Rust backend (axum) on
+# FINANCES_BIND (default 127.0.0.1:3701) + Vite dev server on :3700 which
+# proxies /api to the backend.
 # Requires FINANCES_DATA_DIR — the directory where all app data is stored.
 
 set -euo pipefail
@@ -19,13 +21,19 @@ fi
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-# Tauri dev runs `cargo run` from src-tauri/, so a relative FINANCES_DATA_DIR
-# would resolve inside src-tauri/ and trigger the dev watcher in an infinite
-# rebuild loop. Normalize to an absolute path rooted at the project.
+# The backend runs with server/ as its build dir; normalize a relative
+# FINANCES_DATA_DIR to an absolute path rooted at the project so both
+# processes agree on it.
 case "$FINANCES_DATA_DIR" in
   /*) ;;
   *) FINANCES_DATA_DIR="$PROJECT_ROOT/$FINANCES_DATA_DIR" ;;
 esac
 export FINANCES_DATA_DIR
+export FINANCES_BIND="${FINANCES_BIND:-127.0.0.1:3701}"
 
-exec npm run tauri dev
+# Kill the whole process group (backend + vite) on exit/Ctrl-C.
+trap 'kill 0' EXIT INT TERM
+
+cargo run --manifest-path server/Cargo.toml &
+
+npm run dev

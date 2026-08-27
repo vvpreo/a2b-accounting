@@ -43,10 +43,9 @@ import {
   updateAccount,
   updateCashTransaction,
   validateBalanceChain,
-  writeTextFile,
+  triggerDownload,
 } from "../lib/api";
 import type { BulkUpdateResult } from "../lib/api";
-import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { buildAccountCsv } from "../lib/csv-export";
 import { parseByFormat } from "../lib/import-formats";
 import { ACCOUNT_PRESETS, findPresetByName } from "../lib/account-presets";
@@ -1177,21 +1176,7 @@ function ExportTab({ account }: { account: Account }) {
     const safeBase = base.replace(/[\\/:*?"<>|]+/g, "_");
     const suffix =
       fromDate || toDate ? `${fromDate || "start"}_${toDate || today}` : today;
-
-    let chosen: string | null;
-    try {
-      chosen = await saveDialog({
-        defaultPath: `${safeBase}-${suffix}.csv`,
-        filters: [{ name: "CSV", extensions: ["csv"] }],
-      });
-    } catch (e) {
-      setExportMsg({
-        kind: "error",
-        text: t("accounts.exportCsvError", { message: String(e) }),
-      });
-      return;
-    }
-    if (!chosen) return;
+    const filename = `${safeBase}-${suffix}.csv`;
 
     setExporting(true);
     try {
@@ -1208,11 +1193,14 @@ function ExportTab({ account }: { account: Account }) {
         return;
       }
       const csv = buildAccountCsv(inRange);
-      await writeTextFile(chosen, csv);
+      triggerDownload(
+        new Blob([csv], { type: "text/csv;charset=utf-8" }),
+        filename,
+      );
       setExportMsg({
         kind: "ok",
         text: t("accounts.exportCsvSuccessCount", {
-          path: chosen,
+          path: filename,
           count: inRange.length,
         }),
       });

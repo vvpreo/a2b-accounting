@@ -1,16 +1,13 @@
-import { useEffect, useState } from "react";
-import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { useEffect, useRef, useState } from "react";
 
 import {
-  backupToZip,
   clearAllData,
   DataDirInfo,
   dataDirInfo,
-  resetDataDir,
-  restartApp,
+  fetchBackupBlob,
   restoreFromZip,
   seedDemoData,
-  setDataDir,
+  triggerDownload,
 } from "../lib/api";
 import { LANGUAGES, LocaleCode, useI18n, useT } from "../i18n";
 import { ThemeMode, useTheme } from "../theme";
@@ -252,32 +249,19 @@ function BackupSection() {
   const [busy, setBusy] = useState<"backup" | "restore" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [pendingRestorePath, setPendingRestorePath] = useState<string | null>(
+  const [pendingRestoreFile, setPendingRestoreFile] = useState<File | null>(
     null,
   );
+  const restoreInputRef = useRef<HTMLInputElement | null>(null);
 
   async function handleBackup() {
     setError(null);
     setSuccess(null);
-    // ISO-ish date (no time): matches the default-name placeholder
-    // and stays sortable as a plain string.
-    const today = new Date().toISOString().slice(0, 10);
-    const defaultName = t("settings.backup.backupDefaultName", { date: today });
-    let chosen: string | null;
-    try {
-      chosen = await saveDialog({
-        defaultPath: defaultName,
-        filters: [{ name: "ZIP", extensions: ["zip"] }],
-      });
-    } catch (e) {
-      setError(t("settings.backup.backupError", { message: String(e) }));
-      return;
-    }
-    if (!chosen) return;
     setBusy("backup");
     try {
-      await backupToZip(chosen);
-      setSuccess(t("settings.backup.backupSuccess", { path: chosen }));
+      const { blob, filename } = await fetchBackupBlob();
+      triggerDownload(blob, filename);
+      setSuccess(t("settings.backup.backupSuccess", { path: filename }));
     } catch (e) {
       setError(
         t("settings.backup.backupError", {
@@ -289,33 +273,28 @@ function BackupSection() {
     }
   }
 
-  async function handleRestorePick() {
+  function handleRestorePick() {
     setError(null);
     setSuccess(null);
-    let chosen: string | string[] | null;
-    try {
-      chosen = await openDialog({
-        multiple: false,
-        directory: false,
-        filters: [{ name: "ZIP", extensions: ["zip"] }],
-      });
-    } catch (e) {
-      setError(t("settings.backup.restoreError", { message: String(e) }));
-      return;
-    }
-    if (!chosen || Array.isArray(chosen)) return;
-    setPendingRestorePath(chosen);
+    restoreInputRef.current?.click();
+  }
+
+  function onRestoreFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] ?? null;
+    // Reset the input so picking the same file again re-triggers onChange.
+    e.target.value = "";
+    if (file) setPendingRestoreFile(file);
   }
 
   async function confirmRestore() {
-    if (!pendingRestorePath) return;
+    if (!pendingRestoreFile) return;
     setBusy("restore");
     setError(null);
     try {
-      await restoreFromZip(pendingRestorePath);
-      // Restart so the app reopens the new DB file. The command never
-      // returns, but we await for symmetry with the other paths.
-      await restartApp();
+      await restoreFromZip(pendingRestoreFile);
+      // The backend has already reopened the restored DB — a full reload
+      // re-fetches every cached state from it.
+      window.location.reload();
     } catch (e) {
       setError(
         t("settings.backup.restoreError", {
@@ -323,7 +302,7 @@ function BackupSection() {
         }),
       );
       setBusy(null);
-      setPendingRestorePath(null);
+      setPendingRestoreFile(null);
     }
   }
 
@@ -352,13 +331,20 @@ function BackupSection() {
         >
           {t("settings.backup.restoreButton")}
         </button>
+        <input
+          ref={restoreInputRef}
+          type="file"
+          accept=".zip,application/zip"
+          style={{ display: "none" }}
+          onChange={onRestoreFileChange}
+        />
       </div>
-      {pendingRestorePath && (
+      {pendingRestoreFile && (
         <div className="danger-confirm">
           <h4>{t("settings.backup.restoreConfirmTitle")}</h4>
           <p>{t("settings.backup.restoreConfirmText")}</p>
           <p className="settings-hint">
-            <code>{pendingRestorePath}</code>
+            <code>{pendingRestoreFile.name}</code>
           </p>
           <div className="danger-confirm-actions">
             <button
@@ -374,7 +360,7 @@ function BackupSection() {
             <button
               type="button"
               className="btn-ghost"
-              onClick={() => setPendingRestorePath(null)}
+              onClick={() => setPendingRestoreFile(null)}
               disabled={busy !== null}
             >
               {t("common.cancel")}
@@ -386,13 +372,13 @@ function BackupSection() {
   );
 }
 
+/// Display-only in the web build: the data directory is fixed for the server
+/// process (Docker volume via FINANCES_DATA_DIR, or the per-user default) and
+/// cannot be switched from the UI.
 function DataDirSection() {
   const t = useT();
   const [info, setInfo] = useState<DataDirInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [pendingPath, setPendingPath] = useState<string | null>(null);
-  const [confirmingReset, setConfirmingReset] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -408,60 +394,6 @@ function DataDirSection() {
     };
   }, []);
 
-  async function handlePick() {
-    if (!info || info.envOverride) return;
-    setError(null);
-    let chosen: string | string[] | null;
-    try {
-      chosen = await openDialog({
-        multiple: false,
-        directory: true,
-        defaultPath: info.path,
-      });
-    } catch (e) {
-      setError(t("settings.dataDir.errorChanging", { message: String(e) }));
-      return;
-    }
-    if (!chosen || Array.isArray(chosen)) return;
-    if (chosen === info.path) return;
-    setPendingPath(chosen);
-  }
-
-  async function confirmSwitch() {
-    if (!pendingPath) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await setDataDir(pendingPath);
-      await restartApp();
-    } catch (e) {
-      setError(
-        t("settings.dataDir.errorChanging", {
-          message: localizeBackupError(String(e), t, "settings.dataDir.errorCodes"),
-        }),
-      );
-      setBusy(false);
-      setPendingPath(null);
-    }
-  }
-
-  async function confirmReset() {
-    setBusy(true);
-    setError(null);
-    try {
-      await resetDataDir();
-      await restartApp();
-    } catch (e) {
-      setError(
-        t("settings.dataDir.errorChanging", {
-          message: localizeBackupError(String(e), t, "settings.dataDir.errorCodes"),
-        }),
-      );
-      setBusy(false);
-      setConfirmingReset(false);
-    }
-  }
-
   if (!info) {
     return (
       <div className="settings-section">
@@ -471,110 +403,23 @@ function DataDirSection() {
     );
   }
 
-  const sourceLabel = (() => {
-    switch (info.source) {
-      case "default":
-        return t("settings.dataDir.sourceDefault");
-      case "pointer":
-        return t("settings.dataDir.sourcePointer");
-      case "env":
-        return t("settings.dataDir.sourceEnv");
-    }
-  })();
+  const sourceLabel =
+    info.source === "env"
+      ? t("settings.dataDir.sourceEnv")
+      : t("settings.dataDir.sourceDefault");
 
   return (
     <div className="settings-section">
       <h3 className="settings-section-title">{t("settings.dataDir.title")}</h3>
-      <p className="settings-hint">{t("settings.dataDir.hint")}</p>
       {error && <div className="error">{error}</div>}
       <dl className="settings-data-dir-info">
         <dt>{t("settings.dataDir.currentLabel")}</dt>
         <dd>
           <code>{info.path}</code> <span className="settings-hint">({sourceLabel})</span>
         </dd>
-        {info.source !== "default" && (
-          <>
-            <dt>{t("settings.dataDir.defaultLabel")}</dt>
-            <dd>
-              <code>{info.defaultPath}</code>
-            </dd>
-          </>
-        )}
       </dl>
       {info.envOverride && (
         <p className="settings-hint">{t("settings.dataDir.envHint")}</p>
-      )}
-      {!info.envOverride && (
-        <div className="settings-actions-row">
-          <button
-            type="button"
-            className="btn-primary"
-            onClick={handlePick}
-            disabled={busy}
-          >
-            {t("settings.dataDir.changeButton")}
-          </button>
-          {info.source === "pointer" && (
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => setConfirmingReset(true)}
-              disabled={busy}
-            >
-              {t("settings.dataDir.resetButton")}
-            </button>
-          )}
-        </div>
-      )}
-      {pendingPath && (
-        <div className="danger-confirm">
-          <h4>{t("settings.dataDir.confirmTitle")}</h4>
-          <p>{t("settings.dataDir.confirmText", { path: pendingPath })}</p>
-          <div className="danger-confirm-actions">
-            <button
-              type="button"
-              className="btn-danger"
-              onClick={confirmSwitch}
-              disabled={busy}
-            >
-              {t("settings.dataDir.confirmYes")}
-            </button>
-            <button
-              type="button"
-              className="btn-ghost"
-              onClick={() => setPendingPath(null)}
-              disabled={busy}
-            >
-              {t("common.cancel")}
-            </button>
-          </div>
-        </div>
-      )}
-      {confirmingReset && (
-        <div className="danger-confirm">
-          <h4>{t("settings.dataDir.resetConfirmTitle")}</h4>
-          <p>
-            {t("settings.dataDir.resetConfirmText", { path: info.defaultPath })}
-          </p>
-          <div className="danger-confirm-actions">
-            <button
-              type="button"
-              className="btn-danger"
-              onClick={confirmReset}
-              disabled={busy}
-            >
-              {t("settings.dataDir.confirmYes")}
-            </button>
-            <button
-              type="button"
-              className="btn-ghost"
-              onClick={() => setConfirmingReset(false)}
-              disabled={busy}
-            >
-              {t("common.cancel")}
-            </button>
-          </div>
-        </div>
       )}
     </div>
   );

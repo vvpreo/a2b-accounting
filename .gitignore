@@ -16,6 +16,9 @@ dist-ssr
 /data/
 .direnv/
 
+# Scratch/throwaway artifacts (screenshots, debug dumps, local smoke-test data)
+.tmp/
+
 # Real bank-statement samples — never commit (PII). Existing generic test
 # samples in samples/*.csv stay tracked; only per-bank subfolders are ignored.
 /samples/*/

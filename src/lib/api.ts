@@ -1,4 +1,22 @@
-import { invoke } from "@tauri-apps/api/core";
+/// Minimal RPC bridge to the backend: `POST /api/rpc/<cmd>` with a JSON args
+/// object. Mirrors the former Tauri `invoke` contract — resolves with the
+/// command's JSON result, rejects with the backend's error *string* (often a
+/// stable code the UI localises), so existing `catch (e) { String(e) }`
+/// call sites keep working unchanged.
+async function invoke<T>(
+  cmd: string,
+  args?: Record<string, unknown>,
+): Promise<T> {
+  const res = await fetch(`/api/rpc/${cmd}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(args ?? {}),
+  });
+  if (!res.ok) {
+    throw await res.text();
+  }
+  return (await res.json()) as T;
+}
 
 export type AccountKind = "bank" | "cash";
 
@@ -105,15 +123,14 @@ export function dataDir(): Promise<string> {
   return invoke<string>("data_dir");
 }
 
-/// Snapshot of where the DB lives and how that path was decided. `source`
-/// values: `"default"` (platform appdata), `"env"` (FINANCES_DATA_DIR env
-/// override — UI must hide the "change directory" action), `"pointer"`
-/// (user-set via Settings). `defaultPath` is the platform-default that
-/// `reset_data_dir` would revert to.
+/// Snapshot of where the server keeps the DB and how that path was decided.
+/// `source` values: `"env"` (FINANCES_DATA_DIR env var — the normal mode in
+/// Docker/dev) or `"default"` (per-user fallback path). Display-only in the
+/// web build; `defaultPath` mirrors `path` and is kept for compatibility.
 export interface DataDirInfo {
   path: string;
   defaultPath: string;
-  source: "default" | "env" | "pointer";
+  source: "default" | "env";
   envOverride: boolean;
 }
 
@@ -121,43 +138,45 @@ export function dataDirInfo(): Promise<DataDirInfo> {
   return invoke<DataDirInfo>("data_dir_info");
 }
 
-/// Switch the data dir for the *next* launch. The command only writes a
-/// pointer file in the platform-default appdata directory — the running
-/// app keeps using the current DB until the caller triggers a restart.
-export function setDataDir(path: string): Promise<void> {
-  return invoke<void>("set_data_dir", { path });
+/// Download the current DB (after a WAL checkpoint) as a single-entry ZIP.
+/// Resolves with the blob plus the server-suggested filename; the caller
+/// hands both to `triggerDownload`. Rejects with the backend error string.
+export async function fetchBackupBlob(): Promise<{
+  blob: Blob;
+  filename: string;
+}> {
+  const res = await fetch("/api/backup");
+  if (!res.ok) {
+    throw await res.text();
+  }
+  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const match = /filename="([^"]+)"/.exec(disposition);
+  return {
+    blob: await res.blob(),
+    filename: match?.[1] ?? "finances-backup.zip",
+  };
 }
 
-/// Clear the data-dir pointer, restoring the platform-default location on
-/// next launch.
-export function resetDataDir(): Promise<void> {
-  return invoke<void>("reset_data_dir");
+/// Browser-download helper: saves a blob under the given filename via a
+/// transient anchor element. Replaces the desktop build's save dialog.
+export function triggerDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
-/// Dump the current DB (after a WAL checkpoint) to a single-entry ZIP at
-/// the given absolute path.
-export function backupToZip(zipPath: string): Promise<void> {
-  return invoke<void>("backup_to_zip", { zipPath });
-}
-
-/// Write UTF-8 text to an absolute path (picked via the save dialog). Used by
-/// the per-account CSV export — the frontend serializes the CSV and the
-/// backend writes it, since the project ships no generic fs plugin.
-export function writeTextFile(path: string, contents: string): Promise<void> {
-  return invoke<void>("write_text_file", { path, contents });
-}
-
-/// Validate and install a previously-created ZIP backup. The current
-/// `finances.db` is renamed to `finances.db.bak-<utc-timestamp>` before
-/// the new file is moved into place. Caller must restart afterwards.
-export function restoreFromZip(zipPath: string): Promise<void> {
-  return invoke<void>("restore_from_zip", { zipPath });
-}
-
-/// Cleanly restart the running app. Used after backup/restore/dir-change
-/// to reopen the DB on the new on-disk state.
-export function restartApp(): Promise<void> {
-  return invoke<void>("restart_app");
+/// Upload a backup ZIP and install it. The backend validates the archive
+/// (valid SQLite with our `schema_migrations` table), renames the current
+/// `finances.db` to `finances.db.bak-<utc-timestamp>`, installs the new file
+/// and reopens the DB in-process. Caller reloads the page afterwards.
+export async function restoreFromZip(file: File): Promise<void> {
+  const res = await fetch("/api/restore", { method: "POST", body: file });
+  if (!res.ok) {
+    throw await res.text();
+  }
 }
 
 export function createAccount(args: {
