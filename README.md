@@ -1,16 +1,20 @@
-# A2B Finances
+# A2B Accounting
 
 > Last updated: 2026-08-27
 
-A self-hosted, single-user web application for tracking and planning personal finances. Table-first UI, local SQLite database, focused on development speed and manual entry / bank-statement imports. Ships as a Docker image from GHCR; the project started as a Tauri desktop app — the entire Rust backend was kept, and the Tauri layer was replaced with an HTTP server (axum).
+A self-hosted, single-user web application for tracking and planning personal finances. Table-first UI, local SQLite database, focused on development speed and manual entry / bank-statement imports. Ships as a Docker image; the project started as a Tauri desktop app — the entire Rust backend was kept, and the Tauri layer was replaced with an HTTP server (axum).
 
 ## Quick Start (Docker, production use)
 
-Every push to `main` builds a multi-arch image (`linux/amd64` + `linux/arm64`) and publishes it to GHCR (workflow [.github/workflows/docker-image.yml](.github/workflows/docker-image.yml)): `ghcr.io/vvpreo/vvpreo-accounting:latest` plus an immutable tag per commit SHA.
+Every push to `main` builds a multi-arch image (`linux/amd64` + `linux/arm64`) and publishes it to Docker Hub (workflow [.github/workflows/docker-image.yml](.github/workflows/docker-image.yml)). Tags:
+
+- `vvpreo/a2b-accounting:dev` — rolling build of the newest `main` commit (what docker-compose pulls by default);
+- `vvpreo/a2b-accounting:sha-<commit>` — immutable per-commit tag;
+- `vvpreo/a2b-accounting:latest` — the last **stable** build; promoted by a separate process, never pushed by this workflow.
 
 ```bash
-# 1. Log in to GHCR (once; needed while the repo/package is private)
-gh auth token | docker login ghcr.io -u <github-user> --password-stdin
+# 1. Log in to Docker Hub (once; only needed while the Docker Hub repo is private)
+docker login
 
 # 2. Run with your own data (docker-compose.yml lives in the repo root,
 #    but the single file is self-contained — copying it anywhere works)
@@ -32,7 +36,7 @@ The port is published on loopback only (`127.0.0.1:${FINANCES_PORT:-3700}`) — 
 npm install
 
 # 3. Run in dev mode: axum backend (cargo run, :3701) + Vite (:3700, hot reload)
-export FINANCES_DATA_DIR="$HOME/.finances-v2"
+export FINANCES_DATA_DIR="$HOME/.a2b-accounting"
 ./scripts/dev.sh
 ```
 
@@ -122,7 +126,7 @@ schema_migrations        (version, name, applied_at)
 ## Repository Structure
 
 ```
-finances-v2/
+a2b-accounting/
 ├── src/                              React + TS frontend
 │   ├── App.tsx                       tabs; on startup auto-selects Transactions if any exist, Accounts otherwise
 │   ├── App.css                       styles (no Tailwind)
@@ -174,7 +178,7 @@ finances-v2/
 │   │   ├── 009_add_transaction_categories.sql  transaction_categories table
 │   │   └── 013_add_currencies.sql    currency dictionary + Frankfurter snapshot seed (rate_source)
 │   └── src/
-│       ├── main.rs                   entry point (finances-server)
+│       ├── main.rs                   entry point (a2b-accounting-server)
 │       ├── lib.rs                    resolve_data_dir + open_and_init + tokio/axum bootstrap
 │       ├── http.rs                   axum router: /api/rpc/<cmd>, /api/events (SSE), /api/backup, /api/restore, static files
 │       ├── host.rs                   AppHandle/State/emit — replacement for the Tauri primitives
@@ -188,7 +192,7 @@ finances-v2/
 │       ├── settings.rs               get_setting / set_setting (UPSERT into app_settings)
 │       └── backup.rs                 backup_zip_bytes / restore_from_zip_bytes / data_dir_info + tests
 ├── Dockerfile                        multi-arch image: frontend (Vite) + cross-compiled Rust + slim runtime
-├── docker-compose.yml                local run of the GHCR image (loopback port, data volume)
+├── docker-compose.yml                local run of the Docker Hub image (loopback port, data volume)
 ├── scripts/
 │   ├── dev.sh                        dev run (axum on :3701 + Vite on :3700)
 │   └── build.sh                      release build without Docker (dist/ + release binary)
@@ -210,16 +214,16 @@ The script validates `FINANCES_DATA_DIR`, converts a relative path to an absolut
 
 ### Building the Docker image
 ```bash
-docker build -t vvpreo-accounting:local .
-docker run -d -p 127.0.0.1:3700:8080 -v "$HOME/finances-data:/data" vvpreo-accounting:local
+docker build -t a2b-accounting:local .
+docker run -d -p 127.0.0.1:3700:8080 -v "$HOME/finances-data:/data" a2b-accounting:local
 ```
-CI does the same for `linux/amd64` + `linux/arm64` and pushes to GHCR ([.github/workflows/docker-image.yml](.github/workflows/docker-image.yml)). The Rust stage cross-compiles on the builder's native platform (no QEMU-emulated compiler).
+CI does the same for `linux/amd64` + `linux/arm64` and pushes to Docker Hub ([.github/workflows/docker-image.yml](.github/workflows/docker-image.yml)). The Rust stage cross-compiles on the builder's native platform (no QEMU-emulated compiler).
 
 ### Release build without Docker
 ```bash
 ./scripts/build.sh
 ```
-Produces `dist/` (frontend) and `server/target/release/finances-server`.
+Produces `dist/` (frontend) and `server/target/release/a2b-accounting-server`.
 
 ### Tests
 ```bash
@@ -312,12 +316,12 @@ Done:
 - Category dictionary: income/expense hierarchy up to three levels in the UI, a colour palette with auto-derived shades, compact + and ✎ icons on row hover.
 - Transfer links between own accounts: a 🔗 column on the Transactions tab, two-click linking with validation (different accounts, opposite directions, not already linked), unlinking behind a confirmation. Mutually covering pairs are excluded from the report automatically.
 - i18n (ru/en), the selected language stored in the DB.
-- Web delivery: an axum server with an RPC contract 1:1 with the former Tauri `invoke`, SSE events, a multi-arch Docker image, CI publishing to GHCR, docker-compose for a local run with your own data.
+- Web delivery: an axum server with an RPC contract 1:1 with the former Tauri `invoke`, SSE events, a multi-arch Docker image, CI publishing to Docker Hub, docker-compose for a local run with your own data.
 - DB backup and restore via the UI (Settings): browser ZIP download (preceded by `wal_checkpoint(TRUNCATE)`), restore by uploading an archive with validation (valid SQLite + a `schema_migrations` table present) and automatic renaming of the current `finances.db` to `finances.db.bak-<UTC-timestamp>`. After a restore the server reopens the DB in place and the page reloads.
 - The data directory is fixed at server startup (`FINANCES_DATA_DIR` / Docker volume); Settings displays the current path. Runtime directory switching from the UI was removed together with the desktop build.
 
 In the queue (`TO REVIEW` in [TODO.md](TODO.md)):
-- Acceptance of the desktop → web migration (Docker image, GHCR, compose).
+- Acceptance of the desktop → web migration (Docker image, registry publishing, compose).
 - Acceptance of the category dictionary.
 - Acceptance of the data model and import.
 

@@ -1,18 +1,22 @@
-# Production-style local deployment: pull the prebuilt image from GHCR and
-# run it with your own data directory. The app listens on
+# Production-style local deployment: pull the prebuilt image from Docker Hub
+# and run it with your own data directory. The app listens on
 # http://127.0.0.1:${FINANCES_PORT:-3700} — loopback only, nothing is exposed
 # to the network.
 #
-#   docker login ghcr.io          # once; e.g. gh auth token | docker login ghcr.io -u <user> --password-stdin
-#   FINANCES_DATA_DIR=~/finances-data docker compose up -d
+#   docker login   # only needed while the Docker Hub repo is private
+#   FINANCES_DATA_DIR=~/finances-data docker compose up -d --pull always
+#
+# Image tags: `dev` — rolling build of every main commit (the default here),
+# `sha-<commit>` — immutable per-commit tag, `latest` — last stable build,
+# promoted by a separate process. Override via FINANCES_IMAGE to pin one.
 #
 # The DB (finances.db + WAL) lives in FINANCES_DATA_DIR on the host
 # (default: ./data next to this file). The image itself contains no data and
 # no keys.
 services:
   app:
-    image: ghcr.io/vvpreo/vvpreo-accounting:latest
-    container_name: finances
+    image: "${FINANCES_IMAGE:-vvpreo/a2b-accounting:dev}"
+    container_name: a2b-accounting
     ports:
       - "127.0.0.1:${FINANCES_PORT:-3700}:8080"
     volumes:

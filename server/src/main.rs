@@ -1,3 +1,3 @@
 fn main() {
-    finances_v2_lib::run()
+    a2b_accounting_lib::run()
 }

@@ -8,7 +8,7 @@ set -euo pipefail
 
 if [ -z "${FINANCES_DATA_DIR:-}" ]; then
   echo "ERROR: FINANCES_DATA_DIR is not set." >&2
-  echo "Example: export FINANCES_DATA_DIR=\"\$HOME/.finances-v2\"" >&2
+  echo "Example: export FINANCES_DATA_DIR=\"\$HOME/.a2b-accounting\"" >&2
   exit 1
 fi
 

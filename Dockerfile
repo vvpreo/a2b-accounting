@@ -32,15 +32,15 @@ ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
     CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
 COPY server ./server
 RUN cargo build --release --manifest-path server/Cargo.toml --target "$(cat /rust-target)" \
-    && cp "server/target/$(cat /rust-target)/release/finances-server" /finances-server
+    && cp "server/target/$(cat /rust-target)/release/a2b-accounting-server" /a2b-accounting-server
 
 # ---- Runtime ----
 FROM debian:bookworm-slim
-COPY --from=backend /finances-server /app/finances-server
+COPY --from=backend /a2b-accounting-server /app/a2b-accounting-server
 COPY --from=frontend /app/dist /app/static
 ENV FINANCES_DATA_DIR=/data \
     FINANCES_STATIC_DIR=/app/static \
     FINANCES_BIND=0.0.0.0:8080
 VOLUME /data
 EXPOSE 8080
-ENTRYPOINT ["/app/finances-server"]
+ENTRYPOINT ["/app/a2b-accounting-server"]

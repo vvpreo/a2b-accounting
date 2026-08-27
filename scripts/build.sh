@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Release build without Docker: frontend to dist/, backend to
-# server/target/release/finances-server. For the production image use
+# server/target/release/a2b-accounting-server. For the production image use
 # `docker build .` instead (see Dockerfile).
 
 set -euo pipefail
@@ -18,5 +18,5 @@ cargo build --release --manifest-path server/Cargo.toml
 
 echo
 echo "Frontend: $PROJECT_ROOT/dist/"
-echo "Backend:  $PROJECT_ROOT/server/target/release/finances-server"
-echo "Run:      FINANCES_STATIC_DIR=dist FINANCES_DATA_DIR=... server/target/release/finances-server"
+echo "Backend:  $PROJECT_ROOT/server/target/release/a2b-accounting-server"
+echo "Run:      FINANCES_STATIC_DIR=dist FINANCES_DATA_DIR=... server/target/release/a2b-accounting-server"

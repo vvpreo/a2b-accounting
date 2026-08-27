@@ -41,7 +41,7 @@ pub async fn serve(app: AppHandle) {
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
         .unwrap_or_else(|e| panic!("failed to bind {bind}: {e}"));
-    eprintln!("finances-server listening on http://{bind}");
+    eprintln!("a2b-accounting-server listening on http://{bind}");
     axum::serve(listener, router).await.expect("server error");
 }
 

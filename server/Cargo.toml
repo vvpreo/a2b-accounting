@@ -1,15 +1,15 @@
 [package]
-name = "finances-v2"
+name = "a2b-accounting"
 version = "0.1.0"
 description = "Personal finances management app — web server"
 authors = ["V3P"]
 edition = "2021"
 
 [lib]
-name = "finances_v2_lib"
+name = "a2b_accounting_lib"
 
 [[bin]]
-name = "finances-server"
+name = "a2b-accounting-server"
 path = "src/main.rs"
 
 [dependencies]
