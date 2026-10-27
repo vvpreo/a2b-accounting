@@ -10,6 +10,8 @@
 
 # TO REVIEW
 
+- [ ] Bangkok Bank CSV: строки с датой без времени (`25-Jun-26`, Interest Credit / Withholding Tax) больше не теряются; нераспознанная дата — ошибка разбора, а не молчаливый пропуск
+- [ ] Поле пароля PDF в мастере импорта больше не вызывает у браузера предложение сохранить пароль
 - [ ] Переезд desktop → web: Tauri заменён на axum HTTP-сервер (RPC 1:1, SSE-события, backup download / restore upload), Docker-образ (multi-arch amd64+arm64), CI-публикация образа в Docker Hub, docker-compose для локального запуска
 - [ ] Backup & restore in Settings: ZIP export with `wal_checkpoint(TRUNCATE)`, validated restore with auto-bak of current DB, and «switch»-mode data-dir picker driven by a pointer file in the platform-default appdata
 - [ ] CI: rolling macOS DMG release on push to `main` (no signing, arm64 only) — superseded by the Docker-image pipeline (workflow removed in the web migration)

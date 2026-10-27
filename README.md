@@ -263,6 +263,7 @@ For **Bangkok Bank** the parser automatically:
 - skips the header (Account/Card numbers, Ledger/Available Balance), the `Total` row and the Disclaimer;
 - normalises numbers `"12,030.00"` → `12030.00`;
 - parses `"DD MMM YYYY HH:MM"` (English months, e.g. `27 Apr 2026 11:50`) → `YYYY-MM-DDTHH:MM:00`;
+- also accepts date-only cells (`25-Jun-26`, `25 Jun 2026`) that the bank uses for `AUTO` rows such as Interest Credit / Withholding Tax: such a row takes the time of the previous same-day row (00:00 if none), so it keeps its place in the balance chain; an unrecognised non-empty date is reported as a parse error instead of being silently dropped;
 - reverses the row order (BBL exports newest-first) — the resulting universal CSV is chronological;
 - assembles `bank_description` from `Description · Channel` (e.g. `Payment for Goods /Services · MOB`);
 - leaves `peer` empty — the export carries no counterparty.

@@ -28,7 +28,11 @@ const MONTHS: Record<string, string> = {
   dec: "12",
 };
 
-const DATE_RE = /^(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})\s+(\d{1,2}):(\d{2})$/;
+// "27 Apr 2026 11:50" is the canonical shape. Some rows (Interest Credit,
+// Withholding Tax — bank-generated AUTO entries) come without a time and
+// with a dash-separated, two-digit-year date: "25-Jun-26".
+const DATE_RE =
+  /^(\d{1,2})[\s-]+([A-Za-z]{3})[\s-]+(\d{4}|\d{2})(?:\s+(\d{1,2}):(\d{2}))?$/;
 
 /** "12,030.00" → "12030.00", "" → "". */
 function normalizeAmount(raw: string): string {
@@ -37,16 +41,28 @@ function normalizeAmount(raw: string): string {
   return trimmed.replace(/,/g, "");
 }
 
-/** "27 Apr 2026 11:50" → "2026-04-27T11:50:00", or null on parse failure. */
-export function parseBblDate(raw: string): string | null {
+export interface BblDate {
+  /** "YYYY-MM-DD" */
+  date: string;
+  /** "HH:MM", or null when the cell carries only a date. */
+  time: string | null;
+}
+
+/**
+ * "27 Apr 2026 11:50" → { date: "2026-04-27", time: "11:50" };
+ * "25-Jun-26" / "25 Jun 2026" → { date: "2026-06-25", time: null };
+ * null on parse failure. Two-digit years are 21st century.
+ */
+export function parseBblDate(raw: string): BblDate | null {
   const m = raw.trim().match(DATE_RE);
   if (!m) return null;
-  const [, dd, monStr, yyyy, hh, mm] = m;
+  const [, dd, monStr, yy, hh, mm] = m;
   const mon = MONTHS[monStr.toLowerCase()];
   if (!mon) return null;
-  const d = dd.padStart(2, "0");
-  const h = hh.padStart(2, "0");
-  return `${yyyy}-${mon}-${d}T${h}:${mm}:00`;
+  const yyyy = yy.length === 2 ? `20${yy}` : yy;
+  const date = `${yyyy}-${mon}-${dd.padStart(2, "0")}`;
+  const time = hh === undefined ? null : `${hh.padStart(2, "0")}:${mm}`;
+  return { date, time };
 }
 
 function joinNonEmpty(parts: string[], sep: string): string {
@@ -65,8 +81,13 @@ interface ConvertResult {
  * The bank exports rows newest-first; we reverse and stable-sort by
  * `occurred_at` so the chain of balances reads correctly through the
  * universal-CSV pipeline. Account / card-number / Total / Disclaimer rows
- * are skipped automatically — the parser only consumes rows whose date cell
- * matches the canonical "DD MMM YYYY HH:MM" shape.
+ * are skipped automatically — they have an empty date cell. A non-empty date
+ * cell that doesn't parse is reported as an error rather than dropped: a
+ * silently skipped row breaks the balance chain.
+ *
+ * Date-only rows (no time) take the time of the chronologically previous row
+ * when it falls on the same day, and 00:00 otherwise — this keeps them at
+ * their bank-given position after the sort.
  */
 export function bankCsvToUniversal(text: string): ConvertResult {
   const errors: string[] = [];
@@ -103,6 +124,8 @@ export function bankCsvToUniversal(text: string): ConvertResult {
   }
 
   interface ParsedRow {
+    date: string;
+    time: string | null;
     occurredAt: string;
     credit: string;
     debit: string;
@@ -114,8 +137,15 @@ export function bankCsvToUniversal(text: string): ConvertResult {
 
   for (let i = firstDataIdx; i < data.length; i++) {
     const row = data[i];
-    const occurredAt = parseBblDate(row[1] ?? "");
-    if (!occurredAt) continue;
+    const dateCell = (row[1] ?? "").trim();
+    if (dateCell === "") continue;
+    const parsedDate = parseBblDate(dateCell);
+    if (!parsedDate) {
+      errors.push(
+        `bangkok-bank: row ${i + 1} has an unrecognized date "${dateCell}"`,
+      );
+      continue;
+    }
 
     const description = (row[2] ?? "").trim();
     if (description === "" || description.toLowerCase() === "total") continue;
@@ -131,7 +161,8 @@ export function bankCsvToUniversal(text: string): ConvertResult {
     }
 
     parsed.push({
-      occurredAt,
+      ...parsedDate,
+      occurredAt: "",
       credit,
       debit,
       balance,
@@ -144,6 +175,13 @@ export function bankCsvToUniversal(text: string): ConvertResult {
   // Array.prototype.sort is stable since ES2019, so the reverse-then-sort
   // approach preserves the corrected intra-minute ordering.
   parsed.reverse();
+  let prev: ParsedRow | null = null;
+  for (const r of parsed) {
+    const time = r.time ?? (prev?.date === r.date ? prev.time : null) ?? "00:00";
+    r.time = time;
+    r.occurredAt = `${r.date}T${time}:00`;
+    prev = r;
+  }
   parsed.sort((a, b) => a.occurredAt.localeCompare(b.occurredAt));
 
   const universalRows: string[][] = [Array.from(UNIVERSAL_HEADER)];

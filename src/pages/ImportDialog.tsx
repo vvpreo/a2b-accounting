@@ -412,12 +412,24 @@ export function ImportDialog({
               {plugin.mayBeEncrypted && (
                 <label className="import-field">
                   <span>{t("import.pdfPassword")}</span>
+                  {/* A one-off PDF password, not a login: a real
+                      type="password" makes browsers and password managers
+                      offer to save it on every import. Plain text input,
+                      masked via CSS, plus the managers' opt-out attributes. */}
                   <input
-                    type="password"
+                    type="text"
+                    className="masked-input"
                     value={pdfPassword}
                     placeholder={t("import.pdfPasswordPlaceholder")}
                     onChange={(e) => setPdfPassword(e.target.value)}
                     autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                    data-1p-ignore=""
+                    data-lpignore="true"
+                    data-bwignore=""
+                    data-form-type="other"
                   />
                 </label>
               )}

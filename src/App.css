@@ -1902,6 +1902,12 @@ button.activity-cell:focus-visible {
   color: inherit;
 }
 
+/* Password-style masking for a type="text" input (see the PDF password field
+   in ImportDialog): avoids the browser's save-password prompt. */
+.masked-input {
+  -webkit-text-security: disc;
+}
+
 .import-method {
   grid-column: 1 / -1;
   display: flex;
