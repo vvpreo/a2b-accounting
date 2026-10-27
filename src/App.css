@@ -183,107 +183,13 @@ body {
   min-width: 336px;
 }
 
-.page--transactions th.col-comment,
-.page--transactions td.col-comment {
-  width: 100%;
-}
-
 /* AI agent column: suggested category + truncated reasoning, clickable to
  * open the transaction modal. */
-.page--transactions th.col-agent,
-.page--transactions td.col-agent {
-  min-width: 260px;
-  max-width: 420px;
-}
-
-.agent-cell {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-}
 
 /* Suggested-category chip (analysed rows); click opens the transaction. */
-.agent-cell-verdict {
-  flex-shrink: 0;
-  max-width: 170px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  color: #5b21b6;
-  background: #f5f3ff;
-  border: 1px solid #ddd6fe;
-  border-radius: 10px;
-  padding: 1px 8px;
-  cursor: pointer;
-}
-
-.agent-cell-verdict:hover {
-  background: #ede9fe;
-}
-
-.agent-cell-category {
-  font-weight: 600;
-  font-size: 12px;
-}
-
-.agent-cell-confidence {
-  font-weight: 400;
-  color: #71717a;
-  font-variant-numeric: tabular-nums;
-}
-
-.agent-cell-reasoning {
-  font-size: 12px;
-  color: #71717a;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 /* Compact ✨ "analyze" button — faint until hovered, so rows without a note
    read as empty and rows with one stand out. */
-.agent-cell-run {
-  flex-shrink: 0;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border: 1px dashed #c4b5fd;
-  border-radius: 50%;
-  font-size: 11px;
-  line-height: 1;
-  cursor: pointer;
-  opacity: 0.55;
-  transition: opacity 0.12s ease, background 0.12s ease;
-}
-
-.agent-cell-run:hover {
-  opacity: 1;
-  background: #f5f3ff;
-}
-
-.agent-cell-busy {
-  flex-shrink: 0;
-  width: 22px;
-  text-align: center;
-  font-size: 12px;
-  color: #71717a;
-}
-
-.agent-cell-error {
-  color: #dc2626;
-  font-weight: 700;
-  margin-left: 4px;
-}
 
 /* The three "long text" columns truncate with an ellipsis when their
  * content doesn't fit, instead of pushing the table wider than the
@@ -292,7 +198,6 @@ body {
  * + `text-overflow: ellipsis` + `white-space: nowrap` the visible row
  * always fits the screen. Full content is revealed via the floating
  * tooltip wired up in Transactions.tsx. */
-.page--transactions td.col-comment,
 .page--transactions td.col-peer,
 .page--transactions td.col-bank-description {
   max-width: 0;
@@ -303,10 +208,6 @@ body {
 
 /* The comment input lives inside its cell — it must shrink with the
  * cell rather than asserting its own natural width. */
-.page--transactions td.col-comment .inline-edit {
-  width: 100%;
-  min-width: 0;
-}
 
 .app-header {
   margin-bottom: 24px;
@@ -751,19 +652,17 @@ td.cell-placeholder {
   color: #9ca3af;
 }
 
-/* Transactions: the fixed money/date block and 📎 run together; every column
-   from AI onwards gets a vertical separator on its left (so the first line
-   sits right after 📎). */
-.page--transactions th.col-agent,
-.page--transactions td.col-agent,
+/* Transactions: the fixed money/date block runs together; every column from
+   Note onwards gets a vertical separator on its left (so the first line sits
+   between Balance and Note). */
+.page--transactions th.col-note,
+.page--transactions td.col-note,
 .page--transactions th.col-category,
 .page--transactions td.col-category,
 .page--transactions th.col-link,
 .page--transactions td.col-link,
 .page--transactions th.col-delta,
 .page--transactions td.col-delta,
-.page--transactions th.col-comment,
-.page--transactions td.col-comment,
 .page--transactions th.col-peer,
 .page--transactions td.col-peer,
 .page--transactions th.col-bank-description,
@@ -799,16 +698,14 @@ tr.month-separator td {
     color: #71717a;
   }
 
-:root[data-theme="dark"] .page--transactions th.col-agent,
-:root[data-theme="dark"] .page--transactions td.col-agent,
+:root[data-theme="dark"] .page--transactions th.col-note,
+:root[data-theme="dark"] .page--transactions td.col-note,
 :root[data-theme="dark"] .page--transactions th.col-category,
 :root[data-theme="dark"] .page--transactions td.col-category,
 :root[data-theme="dark"] .page--transactions th.col-link,
 :root[data-theme="dark"] .page--transactions td.col-link,
 :root[data-theme="dark"] .page--transactions th.col-delta,
 :root[data-theme="dark"] .page--transactions td.col-delta,
-:root[data-theme="dark"] .page--transactions th.col-comment,
-:root[data-theme="dark"] .page--transactions td.col-comment,
 :root[data-theme="dark"] .page--transactions th.col-peer,
 :root[data-theme="dark"] .page--transactions td.col-peer,
 :root[data-theme="dark"] .page--transactions th.col-bank-description,
@@ -5448,21 +5345,6 @@ tbody tr.is-selected td.col-select {
   color: inherit;
 }
 
-:root[data-theme="dark"] .agent-cell-run {
-  border-color: #4c3a78;
-  color: #c4b5fd;
-}
-
-:root[data-theme="dark"] .agent-cell-run:hover {
-  background: #241f38;
-}
-
-:root[data-theme="dark"] .agent-cell-confidence,
-:root[data-theme="dark"] .agent-cell-reasoning,
-:root[data-theme="dark"] .agent-cell-busy {
-  color: #a1a1aa;
-}
-
 /* Dark overrides for the currency cards + exchange-rate weeks calendar
    (Settings → Currencies). Added after the original dark theme. */
 :root[data-theme="dark"] .currency-card {
@@ -5980,56 +5862,13 @@ a.btn-ghost {
 
 /* Transactions: linked-document column + transaction modal documents block */
 
-.page--transactions th.col-document,
-.page--transactions td.col-document {
-  width: 32px;
-  min-width: 32px;
-  max-width: 32px;
-  text-align: center;
-  padding-left: 2px;
-  padding-right: 2px;
-}
-
 /* The button fills the whole cell (like .txn-link-btn) so the entire 📎
    column is a click target, including empty cells. */
-.page--transactions td.col-document {
-  position: relative;
-}
-
-.document-cell-btn {
-  appearance: none;
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  padding: 0;
-  line-height: 1;
-  transition: color 0.12s ease, background 0.12s ease;
-}
 
 /* Linked: blue paperclip; hover hints that a click opens the document. */
-.document-cell-btn.is-linked {
-  color: #1d4ed8;
-}
-
-.document-cell-btn.is-linked:hover {
-  background: #e0e7ff;
-}
 
 /* Not linked: hidden paperclip revealed in green on hover — same cue as the
    🔗 column's "start a link here". */
-.document-cell-btn.is-startable {
-  color: transparent;
-}
-
-.document-cell-btn.is-startable:hover {
-  color: #15803d;
-  background: #dcfce7;
-}
 
 .modal--link-doc {
   width: min(860px, 94vw);
@@ -6184,19 +6023,6 @@ a.btn-ghost {
   background: #27272a;
 }
 
-:root[data-theme="dark"] .document-cell-btn.is-linked {
-  color: #93c5fd;
-}
-
-:root[data-theme="dark"] .document-cell-btn.is-linked:hover {
-  background: #1e3a8a;
-}
-
-:root[data-theme="dark"] .document-cell-btn.is-startable:hover {
-  color: #86efac;
-  background: #14532d;
-}
-
 :root[data-theme="dark"] .txn-doc-picker {
   border-color: #3f3f46;
 }
@@ -6207,33 +6033,10 @@ a.btn-ghost {
 }
 
 /* AI column: the note recognised on the linked slip */
-.agent-cell-memo {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
-  color: #18181b;
-}
 
 .modal--bulk-docs {
   width: min(620px, 94vw);
   bottom: auto;
-}
-
-:root[data-theme="dark"] .agent-cell-memo {
-  color: #f4f4f5;
-}
-
-:root[data-theme="dark"] .agent-cell-verdict {
-  color: #ddd6fe;
-  background: #241f38;
-  border-color: #4c3a78;
-}
-
-:root[data-theme="dark"] .agent-cell-verdict:hover {
-  background: #2e2748;
 }
 
 /* Group heading inside a multi-select dropdown (Filter: kinds / document). */
@@ -6312,4 +6115,147 @@ a.btn-ghost {
   gap: 8px;
   font-size: 13px;
   cursor: pointer;
+}
+
+/* 📎 column: the user's own comment (sticker) outranks a linked document. */
+
+/* "Document & comment" dialog: slip preview on the left when one is linked. */
+.modal--link-doc-wide {
+  width: min(1200px, 96vw);
+}
+
+.link-doc-body {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.link-doc-preview {
+  flex: 0 0 38%;
+  max-height: calc(100vh - 140px);
+  padding: 0;
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+  background: #f4f4f5;
+  overflow: hidden;
+  cursor: zoom-in;
+}
+
+.link-doc-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: calc(100vh - 140px);
+  object-fit: contain;
+}
+
+.link-doc-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.link-doc-save-state {
+  margin-left: 8px;
+  font-weight: 400;
+  color: #71717a;
+}
+
+:root[data-theme="dark"] .link-doc-preview {
+  border-color: #3f3f46;
+  background: #27272a;
+}
+
+/* Note column: icon (sticker / paperclip) + the comment or slip note, one
+   line; the whole cell is a button opening the "Document & comment" dialog. */
+.page--transactions th.col-note,
+.page--transactions td.col-note {
+  min-width: 260px;
+  max-width: 420px;
+}
+
+.page--transactions td.col-note {
+  position: relative;
+  padding: 0;
+}
+
+.note-cell {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: none;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  transition: background 0.12s ease;
+}
+
+.note-cell-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  width: 20px;
+}
+
+.note-cell-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.note-cell.is-linked .note-cell-icon {
+  color: #1d4ed8;
+}
+
+.note-cell.is-linked:hover {
+  background: #eef2ff;
+}
+
+.note-cell.is-comment:hover {
+  background: #fef3c7;
+}
+
+/* Empty: the paperclip is hidden until hover — the 🔗-column cue for
+   "click to add". */
+.note-cell.is-startable .note-cell-icon {
+  color: transparent;
+}
+
+.note-cell.is-startable:hover {
+  background: #dcfce7;
+}
+
+.note-cell.is-startable:hover .note-cell-icon {
+  color: #15803d;
+}
+
+:root[data-theme="dark"] .note-cell.is-linked .note-cell-icon {
+  color: #93c5fd;
+}
+
+:root[data-theme="dark"] .note-cell.is-linked:hover {
+  background: #1e293b;
+}
+
+:root[data-theme="dark"] .note-cell.is-comment:hover {
+  background: #3f2f12;
+}
+
+:root[data-theme="dark"] .note-cell.is-startable:hover {
+  background: #14532d;
+}
+
+:root[data-theme="dark"] .note-cell.is-startable:hover .note-cell-icon {
+  color: #86efac;
 }

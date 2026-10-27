@@ -163,10 +163,8 @@
     "tableDebit": "Debit",
     "tableBalance": "Balance",
     "tableCategory": "Category",
-    "tableAgent": "AI",
     "tablePeer": "Counterparty",
     "tableBankDescription": "Bank description",
-    "tableComment": "Comment",
     "tableLinkTitle": "Internal transfer link",
     "tableDeltaTitlePercent": "Δ — deviation from the dictionary rate as a percentage. Click to switch to absolute values.",
     "tableDeltaTitleAbsolute": "Δ — deviation in each side's currency. Click to switch to a percentage.",
@@ -205,7 +203,6 @@
     "withdrawRateUnavailable": "No exchange rate for this date — enter the amount manually.",
     "empty": "No transactions match the selected filters.",
     "correctingLabel": "Correcting entry",
-    "commentPlaceholder": "—",
     "filterAccounts": "Accounts",
     "filterAccountsAll": "All accounts",
     "filterAccountsNone": "None selected",
@@ -232,11 +229,9 @@
       "without_document": "Without document"
     },
     "column": {
-      "document": "Document",
-      "agent": "AI",
+      "note": "Note",
       "category": "Category",
       "delta": "Δ (FX difference on transfers)",
-      "comment": "Comment",
       "peer": "Counterparty",
       "bank_description": "Bank description"
     },
@@ -283,7 +278,6 @@
       "analyzeDocuments": "Match documents",
       "proposeCategories": "Propose categories (AI)"
     },
-    "tableDocumentTitle": "Linked document (slip)",
     "openDocument": "Open document",
     "filterPeriod": "Period",
     "bulkDocs": {
@@ -319,7 +313,9 @@
       "providerUnknown": "not configured",
       "redo": "Re-analyse the ones that already have a proposal ({count})",
       "result": "Proposed: {proposed}, errors: {failed}."
-    }
+    },
+    "tableNote": "Note",
+    "tableNoteTitle": "Comment or the note from the slip; click to link a document or write a comment"
   },
   "import": {
     "title": "Import transactions",
@@ -643,7 +639,11 @@
     "linkedElsewhere": "linked to another transaction",
     "alreadyLinked": "linked",
     "link": "Link",
-    "undatedDocuments": "Documents with no known time: {count} — they will show up here once recognised."
+    "undatedDocuments": "Documents with no known time: {count} — they will show up here once recognised.",
+    "documentAndComment": "Document & comment",
+    "commentHint": "What this is — for you and for categorisation",
+    "commentSaved": "saved",
+    "commentSaveFailed": "not saved"
   },
   "errors": {
     "missingOccurredAt": "Row {row}: missing occurred_at",

@@ -43,8 +43,7 @@ import { BulkCategorizeModal } from "../components/BulkCategorizeModal";
 import { BulkAnalyzeDocumentsModal } from "../components/BulkAnalyzeDocumentsModal";
 import { BulkProposeCategoriesModal } from "../components/BulkProposeCategoriesModal";
 import { CategoriesCell } from "./transactions/CategoriesCell";
-import { AgentCell } from "./transactions/AgentCell";
-import { DocumentCell } from "./transactions/DocumentCell";
+import { NoteCell } from "./transactions/NoteCell";
 import { BulkActionsMenu } from "./transactions/BulkActionsMenu";
 import { PeriodDropdown, PeriodPreset } from "./transactions/PeriodDropdown";
 import { SelectCheckbox } from "./transactions/SelectCheckbox";
@@ -87,19 +86,15 @@ const DELTA_MODE_SETTING_KEY = "transactions.delta_display_mode";
 type ColumnKey =
   | "delta"
   | "category"
-  | "agent"
-  | "document"
-  | "comment"
+  | "note"
   | "peer"
   | "bank_description";
-// Picker order follows the table: fixed money/date block, 📎, AI, category,
+// Picker order follows the table: fixed money/date block, Note, category,
 // then the transfer columns (🔗 always shown, Δ optional), then free text.
 const COLUMN_KEYS: ColumnKey[] = [
-  "document",
-  "agent",
+  "note",
   "category",
   "delta",
-  "comment",
   "peer",
   "bank_description",
 ];
@@ -549,10 +544,8 @@ export function TransactionsPage({
     pendingSourceTxn.debit !== "0.00" &&
     pendingSourceTxn.credit === "0.00";
   const showCategory = visibleColumns.includes("category");
-  const showAgent = visibleColumns.includes("agent");
-  const showDocument = visibleColumns.includes("document");
+  const showNote = visibleColumns.includes("note");
   const showDelta = visibleColumns.includes("delta");
-  const showComment = visibleColumns.includes("comment");
   const showPeer = visibleColumns.includes("peer");
   const showBankDescription = visibleColumns.includes("bank_description");
   // 1 selection column + always-visible 🔗 + 5 fixed money/date columns +
@@ -800,17 +793,15 @@ export function TransactionsPage({
     setLinkError(null);
   }
 
+  // Saves the comment typed in the 📎 "Document & comment" dialog; rethrows so
+  // the dialog can show the failure next to the field.
   async function persistComment(id: number, raw: string) {
     const trimmed = raw.trim();
     const next = trimmed === "" ? null : trimmed;
-    try {
-      await updateTransactionComment(id, next);
-      setTxns((prev) =>
-        prev.map((tt) => (tt.id === id ? { ...tt, comment: next } : tt)),
-      );
-    } catch (e) {
-      setError(String(e));
-    }
+    await updateTransactionComment(id, next);
+    setTxns((prev) =>
+      prev.map((tt) => (tt.id === id ? { ...tt, comment: next } : tt)),
+    );
   }
 
   const accountItems = accounts.map((a) => ({
@@ -955,13 +946,10 @@ export function TransactionsPage({
               <th className="col-fixed num">
                 {t("transactions.tableBalance")}
               </th>
-              {showDocument && (
-                <th className="col-document" title={t("transactions.tableDocumentTitle")}>
-                  📎
+              {showNote && (
+                <th className="col-note" title={t("transactions.tableNoteTitle")}>
+                  {t("transactions.tableNote")}
                 </th>
-              )}
-              {showAgent && (
-                <th className="col-agent">{t("transactions.tableAgent")}</th>
               )}
               {showCategory && (
                 <th className="col-category">{t("transactions.tableCategory")}</th>
@@ -994,9 +982,6 @@ export function TransactionsPage({
                     {deltaMode === "percent" ? "Δ%" : "Δ"}
                   </button>
                 </th>
-              )}
-              {showComment && (
-                <th className="col-comment">{t("transactions.tableComment")}</th>
               )}
               {showPeer && (
                 <th className="col-peer">{t("transactions.tablePeer")}</th>
@@ -1179,24 +1164,16 @@ export function TransactionsPage({
                     <td className="col-fixed num">
                       {formatMoney(x.balance)}
                     </td>
-                    {showDocument && (
-                      <DocumentCell
+                    {showNote && (
+                      <NoteCell
                         txn={x}
                         dateLabel={formatInstantLocal(x.occurredAtUtc)}
                         accountLabel={
                           acc ? `${acc.name || acc.accountNumber || acc.bank} · ${acc.currency}` : ""
                         }
+                        onSaveComment={(c) => persistComment(x.id, c)}
                         links={docLinksByTxn.get(x.id) ?? []}
                         onChanged={() => setDocLinksVersion((v) => v + 1)}
-                      />
-                    )}
-                    {showAgent && (
-                      <AgentCell
-                        transactionId={x.id}
-                        agent={x.agent}
-                        onOpen={() => setDetailTxnId(x.id)}
-                        onAnalyzed={() => setLocalRefresh((v) => v + 1)}
-                        memo={docLinksByTxn.get(x.id)?.find((l) => l.memo)?.memo}
                       />
                     )}
                     {showCategory && (() => {
@@ -1306,54 +1283,6 @@ export function TransactionsPage({
                             />
                           );
                         })()}
-                      </td>
-                    )}
-                    {showComment && (
-                      <td className="col-comment">
-                        <input
-                          key={`${x.id}:${x.comment ?? ""}`}
-                          className="inline-edit"
-                          defaultValue={x.comment ?? ""}
-                          placeholder={t("transactions.commentPlaceholder")}
-                          // Truncated-content tooltip: only fires when the
-                          // input is wider than its visible width, so a
-                          // short comment doesn't trigger a redundant
-                          // popup. Hides as soon as the user focuses
-                          // the input — they're actively typing and the
-                          // popup would just overlap the field.
-                          onMouseEnter={(e) => {
-                            const el = e.currentTarget;
-                            if (el === document.activeElement) return;
-                            const text = el.value;
-                            if (!text.trim()) return;
-                            if (el.scrollWidth <= el.clientWidth) return;
-                            const r = el.getBoundingClientRect();
-                            setTooltip({
-                              x: r.left + r.width / 2,
-                              y: r.top,
-                              text,
-                            });
-                          }}
-                          onMouseLeave={() => setTooltip(null)}
-                          onFocus={() => setTooltip(null)}
-                          onBlur={(e) => {
-                            const next =
-                              e.target.value.trim() === ""
-                                ? null
-                                : e.target.value.trim();
-                            if (next !== (x.comment ?? null)) {
-                              void persistComment(x.id, e.target.value);
-                            }
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.currentTarget.blur();
-                            } else if (e.key === "Escape") {
-                              e.currentTarget.value = x.comment ?? "";
-                              e.currentTarget.blur();
-                            }
-                          }}
-                        />
                       </td>
                     )}
                     {showPeer && (

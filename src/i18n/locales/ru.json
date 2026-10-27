@@ -167,10 +167,8 @@
     "tableDebit": "Списание",
     "tableBalance": "Баланс",
     "tableCategory": "Категория",
-    "tableAgent": "ИИ",
     "tablePeer": "Контрагент",
     "tableBankDescription": "Описание банка",
-    "tableComment": "Комментарий",
     "tableLinkTitle": "Связь между своими счетами",
     "tableDeltaTitlePercent": "Δ — отклонение от справочного курса в процентах. Кликните, чтобы переключиться в абсолютные значения.",
     "tableDeltaTitleAbsolute": "Δ — отклонение в валюте каждой стороны. Кликните, чтобы переключиться в проценты.",
@@ -209,7 +207,6 @@
     "withdrawRateUnavailable": "Курс на эту дату не найден, введите сумму вручную.",
     "empty": "Нет транзакций по выбранным фильтрам.",
     "correctingLabel": "Корректирующая транзакция",
-    "commentPlaceholder": "—",
     "filterAccounts": "Счета",
     "filterAccountsAll": "Все счета",
     "filterAccountsNone": "Не выбрано",
@@ -236,11 +233,9 @@
       "without_document": "Без документа"
     },
     "column": {
-      "document": "Документ",
-      "agent": "ИИ",
+      "note": "Заметка",
       "category": "Категория",
       "delta": "Δ (курсовая разница по переводам)",
-      "comment": "Комментарий",
       "peer": "Контрагент",
       "bank_description": "Описание банка"
     },
@@ -287,7 +282,6 @@
       "analyzeDocuments": "Подобрать документы",
       "proposeCategories": "Предложить категории (ИИ)"
     },
-    "tableDocumentTitle": "Привязанный документ (слип)",
     "openDocument": "Открыть документ",
     "filterPeriod": "Период",
     "bulkDocs": {
@@ -323,7 +317,9 @@
       "providerUnknown": "не настроен",
       "redo": "Проанализировать заново и те, где предложение уже есть ({count})",
       "result": "Предложено: {proposed}, ошибок: {failed}."
-    }
+    },
+    "tableNote": "Заметка",
+    "tableNoteTitle": "Комментарий или заметка из слипа; клик — привязать документ или написать комментарий"
   },
   "import": {
     "title": "Импорт транзакций",
@@ -653,7 +649,11 @@
     "linkedElsewhere": "привязан к другой транзакции",
     "alreadyLinked": "привязан",
     "link": "Привязать",
-    "undatedDocuments": "Документов без известного времени: {count} — они появятся в подборе после распознавания."
+    "undatedDocuments": "Документов без известного времени: {count} — они появятся в подборе после распознавания.",
+    "documentAndComment": "Документ и комментарий",
+    "commentHint": "Что это за трата — для себя и для подбора категории",
+    "commentSaved": "сохранено",
+    "commentSaveFailed": "не сохранилось"
   },
   "errors": {
     "missingOccurredAt": "Строка {row}: отсутствует occurred_at",
