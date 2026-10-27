@@ -1,21 +1,21 @@
-# Production-style local deployment: pull the prebuilt image from Docker Hub
-# and run it with your own data directory. The app listens on
-# http://127.0.0.1:${FINANCES_PORT:-3700} — loopback only, nothing is exposed
-# to the network.
+# Project compose: builds the image from the local sources (see Dockerfile)
+# and runs it. Used for local testing / UAT from a repo checkout:
 #
-#   docker login   # only needed while the Docker Hub repo is private
-#   FINANCES_DATA_DIR=~/finances-data docker compose up -d --pull always
+#   docker compose up -d --build
 #
-# Image tags: `dev` — rolling build of every main commit (the default here),
-# `sha-<commit>` — immutable per-commit tag, `latest` — last stable build,
-# promoted by a separate process. Override via FINANCES_IMAGE to pin one.
+# The app listens on http://127.0.0.1:${FINANCES_PORT:-3700} — loopback only.
+# The DB (finances.db + WAL) lives in FINANCES_DATA_DIR on the host (default:
+# ./data next to this file); the image itself contains no data and no keys.
 #
-# The DB (finances.db + WAL) lives in FINANCES_DATA_DIR on the host
-# (default: ./data next to this file). The image itself contains no data and
-# no keys.
+# For production-style use on your own machine — pulling the prebuilt image
+# from Docker Hub instead of building — see the standalone compose snippet in
+# README.md (Quick Start): it references vvpreo/a2b-accounting:dev with
+# pull_policy: always. Tags: `dev` — rolling build of every main commit,
+# `sha-<commit>` — immutable, `latest` — last stable, promoted separately.
 services:
   app:
-    image: "${FINANCES_IMAGE:-vvpreo/a2b-accounting:dev}"
+    build: .
+    image: a2b-accounting:local
     container_name: a2b-accounting
     ports:
       - "127.0.0.1:${FINANCES_PORT:-3700}:8080"

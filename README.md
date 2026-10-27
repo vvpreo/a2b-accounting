@@ -8,24 +8,37 @@ A self-hosted, single-user web application for tracking and planning personal fi
 
 Every push to `main` builds a multi-arch image (`linux/amd64` + `linux/arm64`) and publishes it to Docker Hub (workflow [.github/workflows/docker-image.yml](.github/workflows/docker-image.yml)). Tags:
 
-- `vvpreo/a2b-accounting:dev` — rolling build of the newest `main` commit (what docker-compose pulls by default);
+- `vvpreo/a2b-accounting:dev` — rolling build of the newest `main` commit;
 - `vvpreo/a2b-accounting:sha-<commit>` — immutable per-commit tag;
 - `vvpreo/a2b-accounting:latest` — the last **stable** build; promoted by a separate process, never pushed by this workflow.
 
-```bash
-# 1. Log in to Docker Hub (once; only needed while the Docker Hub repo is private)
-docker login
+On your machine, save this standalone compose file (the repo's own `docker-compose.yml` is different — it *builds* from sources, see below):
 
-# 2. Run with your own data (docker-compose.yml lives in the repo root,
-#    but the single file is self-contained — copying it anywhere works)
-FINANCES_DATA_DIR="$HOME/finances-data" docker compose up -d --pull always
-
-# 3. Open http://127.0.0.1:3700
+```yaml
+services:
+  app:
+    image: "${FINANCES_IMAGE:-vvpreo/a2b-accounting:dev}"
+    pull_policy: always
+    container_name: a2b-accounting
+    ports:
+      - "127.0.0.1:${FINANCES_PORT:-3700}:8080"
+    volumes:
+      - "${FINANCES_DATA_DIR:-$HOME/finances-data}:/data"
+    restart: unless-stopped
 ```
+
+```bash
+# Run with your own data; pull_policy: always keeps the image fresh on every `up`
+FINANCES_DATA_DIR="$HOME/finances-data" docker compose up -d
+
+# Open http://127.0.0.1:3700
+```
+
+The Docker Hub repo is public, so no `docker login` is needed to pull. To run the *stable* channel instead of the rolling one, set `FINANCES_IMAGE=vvpreo/a2b-accounting:latest`.
 
 The port is published on loopback only (`127.0.0.1:${FINANCES_PORT:-3700}`) — nothing is exposed to the network. The image contains no data and no keys: the DB lives in the mounted directory, and the AI-provider key is stored in the DB itself (`app_settings`; an `env:VAR` reference is supported too).
 
-**Where the data lives:** `$FINANCES_DATA_DIR/finances.db` (plus WAL files) on the host. Migrations are applied automatically on startup (see `db.rs` and the idempotent `schema_migrations` table), so upgrading the image is just `docker compose pull && docker compose up -d`. To migrate data from the old desktop build, simply copy `~/Library/Application Support/net.vvpreo.finances/finances.db` into `$FINANCES_DATA_DIR/`.
+**Where the data lives:** `$FINANCES_DATA_DIR/finances.db` (plus WAL files) on the host. Migrations are applied automatically on startup (see `db.rs` and the idempotent `schema_migrations` table), so upgrading is just `docker compose up -d` (with `pull_policy: always` it fetches the newest image by itself). To migrate data from the old desktop build, simply copy `~/Library/Application Support/net.vvpreo.finances/finances.db` into `$FINANCES_DATA_DIR/`.
 
 ## Quick Start (development)
 
@@ -214,6 +227,9 @@ The script validates `FINANCES_DATA_DIR`, converts a relative path to an absolut
 
 ### Building the Docker image
 ```bash
+# The repo's docker-compose.yml builds from the local sources:
+docker compose up -d --build
+# ...or manually:
 docker build -t a2b-accounting:local .
 docker run -d -p 127.0.0.1:3700:8080 -v "$HOME/finances-data:/data" a2b-accounting:local
 ```
