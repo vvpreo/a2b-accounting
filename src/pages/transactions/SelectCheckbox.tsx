@@ -9,8 +9,9 @@ interface Props {
   selected: boolean;
   /// Fired on a short tap/click (held < LONG_PRESS_MS).
   onShortPress: () => void;
-  /// Fired once the press crosses LONG_PRESS_MS, while the pointer is still
-  /// down — gives the user immediate feedback that the range was selected.
+  /// Range selection: fired once the press crosses LONG_PRESS_MS, while the
+  /// pointer is still down (immediate feedback on touch), or on a
+  /// Shift+click with a mouse.
   onLongPress: () => void;
   ariaLabel?: string;
 }
@@ -41,6 +42,14 @@ export function SelectCheckbox({
     if (e.button !== 0 && e.pointerType === "mouse") return;
     didLongRef.current = false;
     clearTimer();
+    if (e.shiftKey) {
+      // Shift+click = range, right away; also stops the browser from
+      // extending a text selection across the rows.
+      e.preventDefault();
+      didLongRef.current = true;
+      onLongPress();
+      return;
+    }
     timerRef.current = window.setTimeout(() => {
       didLongRef.current = true;
       timerRef.current = null;

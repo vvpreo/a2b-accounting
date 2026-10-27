@@ -1,13 +1,8 @@
 import { useMemo, useState } from "react";
 
 import { useT } from "../../i18n";
-import {
-  AgentState,
-  aiTransactionChat,
-  parseAgentState,
-  setTransactionAgent,
-  agentReplyText,
-} from "../../lib/api";
+import { parseAgentState, agentReplyText } from "../../lib/api";
+import { runAgentAnalysis } from "../../lib/agent-run";
 
 interface Props {
   transactionId: number;
@@ -17,16 +12,18 @@ interface Props {
   onOpen: () => void;
   /** Triggered after a fresh analysis is saved, so the list can refresh. */
   onAnalyzed: () => void;
+  /** The note recognised on the linked document (slip), if any. */
+  memo?: string | null;
 }
 
 /**
- * Agent column cell. Empty cell → clicking runs the analysis inline and saves
- * it straight to the DB (no separate save step). A cell that already has an
- * analysis shows only the suggested category (+ confidence); the full dialog
- * is available via the hover tooltip, and clicking opens the transaction modal
- * (where the user can read the reasoning, chat further or clear it).
+ * Agent column cell, one line: a ✨ button that runs the analysis inline and
+ * saves it straight to the DB, or — once analysed — a chip with the suggested
+ * category (+ confidence) whose tooltip is the full dialog and whose click
+ * opens the transaction modal; followed by the note recognised on the linked
+ * slip, if any.
  */
-export function AgentCell({ transactionId, agent, onOpen, onAnalyzed }: Props) {
+export function AgentCell({ transactionId, agent, onOpen, onAnalyzed, memo }: Props) {
   const t = useT();
   const state = useMemo(() => parseAgentState(agent), [agent]);
   // Tooltip = the whole dialog (verdict YAML block hidden for readability).
@@ -48,20 +45,7 @@ export function AgentCell({ transactionId, agent, onOpen, onAnalyzed }: Props) {
     setBusy(true);
     setError(null);
     try {
-      // The analysis is implicit — the system prompt already tells the agent
-      // to categorize. We send no user turn (the backend supplies the API's
-      // required initial turn internally) and store only the agent's reply,
-      // so the chat log never shows a message the user didn't write.
-      const reply = await aiTransactionChat(transactionId, []);
-      const next: AgentState = {
-        suggestedCategory: reply.suggestedCategory,
-        confidence: reply.confidence,
-        messages: [
-          { role: "assistant", content: reply.reply },
-        ],
-        updatedAt: new Date().toISOString(),
-      };
-      await setTransactionAgent(transactionId, JSON.stringify(next));
+      await runAgentAnalysis(transactionId);
       onAnalyzed();
     } catch (e) {
       setError(String(e));
@@ -70,40 +54,58 @@ export function AgentCell({ transactionId, agent, onOpen, onAnalyzed }: Props) {
     }
   }
 
-  if (hasAnalysis && state) {
-    return (
-      <td
-        className="col-agent txn-open-cell"
+  // One line per row: a compact action/verdict slot on the left (so the ✨
+  // buttons line up down the column), the slip's note filling the rest.
+  // Rows without a note show only the faint ✨ — notes stand out at a glance.
+  const slot =
+    hasAnalysis && state ? (
+      <button
+        type="button"
+        className="agent-cell-verdict"
         onClick={onOpen}
         title={dialogText || undefined}
       >
-        <div className="agent-cell">
-          <span className="agent-cell-category">
-            {state.suggestedCategory ?? t("transaction.agent.none")}
-            {state.confidence !== null && (
-              <span className="agent-cell-confidence"> {state.confidence}/10</span>
-            )}
-          </span>
-        </div>
-      </td>
+        {state.suggestedCategory ?? t("transaction.agent.none")}
+        {state.confidence !== null && (
+          <span className="agent-cell-confidence"> {state.confidence}/10</span>
+        )}
+      </button>
+    ) : busy ? (
+      <span className="agent-cell-busy" title={t("transaction.agent.thinking")}>
+        …
+      </span>
+    ) : (
+      <button
+        type="button"
+        className="agent-cell-run"
+        onClick={runAnalysis}
+        title={error ?? t("transaction.agent.analyze")}
+        aria-label={t("transaction.agent.analyze")}
+      >
+        ✨
+      </button>
     );
-  }
 
   return (
     <td className="col-agent">
-      {busy ? (
-        <span className="agent-cell-busy">{t("transaction.agent.thinking")}</span>
-      ) : (
-        <button
-          type="button"
-          className="agent-cell-run"
-          onClick={runAnalysis}
-          title={error ?? undefined}
-        >
-          ✨ {t("transaction.agent.analyze")}
-        </button>
-      )}
-      {error && <span className="agent-cell-error">!</span>}
+      <div className="agent-cell">
+        {slot}
+        {error && (
+          <span className="agent-cell-error" title={error}>
+            !
+          </span>
+        )}
+        {memo && <MemoLine memo={memo} />}
+      </div>
     </td>
+  );
+}
+
+/** The user's note from the linked slip — the main input for categorising. */
+function MemoLine({ memo }: { memo: string }) {
+  return (
+    <span className="agent-cell-memo" title={memo}>
+      📝 {memo}
+    </span>
   );
 }

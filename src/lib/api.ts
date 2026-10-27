@@ -950,3 +950,183 @@ export function seedDemoData(): Promise<void> {
 export function clearAllData(): Promise<void> {
   return invoke<void>("clear_all_data");
 }
+
+// ---------------------------------------------------------------------------
+// Documents (bank slips, receipts, …)
+
+/** One upload action from the Documents screen (a batch of files / a ZIP). */
+export interface AttachmentUpload {
+  id: number;
+  uploadedAt: string;
+  sourceName: string | null;
+  filesTotal: number;
+  added: number;
+  duplicates: number;
+  skipped: number;
+}
+
+export type AttachmentExtractStatus =
+  | "pending"
+  | "done"
+  | "partial"
+  | "failed"
+  | "not_document";
+
+export type AttachmentMatchStatus =
+  | "unmatched"
+  | "auto"
+  | "probable"
+  | "manual"
+  | "ambiguous";
+
+export interface Attachment {
+  id: number;
+  uploadId: number;
+  uploadedAt: string;
+  sha256: string;
+  /** Name as uploaded (for ZIP entries — the path inside the archive). */
+  originalName: string;
+  /** Detected from the file content, not the extension. */
+  mimeType: string;
+  sizeBytes: number;
+  extractStatus: AttachmentExtractStatus | string;
+  /** Recognition result as JSON, `null` until recognised. */
+  extraction: string | null;
+  ocrText: string | null;
+  transactionId: number | null;
+  matchStatus: AttachmentMatchStatus | string;
+}
+
+/** Result of uploading one file (a ZIP counts every entry). */
+export interface IngestReport {
+  filesTotal: number;
+  added: number;
+  duplicates: number;
+  skipped: number;
+  skippedNames: string[];
+}
+
+export function beginAttachmentUpload(sourceName: string | null): Promise<number> {
+  return invoke<number>("begin_attachment_upload", { sourceName });
+}
+
+/** Post one picked file (image, PDF or ZIP) into an open upload. Uses XHR
+ *  rather than `fetch` because only XHR reports upload progress — a Google
+ *  Drive ZIP can be hundreds of megabytes. */
+export function uploadAttachmentFile(
+  uploadId: number,
+  file: File,
+  onProgress?: (sentBytes: number, totalBytes: number) => void,
+): Promise<IngestReport> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(
+      "POST",
+      `/api/attachments/upload/${uploadId}?name=${encodeURIComponent(file.name)}`,
+    );
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress?.(e.loaded, e.total);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(JSON.parse(xhr.responseText) as IngestReport);
+      } else {
+        reject(xhr.responseText || `HTTP ${xhr.status}`);
+      }
+    };
+    xhr.onerror = () => reject("network error");
+    xhr.send(file);
+  });
+}
+
+export function listAttachmentUploads(): Promise<AttachmentUpload[]> {
+  return invoke<AttachmentUpload[]>("list_attachment_uploads");
+}
+
+export function listAttachments(): Promise<Attachment[]> {
+  return invoke<Attachment[]>("list_attachments");
+}
+
+export function deleteAttachment(id: number): Promise<void> {
+  return invoke<void>("delete_attachment", { id });
+}
+
+export function attachmentFileUrl(id: number): string {
+  return `/api/attachments/${id}/file`;
+}
+
+/** A document offered for linking, with its distance from the transaction. */
+export interface AttachmentCandidate {
+  attachment: Attachment;
+  /** Document time minus transaction time, seconds. */
+  deltaSeconds: number;
+}
+
+export interface AttachmentCandidates {
+  candidates: AttachmentCandidate[];
+  /** Documents with no known time (cannot be placed in a time window). */
+  undatedCount: number;
+}
+
+/** transaction ↔ document pair, for the Transactions table column. */
+export interface AttachmentLink {
+  transactionId: number;
+  attachmentId: number;
+  originalName: string;
+  mimeType: string;
+  /** The user's note recognised on the document, if any. */
+  memo: string | null;
+}
+
+export type DocumentAnalysisStatus =
+  | "linked"
+  | "auto_linked"
+  | "ambiguous"
+  | "no_match"
+  | "no_candidates";
+
+/** Result of the "analyze documents" step for one transaction. */
+export interface DocumentAnalysis {
+  status: DocumentAnalysisStatus;
+  attachmentId: number | null;
+  memo: string | null;
+  /** Free documents that were in the ±5 min window. */
+  candidates: number;
+}
+
+/** Recognise the linked document, or find & auto-link one (time + amount +
+ *  direction, single candidate). Local OCR; can take a few seconds. */
+export function analyzeTransactionDocuments(transactionId: number): Promise<DocumentAnalysis> {
+  return invoke<DocumentAnalysis>("analyze_transaction_documents", { transactionId });
+}
+
+/** Re-run recognition of one document. */
+export function recogniseDocument(attachmentId: number): Promise<void> {
+  return invoke<void>("recognise_document", { attachmentId });
+}
+
+export function linkAttachment(attachmentId: number, transactionId: number): Promise<void> {
+  return invoke<void>("link_attachment", { attachmentId, transactionId });
+}
+
+export function unlinkAttachment(attachmentId: number): Promise<void> {
+  return invoke<void>("unlink_attachment", { attachmentId });
+}
+
+export function listTransactionAttachments(transactionId: number): Promise<Attachment[]> {
+  return invoke<Attachment[]>("list_transaction_attachments", { transactionId });
+}
+
+export function listAttachmentLinks(): Promise<AttachmentLink[]> {
+  return invoke<AttachmentLink[]>("list_attachment_links");
+}
+
+export function listAttachmentCandidates(
+  transactionId: number,
+  windowMinutes: number,
+): Promise<AttachmentCandidates> {
+  return invoke<AttachmentCandidates>("list_attachment_candidates", {
+    transactionId,
+    windowMinutes,
+  });
+}

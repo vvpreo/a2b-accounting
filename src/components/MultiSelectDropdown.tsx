@@ -3,6 +3,9 @@ import { useEffect, useRef, useState } from "react";
 export interface MultiSelectItem<T extends string | number> {
   id: T;
   label: string;
+  /** Optional group heading. Consecutive items with the same group are
+   *  rendered together; a divider + heading separates groups. */
+  group?: string;
 }
 
 interface Props<T extends string | number> {
@@ -116,15 +119,23 @@ export function MultiSelectDropdown<T extends string | number>({
             </>
           )}
           <div className="dropdown-list">
-            {items.map((item) => (
-              <label key={String(item.id)} className="dropdown-item">
-                <input
-                  type="checkbox"
-                  checked={pending.includes(item.id)}
-                  onChange={() => toggle(item.id)}
-                />
-                <span>{item.label}</span>
-              </label>
+            {items.map((item, i) => (
+              <div key={String(item.id)}>
+                {item.group && item.group !== items[i - 1]?.group && (
+                  <>
+                    {i > 0 && <div className="dropdown-divider" />}
+                    <div className="dropdown-group">{item.group}</div>
+                  </>
+                )}
+                <label className="dropdown-item">
+                  <input
+                    type="checkbox"
+                    checked={pending.includes(item.id)}
+                    onChange={() => toggle(item.id)}
+                  />
+                  <span>{item.label}</span>
+                </label>
+              </div>
             ))}
           </div>
           <div className="dropdown-divider" />

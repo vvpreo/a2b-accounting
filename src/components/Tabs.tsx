@@ -2,6 +2,7 @@ import { ReportView } from "../lib/api";
 import { useT } from "../i18n";
 
 export type StaticTab =
+  | "documents"
   | "categories"
   | "accounts"
   | "transactions"
@@ -26,7 +27,7 @@ interface Props {
 export function Tabs({ active, reportViews, onChange }: Props) {
   const t = useT();
   const main: StaticTab[] = ["accounts", "transactions"];
-  const aside: StaticTab[] = ["categories", "settings"];
+  const aside: StaticTab[] = ["documents", "categories", "settings"];
   const activeKey = tabKey(active);
 
   return (

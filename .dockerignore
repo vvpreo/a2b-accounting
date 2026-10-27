@@ -12,6 +12,8 @@ server/target
 docs
 samples
 scripts
+# …except the icon stand-badging step the frontend build runs
+!scripts/badge-icons.mjs
 *.log
 README.md
 TODO.md

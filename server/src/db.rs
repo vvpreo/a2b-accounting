@@ -82,6 +82,16 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "016_add_transaction_agent",
         include_str!("../migrations/016_add_transaction_agent.sql"),
     ),
+    (
+        17,
+        "017_add_attachments",
+        include_str!("../migrations/017_add_attachments.sql"),
+    ),
+    (
+        18,
+        "018_attachments_reset_match_on_unlink",
+        include_str!("../migrations/018_attachments_reset_match_on_unlink.sql"),
+    ),
 ];
 
 pub fn open(data_dir: &Path) -> rusqlite::Result<Connection> {

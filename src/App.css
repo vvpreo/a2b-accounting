@@ -119,6 +119,7 @@ body {
    full width of the .tabs row above, and the per-account table scrolls
    inside its own .accounts-wrap. */
 .page--accounts {
+  overscroll-behavior-x: none;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -129,6 +130,9 @@ body {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  /* Horizontal trackpad swipes at the scroll edge must not chain to the
+     browser's back/forward navigation gesture. */
+  overscroll-behavior-x: none;
   /* Reserve the gutter on the actual scroll container so the table
      doesn't jump horizontally when its vertical scrollbar appears. */
   scrollbar-gutter: stable;
@@ -176,7 +180,7 @@ body {
  * pushing the right block to ~60-70% of the screen on typical desktops. */
 .page--transactions th.col-category,
 .page--transactions td.col-category {
-  min-width: 480px;
+  min-width: 336px;
 }
 
 .page--transactions th.col-comment,
@@ -188,15 +192,39 @@ body {
  * open the transaction modal. */
 .page--transactions th.col-agent,
 .page--transactions td.col-agent {
-  min-width: 220px;
-  max-width: 320px;
+  min-width: 260px;
+  max-width: 420px;
 }
 
 .agent-cell {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   overflow: hidden;
+  white-space: nowrap;
+}
+
+/* Suggested-category chip (analysed rows); click opens the transaction. */
+.agent-cell-verdict {
+  flex-shrink: 0;
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: #5b21b6;
+  background: #f5f3ff;
+  border: 1px solid #ddd6fe;
+  border-radius: 10px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+
+.agent-cell-verdict:hover {
+  background: #ede9fe;
 }
 
 .agent-cell-category {
@@ -218,24 +246,37 @@ body {
   white-space: nowrap;
 }
 
+/* Compact ✨ "analyze" button — faint until hovered, so rows without a note
+   read as empty and rows with one stand out. */
 .agent-cell-run {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: none;
   border: 1px dashed #c4b5fd;
-  border-radius: 12px;
-  color: #6d28d9;
-  font-size: 12px;
-  padding: 2px 8px;
+  border-radius: 50%;
+  font-size: 11px;
+  line-height: 1;
   cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.12s ease, background 0.12s ease;
 }
 
 .agent-cell-run:hover {
+  opacity: 1;
   background: #f5f3ff;
 }
 
 .agent-cell-busy {
+  flex-shrink: 0;
+  width: 22px;
+  text-align: center;
   font-size: 12px;
   color: #71717a;
-  font-style: italic;
 }
 
 .agent-cell-error {
@@ -710,6 +751,26 @@ td.cell-placeholder {
   color: #9ca3af;
 }
 
+/* Transactions: the fixed money/date block and 📎 run together; every column
+   from AI onwards gets a vertical separator on its left (so the first line
+   sits right after 📎). */
+.page--transactions th.col-agent,
+.page--transactions td.col-agent,
+.page--transactions th.col-category,
+.page--transactions td.col-category,
+.page--transactions th.col-link,
+.page--transactions td.col-link,
+.page--transactions th.col-delta,
+.page--transactions td.col-delta,
+.page--transactions th.col-comment,
+.page--transactions td.col-comment,
+.page--transactions th.col-peer,
+.page--transactions td.col-peer,
+.page--transactions th.col-bank-description,
+.page--transactions td.col-bank-description {
+  border-left: 1px solid #f1f1f4;
+}
+
 tr.month-separator td {
   background: #f4f4f5;
   font-weight: 600;
@@ -737,6 +798,23 @@ tr.month-separator td {
 :root[data-theme="dark"] td.cell-placeholder {
     color: #71717a;
   }
+
+:root[data-theme="dark"] .page--transactions th.col-agent,
+:root[data-theme="dark"] .page--transactions td.col-agent,
+:root[data-theme="dark"] .page--transactions th.col-category,
+:root[data-theme="dark"] .page--transactions td.col-category,
+:root[data-theme="dark"] .page--transactions th.col-link,
+:root[data-theme="dark"] .page--transactions td.col-link,
+:root[data-theme="dark"] .page--transactions th.col-delta,
+:root[data-theme="dark"] .page--transactions td.col-delta,
+:root[data-theme="dark"] .page--transactions th.col-comment,
+:root[data-theme="dark"] .page--transactions td.col-comment,
+:root[data-theme="dark"] .page--transactions th.col-peer,
+:root[data-theme="dark"] .page--transactions td.col-peer,
+:root[data-theme="dark"] .page--transactions th.col-bank-description,
+:root[data-theme="dark"] .page--transactions td.col-bank-description {
+  border-left-color: #27272a;
+}
 
 :root[data-theme="dark"] tr.month-separator td {
     background: #1f1f22;
@@ -1268,6 +1346,9 @@ td.empty {
   right: 10px;
   overflow-x: auto;
   overflow-y: hidden;
+  /* Scrolling the month history to its first/last month with a trackpad
+     swipe would otherwise trigger the browser's "go back" gesture. */
+  overscroll-behavior-x: none;
   display: flex;
   align-items: flex-start;
   /* Reserve a gutter below the months row so the on-hover scrollbar
@@ -2219,6 +2300,13 @@ code {
 .filter-bar-action {
   margin-left: auto;
   height: 32px;
+}
+
+/* The Actions menu sits at the right edge — open its popover leftwards so it
+   stays on screen. */
+.filter-bar-action .bulk-actions-popover {
+  left: auto;
+  right: 0;
 }
 
 .filter-bar-info {
@@ -5123,6 +5211,7 @@ tbody tr.is-selected td.col-select {
 .bulk-actions-item {
   display: block;
   width: 100%;
+  white-space: nowrap;
   text-align: left;
   background: transparent;
   border: 0;
@@ -5498,4 +5587,729 @@ tbody tr.is-selected td.col-select {
 :root[data-theme="dark"] .cell-txns-row:hover,
 :root[data-theme="dark"] .txn-open-cell:hover {
   background: #27272a;
+}
+
+/* Documents */
+
+.page--documents.is-drag-over {
+  outline: 2px dashed #6366f1;
+  outline-offset: -4px;
+  background: #eef2ff;
+}
+
+.documents-last-upload {
+  margin: 0;
+}
+
+.documents-progress,
+.documents-report {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 13px;
+}
+
+.documents-progress progress {
+  flex: 1;
+  min-width: 120px;
+}
+
+.documents-report details {
+  flex: 1;
+}
+
+.documents-report ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+}
+
+.documents-report .icon-btn {
+  margin-left: auto;
+}
+
+.documents-history,
+.documents-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  background: #fff;
+  margin-bottom: 12px;
+}
+
+.documents-history th,
+.documents-history td,
+.documents-table th,
+.documents-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid #f1f1f4;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.documents-history th,
+.documents-table thead th {
+  font-weight: 500;
+  color: #71717a;
+  background: #fafafa;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.documents-history .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.documents-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.documents-filter {
+  font: inherit;
+  font-size: 13px;
+  padding: 3px 10px;
+  border: 1px solid #d4d4d8;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.documents-filter.active {
+  background: #1f2937;
+  border-color: #1f2937;
+  color: #fff;
+}
+
+.documents-filter.active .hint {
+  color: #d4d4d8;
+}
+
+.documents-filter .hint {
+  margin: 0;
+}
+
+.documents-drop-hint {
+  margin: 0 0 0 auto;
+}
+
+.documents-group td {
+  background: #f4f4f5;
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.documents-group .hint {
+  font-weight: 400;
+}
+
+.documents-row {
+  cursor: pointer;
+}
+
+.documents-row:hover {
+  background: #f8fafc;
+}
+
+.documents-table .col-thumb {
+  width: 44px;
+}
+
+.documents-table .col-thumb img {
+  display: block;
+  width: 32px;
+  height: 44px;
+  object-fit: cover;
+  object-position: top;
+  border-radius: 3px;
+  border: 1px solid #e4e4e7;
+}
+
+.documents-thumb-pdf {
+  display: inline-block;
+  width: 32px;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 600;
+  color: #b91c1c;
+}
+
+.documents-table .col-file {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.documents-table .col-memo {
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.documents-status {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: #f4f4f5;
+  color: #52525b;
+}
+
+.documents-status--done {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.documents-status--partial {
+  background: #fef9c3;
+  color: #854d0e;
+}
+
+.documents-status--failed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.documents-dropzone {
+  margin-top: 24px;
+  padding: 48px 24px;
+  border: 2px dashed #d4d4d8;
+  border-radius: 8px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.documents-dropzone p:first-child {
+  font-size: 15px;
+  font-weight: 500;
+  margin: 0 0 6px;
+}
+
+.document-view {
+  flex-direction: row;
+  align-items: stretch;
+  gap: 20px;
+}
+
+.document-view-file {
+  flex: 1 1 55%;
+  min-width: 0;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  background: #f4f4f5;
+  border-radius: 6px;
+}
+
+/* The whole slip fits the viewer; click opens the original for zooming. */
+.document-view-file a {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
+.document-view-file img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  cursor: zoom-in;
+}
+
+.document-view-file iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.document-view-info {
+  flex: 1 1 45%;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.document-view-info h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.document-view-info h4:not(:first-child) {
+  margin-top: 20px;
+}
+
+.document-fields {
+  margin: 0;
+}
+
+.document-field {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid #f1f1f4;
+}
+
+.document-field dt {
+  color: #71717a;
+}
+
+.document-field dd {
+  margin: 0;
+}
+
+.document-field-source {
+  margin-left: 8px;
+  font-size: 11px;
+  color: #a1a1aa;
+}
+
+.document-break {
+  word-break: break-all;
+}
+
+.document-ocr {
+  white-space: pre-wrap;
+  font-size: 12px;
+  background: #f4f4f5;
+  padding: 8px;
+  border-radius: 4px;
+  max-height: 300px;
+  overflow: auto;
+}
+
+a.btn-ghost {
+  text-decoration: none;
+}
+
+:root[data-theme="dark"] .page--documents.is-drag-over {
+  outline-color: #818cf8;
+  background: #1e1b4b;
+}
+
+:root[data-theme="dark"] .documents-progress,
+:root[data-theme="dark"] .documents-report,
+:root[data-theme="dark"] .documents-history,
+:root[data-theme="dark"] .documents-table {
+  background: #18181b;
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .documents-history th,
+:root[data-theme="dark"] .documents-history td,
+:root[data-theme="dark"] .documents-table th,
+:root[data-theme="dark"] .documents-table td,
+:root[data-theme="dark"] .document-field {
+  border-bottom-color: #27272a;
+}
+
+:root[data-theme="dark"] .documents-history th,
+:root[data-theme="dark"] .documents-table thead th {
+  background: #1f1f22;
+  color: #a1a1aa;
+}
+
+:root[data-theme="dark"] .documents-group td {
+  background: #27272a;
+}
+
+:root[data-theme="dark"] .documents-row:hover {
+  background: #27272a;
+}
+
+:root[data-theme="dark"] .documents-filter {
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .documents-filter.active {
+  background: #e4e4e7;
+  border-color: #e4e4e7;
+  color: #18181b;
+}
+
+:root[data-theme="dark"] .documents-filter.active .hint {
+  color: #52525b;
+}
+
+:root[data-theme="dark"] .documents-table .col-thumb img {
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .documents-status {
+  background: #27272a;
+  color: #d4d4d8;
+}
+
+:root[data-theme="dark"] .documents-status--done {
+  background: #14532d;
+  color: #bbf7d0;
+}
+
+:root[data-theme="dark"] .documents-status--partial {
+  background: #713f12;
+  color: #fef08a;
+}
+
+:root[data-theme="dark"] .documents-status--failed {
+  background: #7f1d1d;
+  color: #fecaca;
+}
+
+:root[data-theme="dark"] .documents-dropzone {
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .document-view-file,
+:root[data-theme="dark"] .document-ocr {
+  background: #27272a;
+}
+
+/* Transactions: linked-document column + transaction modal documents block */
+
+.page--transactions th.col-document,
+.page--transactions td.col-document {
+  width: 32px;
+  min-width: 32px;
+  max-width: 32px;
+  text-align: center;
+  padding-left: 2px;
+  padding-right: 2px;
+}
+
+/* The button fills the whole cell (like .txn-link-btn) so the entire 📎
+   column is a click target, including empty cells. */
+.page--transactions td.col-document {
+  position: relative;
+}
+
+.document-cell-btn {
+  appearance: none;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+/* Linked: blue paperclip; hover hints that a click opens the document. */
+.document-cell-btn.is-linked {
+  color: #1d4ed8;
+}
+
+.document-cell-btn.is-linked:hover {
+  background: #e0e7ff;
+}
+
+/* Not linked: hidden paperclip revealed in green on hover — same cue as the
+   🔗 column's "start a link here". */
+.document-cell-btn.is-startable {
+  color: transparent;
+}
+
+.document-cell-btn.is-startable:hover {
+  color: #15803d;
+  background: #dcfce7;
+}
+
+.modal--link-doc {
+  width: min(860px, 94vw);
+  bottom: auto;
+  max-height: calc(100vh - 24px);
+}
+
+/* Title on top, the transaction's facts (date · amount · peer) below it. */
+.modal--link-doc .txn-modal-title {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+
+.modal--link-doc .txn-modal-title h3 {
+  white-space: nowrap;
+}
+
+.link-doc-facts .document-field dd {
+  overflow-wrap: anywhere;
+}
+
+.document-cell-count {
+  font-size: 10px;
+  vertical-align: super;
+  color: #71717a;
+}
+
+.document-link-state {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.txn-docs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.txn-doc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.txn-doc {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.txn-doc-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 6px;
+  border: 1px solid #e4e4e7;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.txn-doc-open:hover {
+  background: #f8fafc;
+}
+
+.txn-doc-open .hint {
+  margin: 0;
+}
+
+.txn-doc-thumb {
+  flex-shrink: 0;
+  width: 36px;
+  height: 52px;
+  object-fit: cover;
+  object-position: top;
+  border-radius: 3px;
+  border: 1px solid #e4e4e7;
+}
+
+.txn-doc-thumb--pdf {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 600;
+  color: #b91c1c;
+}
+
+.txn-doc-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.txn-doc-memo {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: italic;
+}
+
+.txn-doc-delta {
+  flex-shrink: 0;
+  min-width: 72px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.txn-doc-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #fef9c3;
+  color: #854d0e;
+}
+
+.txn-doc-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px dashed #d4d4d8;
+  border-radius: 6px;
+}
+
+.txn-doc-picker-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+:root[data-theme="dark"] .txn-doc-open,
+:root[data-theme="dark"] .txn-doc-thumb {
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .txn-doc-open:hover {
+  background: #27272a;
+}
+
+:root[data-theme="dark"] .document-cell-btn.is-linked {
+  color: #93c5fd;
+}
+
+:root[data-theme="dark"] .document-cell-btn.is-linked:hover {
+  background: #1e3a8a;
+}
+
+:root[data-theme="dark"] .document-cell-btn.is-startable:hover {
+  color: #86efac;
+  background: #14532d;
+}
+
+:root[data-theme="dark"] .txn-doc-picker {
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .txn-doc-badge {
+  background: #713f12;
+  color: #fef08a;
+}
+
+/* AI column: the note recognised on the linked slip */
+.agent-cell-memo {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: #18181b;
+}
+
+.modal--bulk-docs {
+  width: min(620px, 94vw);
+  bottom: auto;
+}
+
+:root[data-theme="dark"] .agent-cell-memo {
+  color: #f4f4f5;
+}
+
+:root[data-theme="dark"] .agent-cell-verdict {
+  color: #ddd6fe;
+  background: #241f38;
+  border-color: #4c3a78;
+}
+
+:root[data-theme="dark"] .agent-cell-verdict:hover {
+  background: #2e2748;
+}
+
+/* Group heading inside a multi-select dropdown (Filter: kinds / document). */
+.dropdown-group {
+  padding: 4px 8px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #71717a;
+}
+
+/* Period dropdown: presets + custom from/to. */
+.period-panel {
+  min-width: 260px;
+}
+
+.period-item {
+  width: 100%;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  color: inherit;
+  text-align: left;
+}
+
+.period-item.is-active {
+  font-weight: 600;
+}
+
+.period-check {
+  display: inline-block;
+  width: 14px;
+}
+
+.period-custom {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
+.period-custom-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #71717a;
+}
+
+.period-custom label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.period-custom input[type="date"] {
+  font: inherit;
+  padding: 3px 6px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+}
+
+:root[data-theme="dark"] .period-custom input[type="date"] {
+  border-color: #3f3f46;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
 }

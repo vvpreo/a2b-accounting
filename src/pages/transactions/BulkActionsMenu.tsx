@@ -7,13 +7,25 @@ interface Props {
   /// selection are disabled (with a hint) when this is 0 — the spec forbids
   /// running a bulk action against an implicit "everything" set.
   selectedCount: number;
+  /// Not a bulk action — always enabled; listed last.
+  onImportTransactions: () => void;
+  onAnalyzeDocuments: () => void;
+  onProposeCategories: () => void;
   onAssignCategory: () => void;
 }
 
 /// Always-visible "Actions ▾" dropdown for the transactions section. Mirrors
-/// the outside-click / Escape behaviour of the filter dropdowns. For now it
-/// hosts a single bulk action; more can be appended to the menu list.
-export function BulkActionsMenu({ selectedCount, onAssignCategory }: Props) {
+/// the outside-click / Escape behaviour of the filter dropdowns. Bulk actions
+/// on the selection, in pipeline order — match documents (slips), propose
+/// categories (AI), assign a category — then "Import transactions", which
+/// needs no selection.
+export function BulkActionsMenu({
+  selectedCount,
+  onImportTransactions,
+  onAnalyzeDocuments,
+  onProposeCategories,
+  onAssignCategory,
+}: Props) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -56,25 +68,44 @@ export function BulkActionsMenu({ selectedCount, onAssignCategory }: Props) {
       </button>
       {open && (
         <div className="bulk-actions-popover" role="menu">
-          <button
-            type="button"
-            role="menuitem"
-            className="bulk-actions-item"
-            disabled={!hasSelection}
-            title={hasSelection ? undefined : t("transactions.bulk.selectFirstHint")}
-            onClick={() => {
-              if (!hasSelection) return;
-              setOpen(false);
-              onAssignCategory();
-            }}
-          >
-            {t("transactions.bulk.assignCategory")}
-          </button>
+          {[
+            { label: t("transactions.bulk.analyzeDocuments"), run: onAnalyzeDocuments },
+            { label: t("transactions.bulk.proposeCategories"), run: onProposeCategories },
+            { label: t("transactions.bulk.assignCategory"), run: onAssignCategory },
+          ].map((item) => (
+            <button
+              key={item.label}
+              type="button"
+              role="menuitem"
+              className="bulk-actions-item"
+              disabled={!hasSelection}
+              title={hasSelection ? undefined : t("transactions.bulk.selectFirstHint")}
+              onClick={() => {
+                if (!hasSelection) return;
+                setOpen(false);
+                item.run();
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
           {!hasSelection && (
             <p className="bulk-actions-hint">
               {t("transactions.bulk.selectFirstHint")}
             </p>
           )}
+          <div className="dropdown-divider" />
+          <button
+            type="button"
+            role="menuitem"
+            className="bulk-actions-item"
+            onClick={() => {
+              setOpen(false);
+              onImportTransactions();
+            }}
+          >
+            {t("toolbar.importTransactions")}
+          </button>
         </div>
       )}
     </div>

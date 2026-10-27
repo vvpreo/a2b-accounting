@@ -1,5 +1,6 @@
 {
   "tabs": {
+    "documents": "Documents",
     "categories": "Categories",
     "accounts": "Accounts",
     "transactions": "Transactions",
@@ -226,11 +227,15 @@
       "incoming": "Incoming",
       "outgoing": "Outgoing",
       "with_bank_description": "With bank description",
-      "with_comment": "With comments"
+      "with_comment": "With comments",
+      "with_document": "With document 📎",
+      "without_document": "Without document"
     },
     "column": {
-      "category": "Category",
+      "document": "Document",
       "agent": "AI",
+      "category": "Category",
+      "delta": "Δ (FX difference on transfers)",
       "comment": "Comment",
       "peer": "Counterparty",
       "bank_description": "Bank description"
@@ -274,7 +279,46 @@
       "doneProcessed": "Done: {count} processed",
       "doneSkippedExisting": "Skipped (already categorised): {count}",
       "doneSkippedZero": "Skipped (zero amount): {count}",
-      "doneErrors": "Errors: {count}"
+      "doneErrors": "Errors: {count}",
+      "analyzeDocuments": "Match documents",
+      "proposeCategories": "Propose categories (AI)"
+    },
+    "tableDocumentTitle": "Linked document (slip)",
+    "openDocument": "Open document",
+    "filterPeriod": "Period",
+    "bulkDocs": {
+      "title": "Document matching",
+      "intro": "For the selected transactions ({count}): recognise linked slips, and where there is none, find a document within ±5 minutes and link it automatically when exactly one matches the amount and direction. Notes from the slips will appear in the AI column.",
+      "local": "Recognition runs locally on the server — nothing is sent to the cloud. About a second per transaction.",
+      "progress": "Processed {done} of {count}",
+      "outcome": {
+        "auto_linked": "Linked automatically",
+        "linked": "Already had a document",
+        "ambiguous": "Several documents fit — link by hand",
+        "no_match": "Documents nearby, but no amount match",
+        "no_candidates": "No documents nearby",
+        "error": "Errors"
+      },
+      "errors": "Error details",
+      "start": "Start",
+      "stop": "Stop"
+    },
+    "filterGroupKind": "Transactions",
+    "filterGroupDocument": "Document",
+    "period": {
+      "1": "Last month",
+      "3": "Last 3 months",
+      "6": "Last 6 months",
+      "12": "Last 12 months",
+      "custom": "Custom range"
+    },
+    "bulkPropose": {
+      "title": "Propose categories",
+      "intro": "The AI agent will analyse the selected transactions ({count}) and propose a category for each. Nothing is applied — proposals appear in the AI column, you apply them.",
+      "provider": "Transaction data (without the balance) goes to the provider from the AI settings: {provider}. Slip notes are not sent yet.",
+      "providerUnknown": "not configured",
+      "redo": "Re-analyse the ones that already have a proposal ({count})",
+      "result": "Proposed: {proposed}, errors: {failed}."
     }
   },
   "import": {
@@ -584,7 +628,22 @@
       "reasoning": "Reasoning",
       "none": "—",
       "empty": "The agent hasn't analyzed this transaction yet."
-    }
+    },
+    "documents": "Document",
+    "linkDocument": "Link document",
+    "hideDocumentPicker": "Hide picker",
+    "noDocuments": "No document linked",
+    "documentWindow": "Documents by time:",
+    "window": {
+      "5": "±5 min",
+      "30": "±30 min",
+      "1440": "±1 day"
+    },
+    "noCandidates": "No documents in this window.",
+    "linkedElsewhere": "linked to another transaction",
+    "alreadyLinked": "linked",
+    "link": "Link",
+    "undatedDocuments": "Documents with no known time: {count} — they will show up here once recognised."
   },
   "errors": {
     "missingOccurredAt": "Row {row}: missing occurred_at",
@@ -596,5 +655,97 @@
     "pdfPasswordRequired": "PDF is encrypted — enter the password and try again.",
     "pdfPasswordIncorrect": "Incorrect PDF password.",
     "pdfReadFailed": "Failed to read PDF: {message}"
+  },
+  "documents": {
+    "title": "Documents",
+    "upload": "Upload",
+    "showHistory": "Upload history",
+    "hideHistory": "Hide history",
+    "neverUploaded": "Nothing uploaded yet",
+    "lastUpload": "Last upload: {when}",
+    "filesCount": {
+      "one": "{count} file",
+      "other": "{count} files"
+    },
+    "docsCount": {
+      "one": "{count} document",
+      "other": "{count} documents"
+    },
+    "uploading": "Uploading {index} of {count}: {name}",
+    "processing": "processing on the server…",
+    "reportSummary": "Files processed: {total}. Added: {added}, already present: {duplicates}, skipped: {skipped}.",
+    "reportSkipped": "What was skipped",
+    "historyDate": "When",
+    "historySource": "What",
+    "historyFiles": "Files",
+    "historyAdded": "Added",
+    "historyDuplicates": "Already present",
+    "historySkipped": "Skipped",
+    "emptyTitle": "No documents yet",
+    "emptyHint": "Drop slips, receipts or a ZIP archive (e.g. a Google Drive download) here — or click to pick files.",
+    "dropHint": "Files and ZIPs can be dropped anywhere on the page",
+    "filter": {
+      "all": "All",
+      "pending": "Not recognised",
+      "recognised": "Recognised",
+      "unmatched": "Not linked",
+      "matched": "Linked"
+    },
+    "colFile": "File",
+    "colStatus": "Recognition",
+    "colMemo": "Note",
+    "colTransaction": "Transaction",
+    "extractStatus": {
+      "pending": "Pending",
+      "done": "Recognised",
+      "partial": "Partial",
+      "failed": "Failed",
+      "not_document": "Not a slip"
+    },
+    "matchStatus": {
+      "unmatched": "Not linked",
+      "auto": "Linked automatically",
+      "probable": "Needs review",
+      "manual": "Linked manually",
+      "ambiguous": "Several candidates"
+    },
+    "resultTitle": "Recognition result",
+    "notRecognisedYet": "Not recognised yet — recognition comes in the next step.",
+    "field": {
+      "bank": "Bank",
+      "account": "Account",
+      "occurredAt": "Date & time",
+      "amount": "Amount",
+      "direction": "Direction",
+      "memo": "Note",
+      "reference": "Transaction reference"
+    },
+    "fieldSource": "source: {source}",
+    "ocrText": "Recognised text",
+    "fileTitle": "File",
+    "fileName": "Name",
+    "fileType": "Type & size",
+    "fileUploaded": "Uploaded",
+    "openOriginal": "Open original",
+    "delete": "Delete document",
+    "deleteConfirm": "Delete this document? The file is removed from the app's storage; the upload history entry stays.",
+    "linkTitle": "Linked transaction",
+    "unlink": "Unlink",
+    "notLinkedHint": "Not linked. Link it from the transaction card — the “Link document” button.",
+    "source": {
+      "filename": "file name",
+      "qr": "QR code",
+      "ocr": "recognised text",
+      "ref": "transaction reference"
+    },
+    "deltaH": "{n} h",
+    "deltaM": "{n} min",
+    "deltaS": "{n} s",
+    "recognise": "Recognise",
+    "recognising": "Recognising…",
+    "direction": {
+      "debit": "Debit",
+      "credit": "Credit"
+    }
   }
 }

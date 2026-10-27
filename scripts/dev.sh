@@ -30,6 +30,8 @@ case "$FINANCES_DATA_DIR" in
 esac
 export FINANCES_DATA_DIR
 export FINANCES_BIND="${FINANCES_BIND:-127.0.0.1:3701}"
+# Local dev run is the DEV stand: red-framed favicon (scripts/badge-icons.mjs).
+export APP_ENV="${APP_ENV:-dev}"
 
 # Kill the whole process group (backend + vite) on exit/Ctrl-C.
 trap 'kill 0' EXIT INT TERM

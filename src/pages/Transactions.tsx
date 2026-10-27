@@ -14,6 +14,7 @@ import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { useI18n, useT } from "../i18n";
 import {
   Account,
+  AttachmentLink,
   LINK_ERROR_CODES,
   LinkErrorCode,
   Transaction,
@@ -27,6 +28,7 @@ import {
   getSetting,
   linkTransactions,
   listAccounts,
+  listAttachmentLinks,
   listTransactionLinks,
   listTransactions,
   listTransactionsCategories,
@@ -38,9 +40,13 @@ import {
 import { formatMoney, parseMoneyToMinor } from "../lib/money";
 import { TransactionModal } from "../components/TransactionModal";
 import { BulkCategorizeModal } from "../components/BulkCategorizeModal";
+import { BulkAnalyzeDocumentsModal } from "../components/BulkAnalyzeDocumentsModal";
+import { BulkProposeCategoriesModal } from "../components/BulkProposeCategoriesModal";
 import { CategoriesCell } from "./transactions/CategoriesCell";
 import { AgentCell } from "./transactions/AgentCell";
+import { DocumentCell } from "./transactions/DocumentCell";
 import { BulkActionsMenu } from "./transactions/BulkActionsMenu";
+import { PeriodDropdown, PeriodPreset } from "./transactions/PeriodDropdown";
 import { SelectCheckbox } from "./transactions/SelectCheckbox";
 import { rangeIds } from "./transactions/selection";
 
@@ -49,14 +55,21 @@ type RowKind =
   | "incoming"
   | "outgoing"
   | "with_bank_description"
-  | "with_comment";
+  | "with_comment"
+  | "with_document"
+  | "without_document";
 
+/// The Filter dropdown has two groups: row kinds and document presence.
+/// Within a group items combine with OR, the groups combine with AND — so
+/// "Outgoing" + "Without document" means outgoing rows that have no slip.
+const DOC_KINDS: RowKind[] = ["with_document", "without_document"];
 const ROW_KINDS: RowKind[] = [
   "correcting",
   "incoming",
   "outgoing",
   "with_bank_description",
   "with_comment",
+  ...DOC_KINDS,
 ];
 
 /// Two display modes for the Δ column. "percent" is the default:
@@ -71,15 +84,49 @@ type DeltaMode = "percent" | "absolute";
 const DELTA_MODES: DeltaMode[] = ["percent", "absolute"];
 const DELTA_MODE_SETTING_KEY = "transactions.delta_display_mode";
 
-type ColumnKey = "category" | "agent" | "comment" | "peer" | "bank_description";
+type ColumnKey =
+  | "delta"
+  | "category"
+  | "agent"
+  | "document"
+  | "comment"
+  | "peer"
+  | "bank_description";
+// Picker order follows the table: fixed money/date block, 📎, AI, category,
+// then the transfer columns (🔗 always shown, Δ optional), then free text.
 const COLUMN_KEYS: ColumnKey[] = [
-  "category",
+  "document",
   "agent",
+  "category",
+  "delta",
   "comment",
   "peer",
   "bank_description",
 ];
-const DEFAULT_VISIBLE_COLUMNS: ColumnKey[] = COLUMN_KEYS;
+// Δ (FX loss/gain on transfers) is hidden by default to save width; the user
+// turns it on in the Columns filter when needed.
+const DEFAULT_VISIBLE_COLUMNS: ColumnKey[] = COLUMN_KEYS.filter((k) => k !== "delta");
+
+/// The user's column choice, persisted in `app_settings` as
+/// `{visible: ColumnKey[], known: ColumnKey[]}`. `known` lists the columns that
+/// existed when the choice was saved, so a column added in a later version
+/// shows up per its default instead of silently staying hidden.
+const VISIBLE_COLUMNS_SETTING_KEY = "transactions.visible_columns";
+
+function restoreVisibleColumns(raw: string | null): ColumnKey[] | null {
+  if (!raw) return null;
+  try {
+    const saved = JSON.parse(raw) as { visible?: unknown; known?: unknown };
+    if (!Array.isArray(saved.visible) || !Array.isArray(saved.known)) return null;
+    const visible = new Set(saved.visible);
+    const known = new Set(saved.known);
+    return COLUMN_KEYS.filter((k) =>
+      known.has(k) ? visible.has(k) : DEFAULT_VISIBLE_COLUMNS.includes(k),
+    );
+  } catch {
+    return null;
+  }
+}
 
 function rowMatchesKind(row: { isCorrecting: boolean; credit: string; debit: string; bankDescription: string | null; comment: string | null }, kind: RowKind): boolean {
   switch (kind) {
@@ -93,6 +140,10 @@ function rowMatchesKind(row: { isCorrecting: boolean; credit: string; debit: str
       return !!row.bankDescription && row.bankDescription.trim() !== "";
     case "with_comment":
       return !!row.comment && row.comment.trim() !== "";
+    case "with_document":
+    case "without_document":
+      // Document presence is decided by the caller (it needs the link map).
+      return false;
   }
 }
 
@@ -109,10 +160,21 @@ interface Props {
   onPendingMonthFilterApplied?: () => void;
 }
 
-function defaultDateFrom(): string {
+/// Quick date ranges: the current month plus the N previous ones.
+const DATE_PRESETS = [1, 3, 6, 12];
+
+function periodPresets(): PeriodPreset[] {
+  return DATE_PRESETS.map((n) => ({
+    key: String(n),
+    from: defaultDateFrom(n),
+    to: defaultDateTo(),
+  }));
+}
+
+function defaultDateFrom(monthsBack = 12): string {
   const d = new Date();
   d.setDate(1);
-  d.setMonth(d.getMonth() - 12);
+  d.setMonth(d.getMonth() - monthsBack);
   return toDateInputValue(d);
 }
 
@@ -151,13 +213,16 @@ export function TransactionsPage({
   // The transaction whose view/edit modal is open, if any.
   const [detailTxnId, setDetailTxnId] = useState<number | null>(null);
   // Bulk-selection state. `selectedTxnIds` holds the chosen transactions;
-  // `lastSelectedId` is the anchor for long-press range selection. `bulkOpen`
+  // `lastSelectedId` is the anchor for range selection (long press or
+  // Shift+click). `bulkOpen`
   // gates the bulk-categorise confirmation/progress modal.
   const [selectedTxnIds, setSelectedTxnIds] = useState<Set<number>>(
     () => new Set(),
   );
   const [lastSelectedId, setLastSelectedId] = useState<number | null>(null);
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkDocsOpen, setBulkDocsOpen] = useState(false);
+  const [bulkProposeOpen, setBulkProposeOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedKinds, setSelectedKinds] = useState<RowKind[]>(() => [
     ...ROW_KINDS,
@@ -180,6 +245,9 @@ export function TransactionsPage({
   // partner. `unlinkConfirm` defers an actual unlink until the user confirms
   // — matches user spec: linking is unconfirmed, unlinking is.
   const [links, setLinks] = useState<TxnLink[]>([]);
+  // Linked documents (bank slips) per transaction, for the 📎 column.
+  const [docLinks, setDocLinks] = useState<AttachmentLink[]>([]);
+  const [docLinksVersion, setDocLinksVersion] = useState(0);
   const [pendingLinkTxnId, setPendingLinkTxnId] = useState<number | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
   const [unlinkConfirm, setUnlinkConfirm] = useState<number | null>(null);
@@ -251,6 +319,56 @@ export function TransactionsPage({
       cancelled = true;
     };
   }, [version]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listAttachmentLinks()
+      .then((ls) => {
+        if (!cancelled) setDocLinks(ls);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [version, localRefresh, docLinksVersion]);
+
+  const docLinksByTxn = useMemo(() => {
+    const map = new Map<number, AttachmentLink[]>();
+    for (const l of docLinks) {
+      const list = map.get(l.transactionId);
+      if (list) list.push(l);
+      else map.set(l.transactionId, [l]);
+    }
+    return map;
+  }, [docLinks]);
+
+  // Restore the persisted column choice once on mount.
+  useEffect(() => {
+    let cancelled = false;
+    getSetting(VISIBLE_COLUMNS_SETTING_KEY)
+      .then((v) => {
+        const restored = restoreVisibleColumns(v);
+        if (!cancelled && restored) setVisibleColumns(restored);
+      })
+      .catch(() => {
+        // No saved choice / backend hiccup — keep the defaults.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function changeVisibleColumns(next: ColumnKey[]) {
+    // Canonical table order, independent of click order.
+    const ordered = COLUMN_KEYS.filter((k) => next.includes(k));
+    setVisibleColumns(ordered);
+    void setSetting(
+      VISIBLE_COLUMNS_SETTING_KEY,
+      JSON.stringify({ visible: ordered, known: COLUMN_KEYS }),
+    ).catch((e) => console.error("[transactions] failed to persist columns:", e));
+  }
 
   // Restore the persisted Δ-column display mode once on mount.
   useEffect(() => {
@@ -432,12 +550,14 @@ export function TransactionsPage({
     pendingSourceTxn.credit === "0.00";
   const showCategory = visibleColumns.includes("category");
   const showAgent = visibleColumns.includes("agent");
+  const showDocument = visibleColumns.includes("document");
+  const showDelta = visibleColumns.includes("delta");
   const showComment = visibleColumns.includes("comment");
   const showPeer = visibleColumns.includes("peer");
   const showBankDescription = visibleColumns.includes("bank_description");
-  // 1 selection column + 5 fixed money/date columns + always-visible 🔗 and Δ
-  // columns + optional togglables.
-  const visibleColCount = 1 + 5 + 2 + visibleColumns.length;
+  // 1 selection column + always-visible 🔗 + 5 fixed money/date columns +
+  // optional togglables (Δ and 📎 included).
+  const visibleColCount = 1 + 1 + 5 + visibleColumns.length;
 
   const visibleTxns = useMemo(() => {
     const fromMs = dateFrom ? Date.parse(dateFrom + "T00:00:00Z") : null;
@@ -448,10 +568,21 @@ export function TransactionsPage({
       const ts = Date.parse(x.occurredAtUtc);
       if (fromMs !== null && ts < fromMs) return false;
       if (toMs !== null && ts > toMs) return false;
-      if (selectedKinds.length === 0) return false;
-      return selectedKinds.some((k) => rowMatchesKind(x, k));
+      const docKinds = selectedKinds.filter((k) => DOC_KINDS.includes(k));
+      const rowKinds = selectedKinds.filter((k) => !DOC_KINDS.includes(k));
+      const hasDoc = docLinksByTxn.has(x.id);
+      if (!docKinds.some((k) => (k === "with_document") === hasDoc)) return false;
+      return rowKinds.some((k) => rowMatchesKind(x, k));
     });
-  }, [txns, selectedAccountIds, selectedKinds, dateFrom, dateTo]);
+  }, [txns, selectedAccountIds, selectedKinds, dateFrom, dateTo, docLinksByTxn]);
+
+  // The "same account" hover tint only tells something when the visible rows
+  // span several accounts; with a single account it would just tint the
+  // whole table.
+  const multiAccountView = useMemo(
+    () => new Set(visibleTxns.map((x) => x.accountId)).size > 1,
+    [visibleTxns],
+  );
 
   // Drop any selected ids that are no longer visible (filters changed). This
   // guarantees a bulk action can only ever touch rows the user can currently
@@ -482,7 +613,7 @@ export function TransactionsPage({
     setLastSelectedId(id);
   }
 
-  // Long press: select the inclusive range between the previous anchor and the
+  // Long press or Shift+click: select the inclusive range between the previous anchor and the
   // pressed row (display order), then re-anchor on the pressed row.
   function selectRangeTo(id: number) {
     const orderedIds = visibleTxns.map((x) => x.id);
@@ -722,28 +853,27 @@ export function TransactionsPage({
                 applyLabel={t("transactions.applyButton")}
               />
             </label>
-            <label className="filter-field">
-              <span>{t("transactions.filterDateFrom")}</span>
-              <input
-                type="date"
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
+            <div className="filter-field">
+              <span>{t("transactions.filterPeriod")}</span>
+              <PeriodDropdown
+                from={dateFrom}
+                to={dateTo}
+                presets={periodPresets()}
+                onChange={(from, to) => {
+                  setDateFrom(from);
+                  setDateTo(to);
+                }}
               />
-            </label>
-            <label className="filter-field">
-              <span>{t("transactions.filterDateTo")}</span>
-              <input
-                type="date"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-              />
-            </label>
+            </div>
             <label className="filter-field">
               <span>{t("transactions.filterKind")}</span>
               <MultiSelectDropdown<RowKind>
                 items={ROW_KINDS.map((k) => ({
                   id: k,
                   label: t(`transactions.kind.${k}`),
+                  group: DOC_KINDS.includes(k)
+                    ? t("transactions.filterGroupDocument")
+                    : t("transactions.filterGroupKind"),
                 }))}
                 selected={selectedKinds}
                 onApply={setSelectedKinds}
@@ -764,7 +894,7 @@ export function TransactionsPage({
                   label: t(`transactions.column.${k}`),
                 }))}
                 selected={visibleColumns}
-                onApply={setVisibleColumns}
+                onApply={changeVisibleColumns}
                 allLabel={t("transactions.filterColumnsAll")}
                 noneLabel={t("transactions.filterColumnsNone")}
                 emptyItemsLabel={t("transactions.filterColumnsAll")}
@@ -774,17 +904,17 @@ export function TransactionsPage({
                 applyLabel={t("transactions.applyButton")}
               />
             </label>
-            <BulkActionsMenu
-              selectedCount={bulkTargets.length}
-              onAssignCategory={() => setBulkOpen(true)}
-            />
-            <button
-              type="button"
-              className="btn-primary filter-bar-action"
-              onClick={onImportTransactions}
-            >
-              {t("toolbar.importTransactions")}
-            </button>
+            {/* Right edge of the bar, where the Import button used to be;
+                importing is the last item of the menu. */}
+            <div className="filter-bar-action">
+              <BulkActionsMenu
+                selectedCount={bulkTargets.length}
+                onImportTransactions={onImportTransactions}
+                onAnalyzeDocuments={() => setBulkDocsOpen(true)}
+                onProposeCategories={() => setBulkProposeOpen(true)}
+                onAssignCategory={() => setBulkOpen(true)}
+              />
+            </div>
           </div>
         )}
       </section>
@@ -822,41 +952,48 @@ export function TransactionsPage({
               <th className="col-fixed col-date">{t("transactions.tableDate")}</th>
               <th className="col-fixed num">{t("transactions.tableCredit")}</th>
               <th className="col-fixed num">{t("transactions.tableDebit")}</th>
-              <th className="col-fixed num col-divider">
+              <th className="col-fixed num">
                 {t("transactions.tableBalance")}
               </th>
+              {showDocument && (
+                <th className="col-document" title={t("transactions.tableDocumentTitle")}>
+                  📎
+                </th>
+              )}
+              {showAgent && (
+                <th className="col-agent">{t("transactions.tableAgent")}</th>
+              )}
+              {showCategory && (
+                <th className="col-category">{t("transactions.tableCategory")}</th>
+              )}
               <th
                 className="col-link"
                 title={t("transactions.tableLinkTitle")}
               >
                 🔗
               </th>
-              <th
-                className="col-delta"
-                title={
-                  deltaMode === "percent"
-                    ? t("transactions.tableDeltaTitlePercent")
-                    : t("transactions.tableDeltaTitleAbsolute")
-                }
-              >
-                <button
-                  type="button"
-                  className="col-delta-toggle"
-                  onClick={toggleDeltaMode}
-                  aria-label={
+              {showDelta && (
+                <th
+                  className="col-delta"
+                  title={
                     deltaMode === "percent"
                       ? t("transactions.tableDeltaTitlePercent")
                       : t("transactions.tableDeltaTitleAbsolute")
                   }
                 >
-                  {deltaMode === "percent" ? "Δ%" : "Δ"}
-                </button>
-              </th>
-              {showCategory && (
-                <th className="col-category">{t("transactions.tableCategory")}</th>
-              )}
-              {showAgent && (
-                <th className="col-agent">{t("transactions.tableAgent")}</th>
+                  <button
+                    type="button"
+                    className="col-delta-toggle"
+                    onClick={toggleDeltaMode}
+                    aria-label={
+                      deltaMode === "percent"
+                        ? t("transactions.tableDeltaTitlePercent")
+                        : t("transactions.tableDeltaTitleAbsolute")
+                    }
+                  >
+                    {deltaMode === "percent" ? "Δ%" : "Δ"}
+                  </button>
+                </th>
               )}
               {showComment && (
                 <th className="col-comment">{t("transactions.tableComment")}</th>
@@ -904,7 +1041,9 @@ export function TransactionsPage({
                 const isSelected = selectedTxnIds.has(x.id);
                 const rowClasses = [
                   x.isCorrecting ? "is-correcting" : "",
-                  hovered?.accountId === x.accountId ? "is-hover-account" : "",
+                  multiAccountView && hovered?.accountId === x.accountId
+                    ? "is-hover-account"
+                    : "",
                   hovered?.id === x.id ? "is-hover-row" : "",
                   isLinkPartnerOfHover ? "is-link-partner" : "",
                   isSelected ? "is-selected" : "",
@@ -1037,9 +1176,45 @@ export function TransactionsPage({
                         ""
                       )}
                     </td>
-                    <td className="col-fixed num col-divider">
+                    <td className="col-fixed num">
                       {formatMoney(x.balance)}
                     </td>
+                    {showDocument && (
+                      <DocumentCell
+                        txn={x}
+                        dateLabel={formatInstantLocal(x.occurredAtUtc)}
+                        accountLabel={
+                          acc ? `${acc.name || acc.accountNumber || acc.bank} · ${acc.currency}` : ""
+                        }
+                        links={docLinksByTxn.get(x.id) ?? []}
+                        onChanged={() => setDocLinksVersion((v) => v + 1)}
+                      />
+                    )}
+                    {showAgent && (
+                      <AgentCell
+                        transactionId={x.id}
+                        agent={x.agent}
+                        onOpen={() => setDetailTxnId(x.id)}
+                        onAnalyzed={() => setLocalRefresh((v) => v + 1)}
+                        memo={docLinksByTxn.get(x.id)?.find((l) => l.memo)?.memo}
+                      />
+                    )}
+                    {showCategory && (() => {
+                      const totalMinor =
+                        (parseMoneyToMinor(x.credit) ?? 0) +
+                        (parseMoneyToMinor(x.debit) ?? 0);
+                      const kind = x.credit !== "0.00" ? "income" : "expense";
+                      const entries = categoriesByTxn.get(x.id) ?? [];
+                      return (
+                        <CategoriesCell
+                          transactionId={x.id}
+                          totalMinor={totalMinor}
+                          kind={kind}
+                          entries={entries}
+                          onChanged={() => setCategoriesVersion((v) => v + 1)}
+                        />
+                      );
+                    })()}
                     <td className="col-link">
                       <button
                         type="button"
@@ -1105,55 +1280,33 @@ export function TransactionsPage({
                         )}
                       </button>
                     </td>
-                    <td className="col-delta num">
-                      {(() => {
-                        const delta = deltas.get(x.id);
-                        if (!delta) return "";
-                        const isCredit = x.credit !== "0.00";
-                        // Default ("%") mode shows nothing on the debit side
-                        // — the percentage on the incoming row alone is the
-                        // canonical "how much we lost on this conversion".
-                        if (deltaMode === "percent" && !isCredit) return "";
-                        return (
-                          <DeltaCell
-                            delta={delta}
-                            mode={deltaMode}
-                            t={t}
-                            onShowTooltip={(text, rect) =>
-                              setTooltip({
-                                x: rect.left + rect.width / 2,
-                                y: rect.top,
-                                text,
-                              })
-                            }
-                            onHideTooltip={() => setTooltip(null)}
-                          />
-                        );
-                      })()}
-                    </td>
-                    {showCategory && (() => {
-                      const totalMinor =
-                        (parseMoneyToMinor(x.credit) ?? 0) +
-                        (parseMoneyToMinor(x.debit) ?? 0);
-                      const kind = x.credit !== "0.00" ? "income" : "expense";
-                      const entries = categoriesByTxn.get(x.id) ?? [];
-                      return (
-                        <CategoriesCell
-                          transactionId={x.id}
-                          totalMinor={totalMinor}
-                          kind={kind}
-                          entries={entries}
-                          onChanged={() => setCategoriesVersion((v) => v + 1)}
-                        />
-                      );
-                    })()}
-                    {showAgent && (
-                      <AgentCell
-                        transactionId={x.id}
-                        agent={x.agent}
-                        onOpen={() => setDetailTxnId(x.id)}
-                        onAnalyzed={() => setLocalRefresh((v) => v + 1)}
-                      />
+                    {showDelta && (
+                      <td className="col-delta num">
+                        {(() => {
+                          const delta = deltas.get(x.id);
+                          if (!delta) return "";
+                          const isCredit = x.credit !== "0.00";
+                          // Default ("%") mode shows nothing on the debit side
+                          // — the percentage on the incoming row alone is the
+                          // canonical "how much we lost on this conversion".
+                          if (deltaMode === "percent" && !isCredit) return "";
+                          return (
+                            <DeltaCell
+                              delta={delta}
+                              mode={deltaMode}
+                              t={t}
+                              onShowTooltip={(text, rect) =>
+                                setTooltip({
+                                  x: rect.left + rect.width / 2,
+                                  y: rect.top,
+                                  text,
+                                })
+                              }
+                              onHideTooltip={() => setTooltip(null)}
+                            />
+                          );
+                        })()}
+                      </td>
                     )}
                     {showComment && (
                       <td className="col-comment">
@@ -1359,6 +1512,20 @@ export function TransactionsPage({
             setLocalRefresh((v) => v + 1);
             setCategoriesVersion((v) => v + 1);
           }}
+        />
+      )}
+      {bulkProposeOpen && (
+        <BulkProposeCategoriesModal
+          transactions={bulkTargets}
+          onClose={() => setBulkProposeOpen(false)}
+          onDone={() => setLocalRefresh((v) => v + 1)}
+        />
+      )}
+      {bulkDocsOpen && (
+        <BulkAnalyzeDocumentsModal
+          transactions={bulkTargets}
+          onClose={() => setBulkDocsOpen(false)}
+          onDone={() => setDocLinksVersion((v) => v + 1)}
         />
       )}
       {bulkOpen && (

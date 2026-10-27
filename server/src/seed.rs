@@ -2292,7 +2292,10 @@ pub fn seed_if_first_launch(conn: &Connection) -> rusqlite::Result<()> {
 /// "Load demo data" (before reseeding) and the standalone "Clear all data".
 fn wipe(conn: &Connection) -> rusqlite::Result<()> {
     // Order matters even with cascades: explicit deletes are clearer and safer
-    // when a single statement spans multiple FK chains.
+    // when a single statement spans multiple FK chains. Document rows go too;
+    // their content-addressed files stay on disk and are reused on re-upload.
+    conn.execute("DELETE FROM attachments", [])?;
+    conn.execute("DELETE FROM attachment_uploads", [])?;
     conn.execute("DELETE FROM transaction_links", [])?;
     conn.execute("DELETE FROM transaction_categories", [])?;
     conn.execute("DELETE FROM transactions", [])?;

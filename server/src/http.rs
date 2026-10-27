@@ -5,7 +5,7 @@
 
 use std::convert::Infallible;
 
-use axum::extract::{DefaultBodyLimit, Path as UrlPath, State};
+use axum::extract::{DefaultBodyLimit, Path as UrlPath, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -33,6 +33,8 @@ pub async fn serve(app: AppHandle) {
         .route("/api/events", get(events))
         .route("/api/backup", get(backup))
         .route("/api/restore", post(restore))
+        .route("/api/attachments/upload/{upload_id}", post(upload_attachment))
+        .route("/api/attachments/{id}/file", get(attachment_file))
         .route("/api/health", get(|| async { "ok" }))
         .fallback_service(ServeDir::new(&static_dir).fallback(ServeFile::new(index)))
         .layer(DefaultBodyLimit::max(BODY_LIMIT_BYTES))
@@ -106,6 +108,50 @@ async fn restore(State(app): State<AppHandle>, body: axum::body::Bytes) -> Respo
     match crate::backup::restore_from_zip_bytes(&app, &body) {
         Ok(()) => ok(Value::Null),
         Err(e) => err(e),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct UploadQuery {
+    name: String,
+}
+
+/// Ingest one uploaded file (raw body; a ZIP is unpacked) into an upload
+/// opened via the `begin_attachment_upload` command. Hashing, unzipping and
+/// file writes run on a blocking thread.
+async fn upload_attachment(
+    State(app): State<AppHandle>,
+    UrlPath(upload_id): UrlPath<i64>,
+    Query(q): Query<UploadQuery>,
+    body: axum::body::Bytes,
+) -> Response {
+    let data_dir = crate::data_dir_context().data_dir.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::attachments::ingest_upload(app.db(), &data_dir, upload_id, &q.name, &body)
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("attachments.ingest_panicked: {e}")));
+    respond(result)
+}
+
+/// Serve a stored document. Content never changes for a given id (files are
+/// content-addressed), so the browser may cache it for good.
+async fn attachment_file(State(app): State<AppHandle>, UrlPath(id): UrlPath<i64>) -> Response {
+    let data_dir = &crate::data_dir_context().data_dir;
+    let (mime, path) = match crate::attachments::attachment_file(app.db(), data_dir, id) {
+        Ok(found) => found,
+        Err(e) => return (StatusCode::NOT_FOUND, e).into_response(),
+    };
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => (
+            [
+                (header::CONTENT_TYPE, mime),
+                (header::CACHE_CONTROL, "private, max-age=31536000, immutable".to_string()),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, format!("attachments.file_missing: {e}")).into_response(),
     }
 }
 
@@ -255,6 +301,30 @@ async fn rpc(
             id: i64]),
         "create_cash_withdrawal" => run!(state crate::cash_withdrawals::create_cash_withdrawal, [
             source_txn_id: i64, cash_account_id: i64, amount: String]),
+
+        "begin_attachment_upload" => run!(state crate::attachments::begin_attachment_upload, [
+            source_name: Option<String>]),
+        "list_attachment_uploads" => run!(state crate::attachments::list_attachment_uploads),
+        "list_attachments" => run!(state crate::attachments::list_attachments),
+        "delete_attachment" => run!(state crate::attachments::delete_attachment, [id: i64]),
+        "link_attachment" => run!(state crate::attachments::link_attachment, [
+            attachment_id: i64, transaction_id: i64]),
+        "unlink_attachment" => run!(state crate::attachments::unlink_attachment, [
+            attachment_id: i64]),
+        "list_transaction_attachments" => {
+            run!(state crate::attachments::list_transaction_attachments, [transaction_id: i64])
+        }
+        "list_attachment_links" => run!(state crate::attachments::list_attachment_links),
+        "analyze_transaction_documents" => {
+            run!(app_async crate::document_analysis::analyze_transaction_documents, [
+                transaction_id: i64])
+        }
+        "recognise_document" => run!(app_async crate::document_analysis::recognise_document, [
+            attachment_id: i64]),
+        "list_attachment_candidates" => {
+            run!(state crate::attachments::list_attachment_candidates, [
+                transaction_id: i64, window_minutes: i64])
+        }
 
         "get_setting" => run!(state crate::settings::get_setting, [key: String]),
         "set_setting" => run!(state crate::settings::set_setting, [key: String, value: String]),

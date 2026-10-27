@@ -1,6 +1,6 @@
 # A2B Accounting
 
-> Last updated: 2026-08-27
+> Last updated: 2026-10-27
 
 A self-hosted, single-user web application for tracking and planning personal finances. Table-first UI, local SQLite database, focused on development speed and manual entry / bank-statement imports. Ships as a Docker image; the project started as a Tauri desktop app — the entire Rust backend was kept, and the Tauri layer was replaced with an HTTP server (axum).
 
@@ -72,7 +72,9 @@ Two layers talking over HTTP (a JSON-RPC-like contract, 1:1 with the former Taur
 │    src/lib/category-tree.ts — tree building   │
 └───────────────────┬──────────────────────────┘
                     │  POST /api/rpc/<cmd>  (+ GET /api/events — SSE,
-                    │  GET /api/backup, POST /api/restore)
+                    │  GET /api/backup, POST /api/restore,
+                    │  POST /api/attachments/upload/<id>,
+                    │  GET /api/attachments/<id>/file)
 ┌───────────────────▼──────────────────────────┐
 │  Rust backend (axum)                         │
 │    server/src/http.rs — router + RPC dispatch │
@@ -133,6 +135,14 @@ transaction_links        (id, txn_a_id → transactions, txn_b_id → transactio
                           ON DELETE CASCADE (both FKs)
 currencies               (code PK, name, symbol, rate_source)
 app_settings             (key, value)
+attachment_uploads       (id, uploaded_at, source_name, files_total, added, duplicates, skipped)
+attachments              (id, upload_id → attachment_uploads, sha256 UNIQUE, original_name,
+                          mime_type, size_bytes, extract_status, extraction (JSON), ocr_text,
+                          transaction_id → transactions ON DELETE SET NULL, match_status)
+                          files on disk: $FINANCES_DATA_DIR/attachments/<sha256>.<ext>
+                          trigger: losing the transaction (unlink, or the transaction / its
+                          batch / account deleted) resets match_status to 'unmatched'.
+                          Deleting a document never touches its transaction.
 schema_migrations        (version, name, applied_at)
 ```
 
@@ -148,7 +158,10 @@ a2b-accounting/
 │   │   ├── Tabs.tsx                  top navigation (Accounts/Transactions left, Categories/Settings right)
 │   │   ├── MultiSelectDropdown.tsx   generic multi-select
 │   │   ├── CategoryPickerPopover.tsx anchored category-picker popover with search and kind filter
-│   │   └── CategoryDistributionModal.tsx share-distribution modal with cascading sliders
+│   │   ├── CategoryDistributionModal.tsx share-distribution modal with cascading sliders
+│   │   ├── BulkAnalyzeDocumentsModal.tsx bulk "analyze documents" over selected transactions (progress + outcome counts)
+│   │   ├── DocumentModal.tsx         document viewer (file + recognition result + link state), shared by Documents and Transactions
+│   │   └── TransactionDocuments.tsx  "Document" block of the transaction modal: linked slips + picker by time window
 │   ├── i18n/
 │   │   ├── index.ts                  Context, Provider, useT/useTPlural hooks, LANGUAGES registry
 │   │   └── locales/
@@ -174,11 +187,12 @@ a2b-accounting/
 │       ├── Transactions.tsx          transaction table with filters, sticky header, month grouping and the category column
 │       ├── transactions/
 │       │   └── CategoriesCell.tsx    category cell: proportional bars, hover tooltip, inline picker, pencil button
+│       ├── Documents.tsx             documents (bank slips etc.): upload files/ZIPs, upload history, list grouped by upload, document viewer
 │       ├── Categories.tsx            category CRUD: two sections (Income/Expenses), tree up to 3 levels, hover + and ✎ buttons
 │       ├── Settings.tsx              language selector (stored in the DB), backup/restore, data dir info
 │       └── ImportDialog.tsx          two-step CSV import wizard (preview + import)
 ├── server/                           Rust backend (axum HTTP server)
-│   ├── Cargo.toml                    dependencies: axum, tower-http, tokio, rusqlite, rust_decimal, chrono, reqwest, zip
+│   ├── Cargo.toml                    dependencies: axum, tower-http, tokio, rusqlite, rust_decimal, chrono, reqwest, zip, sha2, regex, image, rqrr
 │   ├── migrations/
 │   │   ├── 001_init.sql              accounts, import_batches, transactions
 │   │   ├── 002_add_account_name.sql  accounts.name
@@ -203,10 +217,15 @@ a2b-accounting/
 │       ├── transaction_categories.rs set/list with kind checks, sum invariant and cascades + tests
 │       ├── currencies.rs             list_currencies (currency dictionary + rate_source) + tests
 │       ├── settings.rs               get_setting / set_setting (UPSERT into app_settings)
+│       ├── attachments.rs            document storage: content-addressed files, ZIP unpacking, upload batches, document time from file names, linking to transactions
+│       ├── ocr.rs                    local OCR: greyscale + upscale (image), Tesseract CLI via stdin, QR via rqrr, Thai slip-verify QR parsing
+│       ├── slip_extract.rs           layout-agnostic field extractors over OCR text: date-time, amount(s), direction, account mask, memo
+│       ├── document_analysis.rs      "analyze documents" per transaction: recognise linked slip or auto-link one (time + amount + direction, unique)
 │       └── backup.rs                 backup_zip_bytes / restore_from_zip_bytes / data_dir_info + tests
 ├── Dockerfile                        multi-arch image: frontend (Vite) + cross-compiled Rust + slim runtime
 ├── docker-compose.yml                local run of the Docker Hub image (loopback port, data volume)
 ├── scripts/
+│   ├── badge-icons.mjs               favicon per stand (APP_ENV) from src/assets/app-icon.svg
 │   ├── dev.sh                        dev run (axum on :3701 + Vite on :3700)
 │   └── build.sh                      release build without Docker (dist/ + release binary)
 ├── samples/                          example statements (for manual import testing)
@@ -301,9 +320,14 @@ occurred_at,credit,debit,balance,peer,bank_description,comment
 ## Configuration
 
 ### Environment variables (server)
+- **`FINANCES_TESSERACT`** — OCR binary (default `tesseract`; installed in the Docker image). Without it, document analysis returns `ocr.unavailable`; uploading and manual linking still work. For a dev run on macOS: `brew install tesseract tesseract-lang`.
+- **`FINANCES_OCR_LANGS`** — Tesseract languages (default `eng+rus+tha`).
 - **`FINANCES_DATA_DIR`** — absolute path to the data directory (`finances.db` + WAL). Set to `/data` in the Docker image (where the volume mounts); set via `.envrc` in dev. When unset — falls back to `~/.local/share/net.vvpreo.finances/`. The path is created if missing.
 - **`FINANCES_BIND`** — address:port for the HTTP server. Default `127.0.0.1:3701` (dev); in the image — `0.0.0.0:8080` (Docker decides what to publish, loopback-only on the host by default).
 - **`FINANCES_STATIC_DIR`** — directory with the built frontend. `/app/static` in the image; not needed in dev (Vite serves the frontend).
+
+### Build-time: stand marker (`APP_ENV`)
+- **`APP_ENV`** — `prod` (default) | `dev` | `test` | `uat`. Before every Vite dev/build run, [scripts/badge-icons.mjs](scripts/badge-icons.mjs) derives `public/favicon.svg` (git-ignored) from the production icon [src/assets/app-icon.svg](src/assets/app-icon.svg): prod gets the icon unchanged, other stands get a thick frame (dev — red `#E53935`, test — blue `#1E88E5`, uat — green `#43A047`). `scripts/dev.sh` defaults to `dev`; the Dockerfile takes `--build-arg APP_ENV=…` and defaults to `prod`, so CI images on Docker Hub carry no marker. The DEV stand on the DevBox is built with `APP_ENV=dev` (see CLAUDE.md).
 
 ### docker-compose variables
 - **`FINANCES_PORT`** — port on the host loopback (default `3700`).
@@ -335,6 +359,7 @@ Done:
 - i18n (ru/en), the selected language stored in the DB.
 - Web delivery: an axum server with an RPC contract 1:1 with the former Tauri `invoke`, SSE events, a multi-arch Docker image, CI publishing to Docker Hub, docker-compose for a local run with your own data.
 - DB backup and restore via the UI (Settings): browser ZIP download (preceded by `wal_checkpoint(TRUNCATE)`), restore by uploading an archive with validation (valid SQLite + a `schema_migrations` table present) and automatic renaming of the current `finances.db` to `finances.db.bak-<UTC-timestamp>`. After a restore the server reopens the DB in place and the page reloads.
+- Documents tab (next to Categories): upload bank slips / receipts as files or whole ZIP archives (e.g. a Google Drive download — unpacked on the server; type detected by content, not extension), deduplication by content hash, every upload recorded with its counters (history + "last upload N days ago"), list grouped by upload, document viewer with a recognition-result panel. Documents are included in the backup ZIP. Documents are linked to transactions by hand from the transaction modal (documents within ±5 min / ±30 min / ±1 day of the transaction, by the time taken from the file name), and the Transactions table shows a 📎 column (hovering an empty 📎 cell turns it green; a click opens the document picker for that transaction, by analogy with the 🔗 column). Bulk action "Analyze documents" (Actions ▾ on the Transactions screen) runs local OCR (Tesseract eng+rus+tha inside the Docker image; ×1.5 upscale, retried at ×2 when the amount is missed) and auto-links a slip when exactly one document within ±5 min carries the transaction's amount with a compatible direction; the note from the slip is shown in the AI column. Quick period buttons (1/3/6/12 months) sit next to the date filter. LLM categorisation from the note is the next stage — see [docs/plans/transaction-slips.md](docs/plans/transaction-slips.md).
 - The data directory is fixed at server startup (`FINANCES_DATA_DIR` / Docker volume); Settings displays the current path. Runtime directory switching from the UI was removed together with the desktop build.
 
 In the queue (`TO REVIEW` in [TODO.md](TODO.md)):

@@ -2,7 +2,10 @@
 //!
 //! Backup streams the DB to the browser as a ZIP download; restore accepts an
 //! uploaded ZIP, validates it, installs it and reopens the DB connection
-//! in-process (the frontend then reloads the page). There is no runtime
+//! in-process (the frontend then reloads the page). Stored documents
+//! (`attachments/<sha256>.<ext>`) travel in the same archive; on restore they
+//! are merged into the data dir — names are content hashes, so an existing
+//! file is by definition identical and never overwritten. There is no runtime
 //! data-directory switching any more — the directory is fixed for the process
 //! lifetime via `FINANCES_DATA_DIR` (Docker volume) or the platform default.
 
@@ -48,7 +51,7 @@ pub fn data_dir_info() -> DataDirInfo {
     }
 }
 
-/// Build a single-entry ZIP containing `finances.db`, in memory. Before
+/// Build a ZIP with `finances.db` plus every stored document, in memory. Before
 /// reading the source DB we issue a WAL checkpoint so the latest commits are
 /// merged into the main file — otherwise the resulting backup could be
 /// missing recent writes that still sit in the WAL. The DbState lock is held
@@ -72,6 +75,17 @@ pub fn backup_zip_bytes(db_state: &DbState) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("backup.zip_entry: {e}"))?;
     let mut src = fs::File::open(&db_path).map_err(|e| format!("backup.open_db: {e}"))?;
     std::io::copy(&mut src, &mut zip).map_err(|e| format!("backup.write_zip: {e}"))?;
+    drop(conn);
+
+    // Documents are already-compressed images/PDFs: store them as-is.
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    for path in crate::attachments::stored_files(&dir) {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+        zip.start_file(format!("{}/{name}", crate::attachments::ATTACHMENTS_DIR), stored)
+            .map_err(|e| format!("backup.zip_entry: {e}"))?;
+        let mut src = fs::File::open(&path).map_err(|e| format!("backup.open_attachment: {e}"))?;
+        std::io::copy(&mut src, &mut zip).map_err(|e| format!("backup.write_zip: {e}"))?;
+    }
     let cursor = zip.finish().map_err(|e| format!("backup.finish_zip: {e}"))?;
     Ok(cursor.into_inner())
 }
@@ -130,7 +144,42 @@ pub fn restore_from_zip_bytes(app: &AppHandle, bytes: &[u8]) -> Result<(), Strin
                 .unwrap_or_else(|| format!("restore.reopen: {reopen_err}")));
         }
     }
-    install_result
+    install_result?;
+    drop(guard);
+    restore_attachments(&mut archive, &dir)
+}
+
+/// Copy `attachments/<sha256>.<ext>` entries from a backup into the data dir.
+/// Only strictly-named entries are accepted (no path traversal); files that
+/// already exist are skipped — same name means same content.
+fn restore_attachments(
+    archive: &mut ZipArchive<Cursor<&[u8]>>,
+    data_dir: &Path,
+) -> Result<(), String> {
+    let target = crate::attachments::attachments_dir(data_dir);
+    let prefix = format!("{}/", crate::attachments::ATTACHMENTS_DIR);
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| format!("restore.read_zip: {e}"))?;
+        let Some(name) = entry.name().strip_prefix(&prefix).map(str::to_string) else {
+            continue;
+        };
+        if !crate::attachments::is_stored_file_name(&name) {
+            continue;
+        }
+        let path = target.join(&name);
+        if path.exists() {
+            continue;
+        }
+        fs::create_dir_all(&target).map_err(|e| format!("restore.attachments_dir: {e}"))?;
+        let tmp = target.join(format!(".{name}.part"));
+        let mut out =
+            fs::File::create(&tmp).map_err(|e| format!("restore.write_attachment: {e}"))?;
+        std::io::copy(&mut entry, &mut out).map_err(|e| format!("restore.write_attachment: {e}"))?;
+        fs::rename(&tmp, &path).map_err(|e| format!("restore.write_attachment: {e}"))?;
+    }
+    Ok(())
 }
 
 fn install_candidate(dir: &Path, candidate: &Path) -> Result<(), String> {
@@ -231,5 +280,37 @@ mod tests {
         let mut extracted = Vec::new();
         entry.read_to_end(&mut extracted).unwrap();
         assert_eq!(extracted, original);
+    }
+
+    /// Documents in a backup are merged into the data dir; only strictly
+    /// named `attachments/<sha256>.<ext>` entries are written.
+    #[test]
+    fn restore_attachments_merges_only_well_formed_entries() {
+        use std::io::Write;
+        let dir = TempDir::new().unwrap();
+        let sha = "b".repeat(64);
+        let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, data) in [
+            (format!("attachments/{sha}.jpg"), b"jpeg".as_slice()),
+            ("attachments/../evil.jpg".to_string(), b"x".as_slice()),
+            ("attachments/notes.txt".to_string(), b"x".as_slice()),
+            ("finances.db".to_string(), b"db".as_slice()),
+        ] {
+            zip.start_file(name, SimpleFileOptions::default()).unwrap();
+            zip.write_all(data).unwrap();
+        }
+        let bytes = zip.finish().unwrap().into_inner();
+        let mut archive = ZipArchive::new(Cursor::new(bytes.as_slice())).unwrap();
+
+        restore_attachments(&mut archive, dir.path()).unwrap();
+
+        let target = dir.path().join("attachments");
+        let names: Vec<String> = fs::read_dir(&target)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(names, vec![format!("{sha}.jpg")]);
+        assert_eq!(fs::read(target.join(format!("{sha}.jpg"))).unwrap(), b"jpeg");
+        assert!(!dir.path().join("evil.jpg").exists());
     }
 }

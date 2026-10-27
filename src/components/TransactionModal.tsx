@@ -18,6 +18,7 @@ import {
 import { formatMinorAsMoney, formatMoney, parseMoneyToMinor } from "../lib/money";
 import { CategoryDistributionModal } from "./CategoryDistributionModal";
 import { AgentSection } from "./AgentSection";
+import { TransactionDocuments } from "./TransactionDocuments";
 
 interface Props {
   transactionId: number;
@@ -80,6 +81,7 @@ export function TransactionModal({ transactionId, onClose, onChanged }: Props) {
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [catsModalOpen, setCatsModalOpen] = useState(false);
+  const [docViewerOpen, setDocViewerOpen] = useState(false);
 
   const isCash = account?.kind === "cash";
 
@@ -118,11 +120,11 @@ export function TransactionModal({ transactionId, onClose, onChanged }: Props) {
   // ESC closes the modal (only when no nested modal is open).
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape" && !catsModalOpen) onClose();
+      if (e.key === "Escape" && !catsModalOpen && !docViewerOpen) onClose();
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose, catsModalOpen]);
+  }, [onClose, catsModalOpen, docViewerOpen]);
 
   async function handleSave() {
     if (!txn) return;
@@ -396,6 +398,13 @@ export function TransactionModal({ transactionId, onClose, onChanged }: Props) {
                   )}
                 </div>
               </div>
+
+              {/* Linked documents (slips) + manual linking by time window. */}
+              <TransactionDocuments
+                transactionId={txn.id}
+                onChanged={onChanged}
+                onViewerToggle={setDocViewerOpen}
+              />
 
               {/* AI agent dialog scoped to this transaction. */}
               <AgentSection

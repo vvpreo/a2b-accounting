@@ -1,21 +1,25 @@
 mod account_status;
 mod accounts;
 mod ai;
+mod attachments;
 mod backup;
 mod cash_transactions;
 mod cash_withdrawals;
 mod categories;
 mod currencies;
 mod db;
+mod document_analysis;
 mod exchange_rates;
 mod frankfurter;
 pub mod host;
 mod http;
 mod money;
+mod ocr;
 mod report_views;
 mod reports;
 mod seed;
 mod settings;
+mod slip_extract;
 mod transaction_categories;
 mod transaction_links;
 mod transactions;
@@ -101,6 +105,8 @@ pub fn open_and_init(dir: &Path) -> Result<rusqlite::Connection, String> {
         .map_err(|e| format!("failed to ensure accounting report: {e}"))?;
     seed::ensure_ai_provider_config(&conn)
         .map_err(|e| format!("failed to ensure ai provider config: {e}"))?;
+    attachments::backfill_filename_times(&conn)
+        .map_err(|e| format!("failed to backfill document times: {e}"))?;
     Ok(conn)
 }
 

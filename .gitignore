@@ -9,6 +9,8 @@ lerna-debug.log*
 
 node_modules
 dist
+# Stand-badged favicon, generated from src/assets/app-icon.svg (scripts/badge-icons.mjs)
+public/favicon.svg
 dist-ssr
 *.local
 

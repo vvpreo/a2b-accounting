@@ -13,7 +13,11 @@ RUN npm ci --no-audit --no-fund
 COPY index.html vite.config.ts tsconfig.json tsconfig.node.json ./
 COPY public ./public
 COPY src ./src
-RUN npm run build
+COPY scripts/badge-icons.mjs ./scripts/
+# Stand marker for the app icon: prod (default — CI/Docker Hub images) has no
+# marker; build the DEV stand with `--build-arg APP_ENV=dev`.
+ARG APP_ENV=prod
+RUN APP_ENV=$APP_ENV npm run build
 
 # ---- Backend: Rust (cross-compiled to $TARGETARCH) ----
 FROM --platform=$BUILDPLATFORM rust:1-bookworm AS backend
@@ -36,6 +40,12 @@ RUN cargo build --release --manifest-path server/Cargo.toml --target "$(cat /rus
 
 # ---- Runtime ----
 FROM debian:bookworm-slim
+# Local OCR for documents (bank slips): Tesseract with English, Russian (the
+# user's notes) and Thai (merchant names). Nothing is sent to any service.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+         tesseract-ocr tesseract-ocr-eng tesseract-ocr-rus tesseract-ocr-tha \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=backend /a2b-accounting-server /app/a2b-accounting-server
 COPY --from=frontend /app/dist /app/static
 ENV FINANCES_DATA_DIR=/data \

@@ -1,5 +1,5 @@
 # Project compose: builds the image from the local sources (see Dockerfile)
-# and runs it. Used for local testing / UAT from a repo checkout:
+# and runs it. Used for local testing / the DEV stand from a repo checkout:
 #
 #   docker compose up -d --build
 #
