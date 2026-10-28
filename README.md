@@ -363,6 +363,7 @@ occurred_at,credit,debit,balance,peer,bank_description,comment
 
 - **Node.js** ≥ 20, **Rust** stable via `rustup`.
 - Rust tests: `cd server && cargo test --lib`. Frontend tests: `npm test` (Vitest) + a tsc check via `npm run build`.
+- Desktop-app behaviour: a two-finger horizontal trackpad swipe never navigates the browser back/forward on any screen — `overscroll-behavior-x: none` on the root plus a global wheel guard ([src/lib/no-swipe-navigation.ts](src/lib/no-swipe-navigation.ts)) that cancels a horizontal swipe unless something under the pointer can still scroll that way.
 - Native JS dialogs (`window.confirm`, `window.alert`, `window.prompt`) are not used — inline confirmations in the UI only (a rule inherited from the Tauri webview days that also keeps the UX consistent).
 - Money never travels through floating-point `number` — only `"123.45"` strings at the boundary and `i64` minor units inside.
 - Actions (create an account, import transactions) live in the header of their screen — there is no global toolbar.

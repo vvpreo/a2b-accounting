@@ -19,6 +19,7 @@ import {
   isValidThemeMode,
 } from "./theme";
 import { getSetting } from "./lib/api";
+import { preventSwipeNavigation } from "./lib/no-swipe-navigation";
 
 async function loadInitialLocale(): Promise<LocaleCode> {
   try {
@@ -62,4 +63,5 @@ async function bootstrap() {
   );
 }
 
+preventSwipeNavigation();
 bootstrap();

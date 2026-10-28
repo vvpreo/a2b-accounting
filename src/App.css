@@ -20,6 +20,13 @@ body,
   margin: 0;
 }
 
+/* A desktop app: a two-finger horizontal swipe never navigates the browser
+   back / forward (see also src/lib/no-swipe-navigation.ts). */
+html,
+body {
+  overscroll-behavior-x: none;
+}
+
 body {
   overflow: hidden;
 }
