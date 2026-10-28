@@ -363,6 +363,7 @@ occurred_at,credit,debit,balance,peer,bank_description,comment
 
 - **Node.js** ≥ 20, **Rust** stable via `rustup`.
 - Rust tests: `cd server && cargo test --lib`. Frontend tests: `npm test` (Vitest) + a tsc check via `npm run build`.
+- Screen state survives switching tabs: screens are unmounted when left, so filters and panel state that must persist use `useViewState` ([src/lib/view-state.ts](src/lib/view-state.ts)) — a module cache mirrored to `sessionStorage` (also survives a reload of the browser tab; never stored in the DB). Transactions: accounts, period, Filter, collapsed filter bar. Reports: collapsed filter bar and folded rows/sections per report; a report's pending debounced autosave is flushed when the screen is left instead of being dropped.
 - Desktop-app behaviour: a two-finger horizontal trackpad swipe never navigates the browser back/forward on any screen — `overscroll-behavior-x: none` on the root plus a global wheel guard ([src/lib/no-swipe-navigation.ts](src/lib/no-swipe-navigation.ts)) that cancels a horizontal swipe unless something under the pointer can still scroll that way.
 - Native JS dialogs (`window.confirm`, `window.alert`, `window.prompt`) are not used — inline confirmations in the UI only (a rule inherited from the Tauri webview days that also keeps the UX consistent).
 - Money never travels through floating-point `number` — only `"123.45"` strings at the boundary and `i64` minor units inside.

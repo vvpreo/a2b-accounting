@@ -29,6 +29,7 @@ import {
 import { formatMinorAsMoney, formatMoney, parseMoneyToMinor } from "../lib/money";
 import { CategoryPickerModal, computeInitialOrder } from "./report/CategoryPicker";
 import { CellTransactionsModal } from "./report/CellTransactionsModal";
+import { useViewState } from "../lib/view-state";
 
 // Everything the drill-down modal needs about a clicked cell: the backend
 // target plus display labels echoed in the modal header.
@@ -213,7 +214,8 @@ export function ReportViewPage({ view, onSaved }: Props) {
   const [accountsLoaded, setAccountsLoaded] = useState(false);
   const [categoriesLoaded, setCategoriesLoaded] = useState(false);
 
-  const [filtersExpanded, setFiltersExpanded] = useState(true);
+  // Survives switching tabs (lib/view-state.ts), per report.
+  const [filtersExpanded, setFiltersExpanded] = useViewState(`report.${view.id}.filtersExpanded`, true);
   // One picker per kind — opened from the gear icon in the corresponding
   // section header. Local state inside each modal owns pending edits and
   // commits via Save; ESC/cancel discards.
@@ -366,8 +368,19 @@ export function ReportViewPage({ view, onSaved }: Props) {
   const hydratedRef = useRef(false);
   const lastSavedRef = useRef<{ name: string; payload: string } | null>(null);
   const saveTimerRef = useRef<number | null>(null);
+  // The save waiting for its debounce, if any. Leaving the screen (switching
+  // tabs unmounts it) flushes it instead of dropping the last change.
+  const pendingSaveRef = useRef<(() => void) | null>(null);
+
+  useEffect(
+    () => () => {
+      pendingSaveRef.current?.();
+    },
+    [],
+  );
 
   useEffect(() => {
+    pendingSaveRef.current = null;
     // Wait until both accounts and categories are loaded so the form has
     // valid baseline state before we start emitting saves.
     if (!accountsLoaded || !categoriesLoaded) return;
@@ -420,8 +433,8 @@ export function ReportViewPage({ view, onSaved }: Props) {
     if (saveTimerRef.current != null) {
       window.clearTimeout(saveTimerRef.current);
     }
-    saveTimerRef.current = window.setTimeout(() => {
-      saveTimerRef.current = null;
+    const save = () => {
+      pendingSaveRef.current = null;
       updateReportView({ id: view.id, name: trimmedName, config: payload })
         .then((saved) => {
           lastSavedRef.current = { name: trimmedName, payload };
@@ -429,6 +442,11 @@ export function ReportViewPage({ view, onSaved }: Props) {
           onSaved(saved);
         })
         .catch((e) => setSaveError(String(e)));
+    };
+    pendingSaveRef.current = save;
+    saveTimerRef.current = window.setTimeout(() => {
+      saveTimerRef.current = null;
+      save();
     }, AUTOSAVE_DELAY_MS);
 
     return () => {
@@ -647,6 +665,7 @@ export function ReportViewPage({ view, onSaved }: Props) {
 
       {response && (
         <PivotTable
+          viewId={view.id}
           response={response}
           initialExpanded={initialConfig.expandedCategoryIds}
           showTotal={showTotal}
@@ -683,6 +702,8 @@ export function ReportViewPage({ view, onSaved }: Props) {
 }
 
 interface PivotProps {
+  /** Keys the remembered collapse state of this report. */
+  viewId: number;
   response: ReportResponse;
   initialExpanded: number[];
   showTotal: boolean;
@@ -702,7 +723,19 @@ interface PivotProps {
   onCellClick: (info: CellClickInfo) => void;
 }
 
+/** Which rows and sections of a report are collapsed. `known` lists the group
+ *  rows seen so far: a group that appears for the first time starts collapsed,
+ *  a known one keeps the user's choice. */
+interface CollapseState {
+  collapsed: number[];
+  known: number[];
+  income: boolean;
+  expense: boolean;
+  metrics: boolean;
+}
+
 function PivotTable({
+  viewId,
   response,
   initialExpanded,
   showTotal,
@@ -715,16 +748,24 @@ function PivotTable({
 }: PivotProps) {
   const t = useT();
   const { periods, expense, income, balances, internalTransfers } = response;
-  const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
-  const [incomeCollapsed, setIncomeCollapsed] = useState(false);
-  const [expenseCollapsed, setExpenseCollapsed] = useState(false);
-  const [metricsCollapsed, setMetricsCollapsed] = useState(false);
+  // Collapse state survives switching tabs and recomputes (lib/view-state.ts),
+  // per report.
+  const [collapseState, setCollapseState] = useViewState<CollapseState>(
+    `report.${viewId}.collapse`,
+    { collapsed: [], known: [], income: false, expense: false, metrics: false },
+  );
+  const collapsed = useMemo(() => new Set(collapseState.collapsed), [collapseState.collapsed]);
+  const incomeCollapsed = collapseState.income;
+  const expenseCollapsed = collapseState.expense;
+  const metricsCollapsed = collapseState.metrics;
+  const toggleSection = (key: "income" | "expense" | "metrics") =>
+    setCollapseState((prev) => ({ ...prev, [key]: !prev[key] }));
 
-  // Switching to a different view (or recomputing) resets collapse state.
-  // Default: collapse every group row (any category that has descendants in
-  // the rendered list). The user opens the report and sees roll-ups; they
-  // expand individual groups they want to drill into. Section headers stay
-  // expanded so the totals are immediately visible.
+  // Default: every group row (any category that has descendants in the
+  // rendered list) starts collapsed — the user opens the report and sees
+  // roll-ups, then expands the groups they want to drill into. Section
+  // headers start expanded so the totals are immediately visible. Groups the
+  // user already opened or closed keep that choice.
   useEffect(() => {
     const groupIds = new Set<number>();
     for (const section of [income, expense]) {
@@ -735,19 +776,21 @@ function PivotTable({
         }
       }
     }
-    setCollapsed(groupIds);
-    setIncomeCollapsed(false);
-    setExpenseCollapsed(false);
-    setMetricsCollapsed(false);
-  }, [response, initialExpanded, income, expense]);
+    setCollapseState((prev) => {
+      const known = new Set(prev.known);
+      const fresh = [...groupIds].filter((id) => !known.has(id));
+      if (fresh.length === 0) return prev;
+      return { ...prev, collapsed: [...prev.collapsed, ...fresh], known: [...prev.known, ...fresh] };
+    });
+  }, [response, initialExpanded, income, expense, setCollapseState]);
 
   function toggleRow(catId: number) {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(catId)) next.delete(catId);
-      else next.add(catId);
-      return next;
-    });
+    setCollapseState((prev) => ({
+      ...prev,
+      collapsed: prev.collapsed.includes(catId)
+        ? prev.collapsed.filter((id) => id !== catId)
+        : [...prev.collapsed, catId],
+    }));
   }
 
   // Template carries a literal `{name}` placeholder — substituted per row in
@@ -761,7 +804,7 @@ function PivotTable({
     nPeriods,
     periods,
     sectionCollapsed: incomeCollapsed,
-    onToggleSection: () => setIncomeCollapsed((v) => !v),
+    onToggleSection: () => toggleSection("income"),
     rowCollapsed: collapsed,
     onToggleRow: toggleRow,
     sectionTitle: t("report.sectionIncome"),
@@ -782,7 +825,7 @@ function PivotTable({
     nPeriods,
     periods,
     sectionCollapsed: expenseCollapsed,
-    onToggleSection: () => setExpenseCollapsed((v) => !v),
+    onToggleSection: () => toggleSection("expense"),
     rowCollapsed: collapsed,
     onToggleRow: toggleRow,
     sectionTitle: t("report.sectionExpense"),
@@ -816,7 +859,7 @@ function PivotTable({
     onOpenSettings: onOpenMetricsSettings,
     showTotal,
     sectionCollapsed: metricsCollapsed,
-    onToggleSection: () => setMetricsCollapsed((v) => !v),
+    onToggleSection: () => toggleSection("metrics"),
     foldLabel: t("report.fold"),
     unfoldLabel: t("report.unfold"),
   });

@@ -45,6 +45,7 @@ import {
   updateTransactionComment,
 } from "../lib/api";
 import { formatMoney, parseMoneyToMinor } from "../lib/money";
+import { useViewState } from "../lib/view-state";
 import { TransactionModal } from "../components/TransactionModal";
 import { BulkCategorizeModal } from "../components/BulkCategorizeModal";
 import { BulkAnalyzeDocumentsModal } from "../components/BulkAnalyzeDocumentsModal";
@@ -252,16 +253,20 @@ export function TransactionsPage({
   // Life-context intervals (the Context screen) for the Context column.
   const [lifeContexts, setLifeContexts] = useState<LifeContext[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [selectedKinds, setSelectedKinds] = useState<RowKind[]>(() => [
+  // Filters survive switching tabs (see lib/view-state.ts).
+  const [selectedKinds, setSelectedKinds] = useViewState<RowKind[]>("transactions.kinds", () => [
     ...ROW_KINDS,
   ]);
   const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(() => [
     ...DEFAULT_VISIBLE_COLUMNS,
   ]);
-  const [dateFrom, setDateFrom] = useState<string>(defaultDateFrom);
-  const [dateTo, setDateTo] = useState<string>(defaultDateTo);
-  const [filtersExpanded, setFiltersExpanded] = useState(true);
-  const [accountsInitialised, setAccountsInitialised] = useState(false);
+  const [dateFrom, setDateFrom] = useViewState<string>("transactions.dateFrom", defaultDateFrom);
+  const [dateTo, setDateTo] = useViewState<string>("transactions.dateTo", defaultDateTo);
+  const [filtersExpanded, setFiltersExpanded] = useViewState("transactions.filtersExpanded", true);
+  const [accountsInitialised, setAccountsInitialised] = useViewState(
+    "transactions.accountsInitialised",
+    false,
+  );
   // Hover state: the exact row under the cursor plus its accountId, so we can
   // tint every row of the same account softly while highlighting the hovered
   // one strongly. Both fields update together to keep the two cues in sync.

@@ -7,6 +7,7 @@ import { AccountsPage, CreateAccountModal } from "./pages/Accounts";
 import { CategoriesPage } from "./pages/Categories";
 import { DocumentsPage } from "./pages/Documents";
 import { ContextPage } from "./pages/Context";
+import { useViewState } from "./lib/view-state";
 import { ImportDialog } from "./pages/ImportDialog";
 import { ReportViewPage } from "./pages/ReportView";
 import { SettingsPage } from "./pages/Settings";
@@ -17,7 +18,10 @@ function App() {
   // hold off rendering the page area until that check resolves so the user
   // doesn't see a brief flash of the wrong tab.
   const [tab, setTab] = useState<Tab | null>(null);
-  const [txnFilterAccountIds, setTxnFilterAccountIds] = useState<number[]>([]);
+  const [txnFilterAccountIds, setTxnFilterAccountIds] = useViewState<number[]>(
+    "transactions.accountIds",
+    [],
+  );
   // One-shot navigation hint emitted when the user clicks a month cell on
   // the Accounts tab: TransactionsPage consumes it on mount/update to apply
   // the date range, then calls back to clear it so subsequent navigations
