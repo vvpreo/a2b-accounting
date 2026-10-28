@@ -20,6 +20,7 @@ import {
 } from "./theme";
 import { getSetting } from "./lib/api";
 import { preventSwipeNavigation } from "./lib/no-swipe-navigation";
+import { installPasteFallback } from "./lib/paste-fallback";
 
 async function loadInitialLocale(): Promise<LocaleCode> {
   try {
@@ -64,4 +65,5 @@ async function bootstrap() {
 }
 
 preventSwipeNavigation();
+installPasteFallback();
 bootstrap();

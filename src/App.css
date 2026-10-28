@@ -2639,11 +2639,25 @@ code {
     border-color: #3f3f46;
   }
 
+/* Typed values must stand out from the muted labels and placeholders:
+   form fields otherwise inherit the grey label colour. */
+:root[data-theme="dark"] input,
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] textarea {
+    color: #f4f4f5;
+  }
+
 :root[data-theme="dark"] .account-form input,
-:root[data-theme="dark"] .account-form select {
+:root[data-theme="dark"] .account-form select,
+:root[data-theme="dark"] .account-form textarea {
     background: #18181b;
     border-color: #3f3f46;
-    color: inherit;
+    color: #f4f4f5;
+  }
+
+:root[data-theme="dark"] input::placeholder,
+:root[data-theme="dark"] textarea::placeholder {
+    color: #71717a;
   }
 
 :root[data-theme="dark"] th {
