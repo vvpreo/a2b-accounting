@@ -227,8 +227,8 @@
       "outgoing": "Outgoing",
       "with_bank_description": "With bank description",
       "with_comment": "With comments",
-      "with_document": "With document 📎",
-      "without_document": "Without document",
+      "with_note": "With a note",
+      "without_note": "Without a note",
       "linked": "Linked pairs 🔗",
       "unlinked": "Not linked"
     },
@@ -306,7 +306,7 @@
       "stop": "Stop"
     },
     "filterGroupKind": "Transactions",
-    "filterGroupDocument": "Document",
+    "filterGroupNote": "Note",
     "filterGroupLink": "Link",
     "period": {
       "1": "Last month",

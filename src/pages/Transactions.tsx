@@ -64,17 +64,21 @@ type RowKind =
   | "outgoing"
   | "with_bank_description"
   | "with_comment"
-  | "with_document"
-  | "without_document"
+  | "with_note"
+  | "without_note"
   | "linked"
   | "unlinked";
 
-/// The Filter dropdown has three groups: row kinds, document presence and
+/// The Filter dropdown has three groups: row kinds, note presence and
 /// transfer links. Within a group items combine with OR, the groups combine
-/// with AND — so "Outgoing" + "Without document" means outgoing rows that
-/// have no slip, and unticking "Linked pairs" hides both sides of every
+/// with AND — so "Outgoing" + "Without note" means outgoing rows nothing is
+/// known about yet, and unticking "Linked pairs" hides both sides of every
 /// transfer / cash withdrawal.
-const DOC_KINDS: RowKind[] = ["with_document", "without_document"];
+///
+/// A transaction "has a note" when the user wrote a comment or a document
+/// (slip) is linked — even one with no recognised text: the same rule as the
+/// icon in the Note column.
+const NOTE_KINDS: RowKind[] = ["with_note", "without_note"];
 const LINK_KINDS: RowKind[] = ["linked", "unlinked"];
 const ROW_KINDS: RowKind[] = [
   "correcting",
@@ -82,7 +86,7 @@ const ROW_KINDS: RowKind[] = [
   "outgoing",
   "with_bank_description",
   "with_comment",
-  ...DOC_KINDS,
+  ...NOTE_KINDS,
   ...LINK_KINDS,
 ];
 
@@ -155,12 +159,12 @@ function rowMatchesKind(row: { isCorrecting: boolean; credit: string; debit: str
       return !!row.bankDescription && row.bankDescription.trim() !== "";
     case "with_comment":
       return !!row.comment && row.comment.trim() !== "";
-    case "with_document":
-    case "without_document":
+    case "with_note":
+    case "without_note":
     case "linked":
     case "unlinked":
-      // Document and link presence are decided by the caller (they need the
-      // link maps).
+      // Note and link presence are decided by the caller (they need the
+      // document-link and transfer-link maps).
       return false;
   }
 }
@@ -254,7 +258,7 @@ export function TransactionsPage({
   const [lifeContexts, setLifeContexts] = useState<LifeContext[]>([]);
   const [error, setError] = useState<string | null>(null);
   // Filters survive switching tabs (see lib/view-state.ts).
-  const [selectedKinds, setSelectedKinds] = useViewState<RowKind[]>("transactions.kinds", () => [
+  const [selectedKinds, setSelectedKinds] = useViewState<RowKind[]>("transactions.kinds.v2", () => [
     ...ROW_KINDS,
   ]);
   const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(() => [
@@ -664,13 +668,13 @@ export function TransactionsPage({
       const ts = Date.parse(x.occurredAtUtc);
       if (fromMs !== null && ts < fromMs) return false;
       if (toMs !== null && ts > toMs) return false;
-      const docKinds = selectedKinds.filter((k) => DOC_KINDS.includes(k));
+      const noteKinds = selectedKinds.filter((k) => NOTE_KINDS.includes(k));
       const linkKinds = selectedKinds.filter((k) => LINK_KINDS.includes(k));
       const rowKinds = selectedKinds.filter(
-        (k) => !DOC_KINDS.includes(k) && !LINK_KINDS.includes(k),
+        (k) => !NOTE_KINDS.includes(k) && !LINK_KINDS.includes(k),
       );
-      const hasDoc = docLinksByTxn.has(x.id);
-      if (!docKinds.some((k) => (k === "with_document") === hasDoc)) return false;
+      const hasNote = !!x.comment?.trim() || docLinksByTxn.has(x.id);
+      if (!noteKinds.some((k) => (k === "with_note") === hasNote)) return false;
       const isLinked = linkPartnerById.has(x.id);
       if (!linkKinds.some((k) => (k === "linked") === isLinked)) return false;
       return rowKinds.some((k) => rowMatchesKind(x, k));
@@ -1001,8 +1005,8 @@ export function TransactionsPage({
                 items={ROW_KINDS.map((k) => ({
                   id: k,
                   label: t(`transactions.kind.${k}`),
-                  group: DOC_KINDS.includes(k)
-                    ? t("transactions.filterGroupDocument")
+                  group: NOTE_KINDS.includes(k)
+                    ? t("transactions.filterGroupNote")
                     : LINK_KINDS.includes(k)
                       ? t("transactions.filterGroupLink")
                       : t("transactions.filterGroupKind"),

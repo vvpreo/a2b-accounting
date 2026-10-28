@@ -231,8 +231,8 @@
       "outgoing": "Исходящие",
       "with_bank_description": "С описанием банка",
       "with_comment": "С комментариями",
-      "with_document": "С документом 📎",
-      "without_document": "Без документа",
+      "with_note": "С заметкой",
+      "without_note": "Без заметки",
       "linked": "Связанные пары 🔗",
       "unlinked": "Без пары"
     },
@@ -310,7 +310,7 @@
       "stop": "Остановить"
     },
     "filterGroupKind": "Операции",
-    "filterGroupDocument": "Документ",
+    "filterGroupNote": "Заметка",
     "filterGroupLink": "Связь",
     "period": {
       "1": "Последний месяц",
