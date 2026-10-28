@@ -64,12 +64,17 @@ type RowKind =
   | "with_bank_description"
   | "with_comment"
   | "with_document"
-  | "without_document";
+  | "without_document"
+  | "linked"
+  | "unlinked";
 
-/// The Filter dropdown has two groups: row kinds and document presence.
-/// Within a group items combine with OR, the groups combine with AND — so
-/// "Outgoing" + "Without document" means outgoing rows that have no slip.
+/// The Filter dropdown has three groups: row kinds, document presence and
+/// transfer links. Within a group items combine with OR, the groups combine
+/// with AND — so "Outgoing" + "Without document" means outgoing rows that
+/// have no slip, and unticking "Linked pairs" hides both sides of every
+/// transfer / cash withdrawal.
 const DOC_KINDS: RowKind[] = ["with_document", "without_document"];
+const LINK_KINDS: RowKind[] = ["linked", "unlinked"];
 const ROW_KINDS: RowKind[] = [
   "correcting",
   "incoming",
@@ -77,6 +82,7 @@ const ROW_KINDS: RowKind[] = [
   "with_bank_description",
   "with_comment",
   ...DOC_KINDS,
+  ...LINK_KINDS,
 ];
 
 /// Two display modes for the Δ column. "percent" is the default:
@@ -150,7 +156,10 @@ function rowMatchesKind(row: { isCorrecting: boolean; credit: string; debit: str
       return !!row.comment && row.comment.trim() !== "";
     case "with_document":
     case "without_document":
-      // Document presence is decided by the caller (it needs the link map).
+    case "linked":
+    case "unlinked":
+      // Document and link presence are decided by the caller (they need the
+      // link maps).
       return false;
   }
 }
@@ -651,12 +660,17 @@ export function TransactionsPage({
       if (fromMs !== null && ts < fromMs) return false;
       if (toMs !== null && ts > toMs) return false;
       const docKinds = selectedKinds.filter((k) => DOC_KINDS.includes(k));
-      const rowKinds = selectedKinds.filter((k) => !DOC_KINDS.includes(k));
+      const linkKinds = selectedKinds.filter((k) => LINK_KINDS.includes(k));
+      const rowKinds = selectedKinds.filter(
+        (k) => !DOC_KINDS.includes(k) && !LINK_KINDS.includes(k),
+      );
       const hasDoc = docLinksByTxn.has(x.id);
       if (!docKinds.some((k) => (k === "with_document") === hasDoc)) return false;
+      const isLinked = linkPartnerById.has(x.id);
+      if (!linkKinds.some((k) => (k === "linked") === isLinked)) return false;
       return rowKinds.some((k) => rowMatchesKind(x, k));
     });
-  }, [txns, selectedAccountIds, selectedKinds, dateFrom, dateTo, docLinksByTxn]);
+  }, [txns, selectedAccountIds, selectedKinds, dateFrom, dateTo, docLinksByTxn, linkPartnerById]);
 
   // The "same account" hover tint only tells something when the visible rows
   // span several accounts; with a single account it would just tint the
@@ -984,7 +998,9 @@ export function TransactionsPage({
                   label: t(`transactions.kind.${k}`),
                   group: DOC_KINDS.includes(k)
                     ? t("transactions.filterGroupDocument")
-                    : t("transactions.filterGroupKind"),
+                    : LINK_KINDS.includes(k)
+                      ? t("transactions.filterGroupLink")
+                      : t("transactions.filterGroupKind"),
                 }))}
                 selected={selectedKinds}
                 onApply={setSelectedKinds}

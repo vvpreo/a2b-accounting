@@ -232,7 +232,9 @@
       "with_bank_description": "С описанием банка",
       "with_comment": "С комментариями",
       "with_document": "С документом 📎",
-      "without_document": "Без документа"
+      "without_document": "Без документа",
+      "linked": "Связанные пары 🔗",
+      "unlinked": "Без пары"
     },
     "column": {
       "context": "Контекст",
@@ -309,6 +311,7 @@
     },
     "filterGroupKind": "Операции",
     "filterGroupDocument": "Документ",
+    "filterGroupLink": "Связь",
     "period": {
       "1": "Последний месяц",
       "3": "Последние 3 месяца",

@@ -228,7 +228,9 @@
       "with_bank_description": "With bank description",
       "with_comment": "With comments",
       "with_document": "With document 📎",
-      "without_document": "Without document"
+      "without_document": "Without document",
+      "linked": "Linked pairs 🔗",
+      "unlinked": "Not linked"
     },
     "column": {
       "context": "Context",
@@ -305,6 +307,7 @@
     },
     "filterGroupKind": "Transactions",
     "filterGroupDocument": "Document",
+    "filterGroupLink": "Link",
     "period": {
       "1": "Last month",
       "3": "Last 3 months",

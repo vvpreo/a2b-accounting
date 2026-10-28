@@ -2373,7 +2373,8 @@ code {
 }
 
 .dropdown-list {
-  max-height: 280px;
+  /* Tall enough for the Transactions Filter (three groups) without scrolling. */
+  max-height: min(480px, 60vh);
   overflow-y: auto;
 }
 
