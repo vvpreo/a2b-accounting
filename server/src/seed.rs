@@ -2304,6 +2304,7 @@ fn wipe(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM accounts", [])?;
     conn.execute("DELETE FROM categories", [])?;
     conn.execute("DELETE FROM report_views", [])?;
+    conn.execute("DELETE FROM life_contexts", [])?;
     conn.execute("DELETE FROM exchange_rates", [])?;
     Ok(())
 }

@@ -6,6 +6,7 @@ import { listReportViews, listTransactions, ReportView } from "./lib/api";
 import { AccountsPage, CreateAccountModal } from "./pages/Accounts";
 import { CategoriesPage } from "./pages/Categories";
 import { DocumentsPage } from "./pages/Documents";
+import { ContextPage } from "./pages/Context";
 import { ImportDialog } from "./pages/ImportDialog";
 import { ReportViewPage } from "./pages/ReportView";
 import { SettingsPage } from "./pages/Settings";
@@ -89,6 +90,7 @@ function App() {
   return (
     <main className="container">
       <Tabs active={tab} reportViews={reportViews} onChange={setTab} />
+      {tab === "context" && <ContextPage />}
       {tab === "documents" && <DocumentsPage />}
       {tab === "categories" && <CategoriesPage />}
       {tab === "accounts" && (

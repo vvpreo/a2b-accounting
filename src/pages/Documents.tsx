@@ -18,6 +18,7 @@ import {
   RECOGNITION_STATUS_EVENT,
   recognitionStatus,
   RecognitionStatus,
+  setRecognitionPaused,
   uploadAttachmentFile,
 } from "../lib/api";
 import { listen } from "../lib/events";
@@ -27,33 +28,49 @@ import { useI18n, useT, useTPlural } from "../i18n";
 /** Accepted by the file picker; the server re-checks every file by content. */
 const ACCEPT = "image/jpeg,image/png,image/webp,application/pdf,.zip,application/zip";
 
-type StatusFilter =
-  | "all"
-  | "pending"
-  | "recognised"
-  | "unmatched"
-  | "ambiguous"
-  | "matched";
+/** Four independent filters, combined with AND: document time extracted,
+ *  OCR passed, linked to a transaction, several candidates. */
+type YesNo = "all" | "yes" | "no";
+interface Filters {
+  time: YesNo;
+  ocr: YesNo;
+  linked: YesNo;
+  ambiguous: "all" | "yes";
+}
+type FilterKey = keyof Filters;
+const FILTER_KEYS: FilterKey[] = ["time", "ocr", "linked", "ambiguous"];
+const FILTER_OPTIONS: Record<FilterKey, ("all" | "yes" | "no")[]> = {
+  time: ["all", "yes", "no"],
+  ocr: ["all", "yes", "no"],
+  linked: ["all", "yes", "no"],
+  ambiguous: ["all", "yes"],
+};
+const NO_FILTERS: Filters = { time: "all", ocr: "all", linked: "all", ambiguous: "all" };
 
 /** While the background queue runs, the (large) document list is reloaded
  *  at most this often; it is reloaded once more when the queue empties. */
 const QUEUE_REFRESH_MS = 20_000;
 
-function matchesFilter(doc: Attachment, filter: StatusFilter): boolean {
-  switch (filter) {
-    case "all":
-      return true;
-    case "pending":
-      return doc.extractStatus === "pending";
-    case "recognised":
-      return doc.extractStatus === "done" || doc.extractStatus === "partial";
-    case "unmatched":
-      return doc.transactionId === null;
+/** Whether a document has the property a filter is about. */
+function hasProperty(doc: Attachment, key: FilterKey): boolean {
+  switch (key) {
+    case "time":
+      return !!parseExtraction(doc.extraction)?.occurredAt;
+    case "ocr":
+      return doc.extractStatus !== "pending";
+    case "linked":
+      return doc.transactionId !== null;
     case "ambiguous":
       return doc.transactionId === null && doc.matchStatus === "ambiguous";
-    case "matched":
-      return doc.transactionId !== null;
   }
+}
+
+function matchesFilters(doc: Attachment, filters: Filters, skip?: FilterKey): boolean {
+  return FILTER_KEYS.every((key) => {
+    const want = filters[key];
+    if (key === skip || want === "all") return true;
+    return hasProperty(doc, key) === (want === "yes");
+  });
 }
 
 interface UploadProgress {
@@ -79,7 +96,8 @@ export function DocumentsPage() {
   const [uploads, setUploads] = useState<AttachmentUpload[]>([]);
   const [version, setVersion] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<StatusFilter>("all");
+  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
+  const [pausing, setPausing] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
   const [lastReport, setLastReport] = useState<IngestReport | null>(null);
@@ -206,8 +224,8 @@ export function DocumentsPage() {
   }
 
   const visible = useMemo(
-    () => docs.filter((d) => matchesFilter(d, filter)),
-    [docs, filter],
+    () => docs.filter((d) => matchesFilters(d, filters)),
+    [docs, filters],
   );
 
   // Rows grouped by the upload that brought them, newest upload first
@@ -285,22 +303,33 @@ export function DocumentsPage() {
     [uploads],
   );
 
+  // Per option: how many documents it would show together with the other
+  // three filters as they are set now.
   const counts = useMemo(() => {
-    const c: Record<StatusFilter, number> = {
-      all: 0,
-      pending: 0,
-      recognised: 0,
-      unmatched: 0,
-      ambiguous: 0,
-      matched: 0,
-    };
+    const c = Object.fromEntries(
+      FILTER_KEYS.map((k) => [k, { all: 0, yes: 0, no: 0 }]),
+    ) as Record<FilterKey, Record<"all" | "yes" | "no", number>>;
     for (const d of docs) {
-      for (const f of Object.keys(c) as StatusFilter[]) {
-        if (matchesFilter(d, f)) c[f]++;
+      for (const key of FILTER_KEYS) {
+        if (!matchesFilters(d, filters, key)) continue;
+        c[key].all++;
+        c[key][hasProperty(d, key) ? "yes" : "no"]++;
       }
     }
     return c;
-  }, [docs]);
+  }, [docs, filters]);
+
+  async function togglePause() {
+    if (!queue) return;
+    setPausing(true);
+    try {
+      setQueue(await setRecognitionPaused(!queue.pausedByUser));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setPausing(false);
+    }
+  }
 
   const openDoc = openId !== null ? docs.find((d) => d.id === openId) ?? null : null;
 
@@ -373,12 +402,32 @@ export function DocumentsPage() {
         </div>
       )}
 
-      {queue && (queue.pending > 0 || queue.pausedError || queue.lastLink || queue.ambiguous > 0) && (
+      {queue && (queue.pending > 0 || queue.pausedError || queue.pausedByUser || queue.lastLink || queue.ambiguous > 0) && (
         <div className="documents-queue">
           {queue.pausedError ? (
             <div className="error">{t("documents.queue.paused", { error: queue.pausedError })}</div>
+          ) : queue.pausedByUser ? (
+            <div className="documents-queue-row">
+              <span>{t("documents.queue.pausedByUser", { count: queue.pending })}</span>
+              <button type="button" className="btn-secondary btn-small" disabled={pausing} onClick={togglePause}>
+                {t("documents.queue.resume")}
+              </button>
+            </div>
           ) : (
-            queue.pending > 0 && <div>{t("documents.queue.pending", { count: queue.pending })}</div>
+            queue.pending > 0 && (
+              <div className="documents-queue-row">
+                <span>{t("documents.queue.pending", { count: queue.pending })}</span>
+                <button
+                  type="button"
+                  className="btn-secondary btn-small"
+                  disabled={pausing}
+                  title={t("documents.queue.pauseHint")}
+                  onClick={togglePause}
+                >
+                  {t("documents.queue.pause")}
+                </button>
+              </div>
+            )
           )}
           {queue.lastLink && (
             <div className="hint">{t("documents.queue.linked", { count: queue.lastLink.linked })}</div>
@@ -458,15 +507,20 @@ export function DocumentsPage() {
       ) : (
         <>
           <div className="documents-filters">
-            {(Object.keys(counts) as StatusFilter[]).map((f) => (
-              <button
-                key={f}
-                type="button"
-                className={`documents-filter${filter === f ? " active" : ""}`}
-                onClick={() => setFilter(f)}
-              >
-                {t(`documents.filter.${f}`)} <span className="hint">{counts[f]}</span>
-              </button>
+            {FILTER_KEYS.map((key) => (
+              <div key={key} className="documents-filter-group" role="group" aria-label={t(`documents.filter.${key}.label`)}>
+                <span className="documents-filter-label">{t(`documents.filter.${key}.label`)}</span>
+                {FILTER_OPTIONS[key].map((opt) => (
+                  <button
+                    key={opt}
+                    type="button"
+                    className={`documents-filter${filters[key] === opt ? " active" : ""}`}
+                    onClick={() => setFilters((f) => ({ ...f, [key]: opt }))}
+                  >
+                    {t(`documents.filter.${key}.${opt}`)} <span className="hint">{counts[key][opt]}</span>
+                  </button>
+                ))}
+              </div>
             ))}
             <span className="hint documents-drop-hint">{t("documents.dropHint")}</span>
           </div>

@@ -68,8 +68,9 @@ pub fn create_account(
 
         let id: i64 = conn
             .query_row(
-                "INSERT INTO accounts (name, kind, bank, currency, account_number, owner_name)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                "INSERT INTO accounts (name, kind, bank, currency, account_number, owner_name, sort_order)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6,
+                         (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM accounts))
                  RETURNING id",
                 params![name, kind, bank, currency, account_number, owner_name],
                 |row| row.get(0),
@@ -139,7 +140,7 @@ pub fn list_accounts(state: State<'_, DbState>) -> Result<Vec<Account>, String> 
 
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT {SELECT_COLUMNS} FROM accounts ORDER BY id ASC"
+            "SELECT {SELECT_COLUMNS} FROM accounts ORDER BY sort_order ASC, id ASC"
         ))
         .map_err(|e| e.to_string())?;
 
@@ -199,6 +200,26 @@ pub fn update_account(
     .map_err(|e| e.to_string())
 }
 
+/// Persist the user's account order (Accounts screen, drag & drop): `ids` is
+/// the full list in the new order. Every account list follows it.
+pub fn reorder_accounts(state: State<'_, DbState>, ids: Vec<i64>) -> Result<(), String> {
+    let mut conn = state.lock().map_err(|e| e.to_string())?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    for (index, id) in ids.iter().enumerate() {
+        let updated = tx
+            .execute(
+                "UPDATE accounts SET sort_order = ?1 WHERE id = ?2",
+                params![index as i64 + 1, id],
+            )
+            .map_err(|e| e.to_string())?;
+        if updated == 0 {
+            return Err(format!("account {id} does not exist"));
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub fn delete_account(state: State<'_, DbState>, id: i64) -> Result<(), String> {
     let conn = state.lock().map_err(|e| e.to_string())?;
     let deleted = conn
@@ -208,4 +229,43 @@ pub fn delete_account(state: State<'_, DbState>, id: i64) -> Result<(), String> 
         return Err(format!("account {id} does not exist"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    fn names(state: &DbState) -> Vec<String> {
+        list_accounts(state).unwrap().into_iter().map(|a| a.name).collect()
+    }
+
+    #[test]
+    fn user_order_is_kept_and_new_accounts_go_last() {
+        let dir = TempDir::new().unwrap();
+        let app = AppHandle::new(Mutex::new(db::open(dir.path()).unwrap()));
+        // EUR: no background rate download (needs no tokio runtime).
+        let create = |name: &str, kind: &str| {
+            create_account(app.clone(), app.db(), name.into(), Some(kind.into()), "Bank".into(),
+                "EUR".into(), None, None)
+            .unwrap()
+            .id
+        };
+        let cash = create("Cash", "cash");
+        let main = create("Main", "bank");
+        let savings = create("Savings", "bank");
+        assert_eq!(names(app.db()), ["Cash", "Main", "Savings"]);
+
+        reorder_accounts(app.db(), vec![main, savings, cash]).unwrap();
+        assert_eq!(names(app.db()), ["Main", "Savings", "Cash"]);
+
+        create("Card", "bank");
+        assert_eq!(names(app.db()), ["Main", "Savings", "Cash", "Card"]);
+
+        assert!(reorder_accounts(app.db(), vec![9999]).is_err());
+        // A failed reorder changes nothing.
+        assert_eq!(names(app.db()), ["Main", "Savings", "Cash", "Card"]);
+    }
 }

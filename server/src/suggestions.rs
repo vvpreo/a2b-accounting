@@ -969,6 +969,8 @@ pub struct SuggestionContext {
     pub comment: Option<String>,
     /// Notes recognised on the linked slips.
     pub slip_notes: Vec<String>,
+    /// What was going on in life that day (the Context screen).
+    pub life_contexts: Vec<String>,
 }
 
 fn slip_notes(conn: &Connection, transaction_id: i64) -> Result<Vec<String>, String> {
@@ -991,13 +993,19 @@ fn slip_notes(conn: &Connection, transaction_id: i64) -> Result<Vec<String>, Str
         .collect())
 }
 
-fn local_time(f: &Facts) -> Option<String> {
+fn local_datetime(f: &Facts) -> Option<DateTime<chrono::FixedOffset>> {
     let offset = f.timezone_offset.as_deref()?;
     let probe = DateTime::parse_from_rfc3339(&format!("2000-01-01T00:00:00{}", offset.trim())).ok()?;
-    Some(
-        f.at.with_timezone(probe.offset())
-            .to_rfc3339_opts(SecondsFormat::Secs, true),
-    )
+    Some(f.at.with_timezone(probe.offset()))
+}
+
+fn local_time(f: &Facts) -> Option<String> {
+    local_datetime(f).map(|t| t.to_rfc3339_opts(SecondsFormat::Secs, true))
+}
+
+/// The transaction's calendar day: in its import batch's time zone, else UTC.
+fn local_day(f: &Facts) -> chrono::NaiveDate {
+    local_datetime(f).map_or_else(|| f.at.date_naive(), |t| t.date_naive())
 }
 
 fn non_empty(s: &Option<String>) -> Option<String> {
@@ -1020,6 +1028,7 @@ fn context_of(conn: &Connection, f: &Facts) -> Result<SuggestionContext, String>
         bank_description: non_empty(&f.bank_description),
         comment: non_empty(&f.comment),
         slip_notes: slip_notes(conn, f.id)?,
+        life_contexts: crate::life_contexts::describe_day(conn, local_day(f))?,
     })
 }
 
@@ -1378,5 +1387,22 @@ mod tests {
         assert_eq!(set["transactions"].as_array().unwrap().len(), 1);
         assert_eq!(set["neighbors"].as_array().unwrap().len(), 1);
         assert_eq!(set["transactions"][0]["context"]["occurredAtLocal"], "2026-05-01T10:00:00+07:00");
+    }
+
+    #[test]
+    fn context_carries_life_contexts_of_the_local_day() {
+        let fx = Fx::new();
+        let a = fx.account("A", "bank", "THB", None);
+        // 2026-05-01T20:00Z is already 2 May at +07:00.
+        let x = fx.txn(a, "2026-05-01T20:00:00.000Z", 0, 1000, "Toys");
+        let conn = fx.state.lock().unwrap();
+        conn.execute(
+            "INSERT INTO life_contexts (title, starts_on, ends_on, color, note)
+             VALUES ('Trip with the kids', '2026-05-02', '2026-05-05', '#57c8e0', 'Phuket')",
+            [],
+        )
+        .unwrap();
+        let set = build_reference_set(&conn, &[x]).unwrap();
+        assert_eq!(set["transactions"][0]["context"]["lifeContexts"][0], "Trip with the kids — Phuket");
     }
 }

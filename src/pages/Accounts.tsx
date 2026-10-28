@@ -1,5 +1,6 @@
 import {
   ChangeEvent,
+  DragEvent,
   Fragment,
   FormEvent,
   useCallback,
@@ -38,6 +39,7 @@ import {
   listCurrencies,
   listImportBatches,
   listTransactions,
+  reorderAccounts,
   setSetting,
   bulkUpdateTransactionFields,
   updateAccount,
@@ -360,6 +362,10 @@ export function AccountsPage({
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [detailAccountId, setDetailAccountId] = useState<number | null>(null);
+  // Drag & drop reordering: the account being dragged by its ⠿ handle and
+  // where it would land (before or after the hovered account).
+  const [dragId, setDragId] = useState<number | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ id: number; after: boolean } | null>(null);
   const [statusCells, setStatusCells] = useState<AccountMonthCell[]>([]);
   const [latestByAccount, setLatestByAccount] = useState<
     Map<number, AccountLatestTransaction>
@@ -544,6 +550,38 @@ export function AccountsPage({
     refresh();
   }, [version, refresh]);
 
+  // Each account is two table rows (details + activity strip): hovering the
+  // upper half of the details row drops before it, anything lower — after.
+  function onRowDragOver(e: DragEvent<HTMLTableRowElement>, id: number, isStrip: boolean) {
+    if (dragId === null) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    const rect = e.currentTarget.getBoundingClientRect();
+    const after = isStrip || e.clientY > rect.top + rect.height / 2;
+    if (dropTarget?.id !== id || dropTarget.after !== after) setDropTarget({ id, after });
+  }
+
+  function onRowDrop(e: DragEvent<HTMLTableRowElement>) {
+    e.preventDefault();
+    const target = dropTarget;
+    const moving = dragId;
+    setDragId(null);
+    setDropTarget(null);
+    if (moving === null || target === null || target.id === moving) return;
+    const rest = accounts.filter((a) => a.id !== moving);
+    const movingAccount = accounts.find((a) => a.id === moving);
+    const at = rest.findIndex((a) => a.id === target.id);
+    if (!movingAccount || at < 0) return;
+    const next = [...rest];
+    next.splice(target.after ? at + 1 : at, 0, movingAccount);
+    if (next.every((a, i) => a.id === accounts[i].id)) return;
+    setAccounts(next);
+    reorderAccounts(next.map((a) => a.id)).catch((err) => {
+      setError(String(err));
+      void refresh();
+    });
+  }
+
   const cellsByAccount = useMemo(() => {
     const map = new Map<number, AccountMonthCell[]>();
     for (const c of statusCells) {
@@ -682,8 +720,35 @@ export function AccountsPage({
           ) : (
             accounts.map((a) => (
               <Fragment key={a.id}>
-                <tr className="account-row">
-                  <td>{a.id}</td>
+                <tr
+                  className={[
+                    "account-row",
+                    dragId === a.id ? "is-dragging" : "",
+                    dropTarget?.id === a.id && !dropTarget.after ? "drop-before" : "",
+                  ].join(" ")}
+                  onDragOver={(e) => onRowDragOver(e, a.id, false)}
+                  onDrop={onRowDrop}
+                >
+                  <td className="account-id-cell">
+                    <span
+                      className="account-drag-handle"
+                      draggable
+                      title={t("accounts.dragToReorder")}
+                      aria-label={t("accounts.dragToReorder")}
+                      onDragStart={(e) => {
+                        e.dataTransfer.effectAllowed = "move";
+                        e.dataTransfer.setData("text/plain", String(a.id));
+                        setDragId(a.id);
+                      }}
+                      onDragEnd={() => {
+                        setDragId(null);
+                        setDropTarget(null);
+                      }}
+                    >
+                      ⠿
+                    </span>
+                    {a.id}
+                  </td>
                   <td className="account-name-cell">
                     <span className="account-name-text">{a.name}</span>
                     <span className="account-row-actions">
@@ -723,7 +788,15 @@ export function AccountsPage({
                     />
                   </td>
                 </tr>
-                <tr className="account-strip-row">
+                <tr
+                  className={[
+                    "account-strip-row",
+                    dragId === a.id ? "is-dragging" : "",
+                    dropTarget?.id === a.id && dropTarget.after ? "drop-after" : "",
+                  ].join(" ")}
+                  onDragOver={(e) => onRowDragOver(e, a.id, true)}
+                  onDrop={onRowDrop}
+                >
                   <td className="account-strip-spacer" />
                   <td className="account-strip-spacer account-strip-labels-cell">
                     {latestByAccount.has(a.id) && (

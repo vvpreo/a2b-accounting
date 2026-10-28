@@ -190,6 +190,12 @@ export function listAccounts(): Promise<Account[]> {
   return invoke<Account[]>("list_accounts");
 }
 
+/** Persist the user's account order: `ids` is the full list in the new
+ *  order. `listAccounts` (and every account list in the app) follows it. */
+export function reorderAccounts(ids: number[]): Promise<void> {
+  return invoke<void>("reorder_accounts", { ids });
+}
+
 export function updateAccount(args: {
   id: number;
   name: string;
@@ -594,6 +600,44 @@ export function saveAiConfig(config: AiProviderConfig): Promise<void> {
  *  short human-readable summary (model + reply snippet). */
 export function aiTestConnection(): Promise<string> {
   return invoke<string>("ai_test_connection");
+}
+
+// ---- Life context (server/src/life_contexts.rs) ----
+
+/** A date interval of what was going on in life (a trip, an illness, …).
+ *  Days are `YYYY-MM-DD`, both bounds inclusive; intervals may overlap. */
+export interface LifeContext {
+  id: number;
+  title: string;
+  startsOn: string;
+  endsOn: string;
+  color: string;
+  note: string | null;
+  createdAt: string;
+}
+
+export interface LifeContextInput {
+  title: string;
+  startsOn: string;
+  endsOn: string;
+  color: string;
+  note: string | null;
+}
+
+export function listLifeContexts(): Promise<LifeContext[]> {
+  return invoke<LifeContext[]>("list_life_contexts");
+}
+
+export function createLifeContext(args: LifeContextInput): Promise<LifeContext> {
+  return invoke<LifeContext>("create_life_context", { ...args });
+}
+
+export function updateLifeContext(args: LifeContextInput & { id: number }): Promise<LifeContext> {
+  return invoke<LifeContext>("update_life_context", { ...args });
+}
+
+export function deleteLifeContext(id: number): Promise<void> {
+  return invoke<void>("delete_life_context", { id });
 }
 
 // ---- Suggestions (server/src/suggestions.rs) ----
@@ -1048,6 +1092,8 @@ export interface RecognitionStatus {
   ambiguous: number;
   /** Why the queue is paused (e.g. OCR models missing), if it is. */
   pausedError: string | null;
+  /** The user paused the queue (Documents → Pause). */
+  pausedByUser: boolean;
   /** The latest automatic linking pass that linked something. */
   lastLink: { linked: number; ambiguous: number } | null;
 }
@@ -1056,6 +1102,12 @@ export const RECOGNITION_STATUS_EVENT = "recognition-status";
 
 export function recognitionStatus(): Promise<RecognitionStatus> {
   return invoke<RecognitionStatus>("recognition_status");
+}
+
+/** Pause (the document in flight is finished, then the queue stops — linking
+ *  too) or resume background recognition. Survives a restart. */
+export function setRecognitionPaused(paused: boolean): Promise<RecognitionStatus> {
+  return invoke<RecognitionStatus>("set_recognition_paused", { paused });
 }
 
 export function listAttachmentUploads(): Promise<AttachmentUpload[]> {

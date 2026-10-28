@@ -1,5 +1,6 @@
 {
   "tabs": {
+    "context": "Context",
     "documents": "Documents",
     "categories": "Categories",
     "accounts": "Accounts",
@@ -41,6 +42,7 @@
     "fieldOwner": "Owner name",
     "fieldOwnerOptional": "Owner name (optional)",
     "tableId": "#",
+    "dragToReorder": "Drag to reorder accounts",
     "tableName": "Name",
     "tableBank": "Bank",
     "tableCurrency": "Currency",
@@ -229,6 +231,7 @@
       "without_document": "Without document"
     },
     "column": {
+      "context": "Context",
       "note": "Note",
       "suggestion": "Suggestion",
       "category": "Category",
@@ -309,12 +312,19 @@
       "12": "Last 12 months",
       "36": "Last 36 months",
       "all": "All time",
+      "months": "Months",
+      "prevYear": "Previous year",
+      "nextYear": "Next year",
+      "monthsHint": "Click — one month; a second click — up to that month",
+      "monthsHintSecond": "Pick the last month of the range (can be in another year)",
       "custom": "Custom range"
     },
     "tableNote": "Note",
     "tableNoteTitle": "Comment or the note from the slip; click to link a document or write a comment",
     "tableSuggestion": "Suggestion",
-    "tableSuggestionTitle": "What to do with the transaction: withdrawal to cash, transfer between own accounts or a category; click for the rationale and to apply"
+    "tableSuggestionTitle": "What to do with the transaction: withdrawal to cash, transfer between own accounts or a category; click for the rationale and to apply",
+    "tableContext": "Context",
+    "tableContextTitle": "What was going on in life on the transaction day (the Context screen)"
   },
   "import": {
     "title": "Import transactions",
@@ -680,12 +690,29 @@
     "emptyHint": "Drop slips, receipts or a ZIP archive (e.g. a Google Drive download) here — or click to pick files.",
     "dropHint": "Files and ZIPs can be dropped anywhere on the page",
     "filter": {
-      "all": "All",
-      "pending": "Not recognised",
-      "recognised": "Recognised",
-      "unmatched": "Not linked",
-      "ambiguous": "Several candidates",
-      "matched": "Linked"
+      "time": {
+        "label": "Time",
+        "all": "All",
+        "yes": "Extracted",
+        "no": "Not extracted"
+      },
+      "ocr": {
+        "label": "Recognition",
+        "all": "All",
+        "yes": "Done",
+        "no": "Not done"
+      },
+      "linked": {
+        "label": "Link",
+        "all": "All",
+        "yes": "Linked",
+        "no": "Not linked"
+      },
+      "ambiguous": {
+        "label": "Several candidates",
+        "all": "All",
+        "yes": "Only these"
+      }
     },
     "selection": {
       "count": "Selected: {count}",
@@ -698,7 +725,11 @@
       "pending": "Recognising documents in the background: {count} left. Linking to transactions starts once the whole batch is recognised.",
       "paused": "Recognition paused: {error}",
       "linked": "Latest automatic linking: documents linked to outgoing transactions — {count}.",
-      "ambiguous": "Documents with several candidates — {count}: link them by hand (filter “Several candidates”)."
+      "ambiguous": "Documents with several candidates — {count}: link them by hand (filter “Several candidates”).",
+      "pause": "Pause",
+      "pauseHint": "Finish the current document and stop",
+      "resume": "Resume",
+      "pausedByUser": "Recognition is paused: {count} left. Automatic linking waits too."
     },
     "colFile": "File",
     "colStatus": "Recognition",
@@ -812,6 +843,31 @@
       "dismissed": "dismissed earlier",
       "cash_pending": "has a cash-withdrawal suggestion",
       "no_candidate": "no other side found"
+    }
+  },
+  "context": {
+    "title": "Context",
+    "add": "Add",
+    "hint": "What was going on in life: trips, illnesses, guests… Intervals may overlap. The context of the day is shown next to transactions and helps the model suggest a category.",
+    "empty": "Nothing added yet.",
+    "period": "Period",
+    "days": "Days",
+    "edit": "Edit",
+    "createTitle": "New context",
+    "editTitle": "Context",
+    "fieldTitle": "What was going on",
+    "fieldTitlePlaceholder": "e.g. “Trip to Phuket with the kids”",
+    "fieldFrom": "From",
+    "fieldTo": "To (inclusive)",
+    "fieldNote": "Note",
+    "fieldNotePlaceholder": "Details that help remember the spending",
+    "fieldColor": "Color",
+    "deleteConfirm": "Delete “{title}”? Transactions are not affected.",
+    "error": {
+      "empty_title": "Say what was going on",
+      "bad_date": "Invalid date",
+      "ends_before_starts": "The interval ends before it starts",
+      "not_found": "Context not found — reload the page"
     }
   }
 }

@@ -5909,6 +5909,75 @@ a.btn-ghost {
   width: 14px;
 }
 
+/* Month grid in the Period dropdown: click a month, click another to make
+   a continuous range. */
+.period-months {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 8px;
+}
+
+.period-months-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.period-months-year {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.period-months-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
+.period-month {
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 0;
+  border: 1px solid #e4e4e7;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.period-month:hover {
+  border-color: #a1a1aa;
+}
+
+.period-month.is-in-range {
+  background: #dbeafe;
+  border-color: #93c5fd;
+}
+
+.period-month.is-anchor {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+
+.period-months-hint {
+  margin: 0;
+  font-size: 11px;
+}
+
+:root[data-theme="dark"] .period-month {
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .period-month.is-in-range {
+  background: #1e3a5f;
+  border-color: #2563eb;
+}
+
 .period-custom {
   display: flex;
   flex-direction: column;
@@ -6273,4 +6342,178 @@ a.btn-ghost {
 
 :root[data-theme="dark"] .suggestion-details pre {
   background: #18181b;
+}
+
+/* Accounts: user-defined order — drag an account by its ⠿ handle; the drop
+   position is marked by a line above (before) or below (after) the account's
+   two rows. */
+.account-id-cell {
+  white-space: nowrap;
+}
+
+.account-drag-handle {
+  display: inline-block;
+  margin-right: 6px;
+  color: #a1a1aa;
+  cursor: grab;
+  user-select: none;
+}
+
+.account-drag-handle:hover {
+  color: #3f3f46;
+}
+
+.account-drag-handle:active {
+  cursor: grabbing;
+}
+
+tr.is-dragging td {
+  opacity: 0.4;
+}
+
+tr.account-row.drop-before td {
+  box-shadow: inset 0 2px 0 #2563eb;
+}
+
+tr.account-strip-row.drop-after td {
+  box-shadow: inset 0 -2px 0 #2563eb;
+}
+
+:root[data-theme="dark"] .account-drag-handle {
+  color: #71717a;
+}
+
+:root[data-theme="dark"] .account-drag-handle:hover {
+  color: #e4e4e7;
+}
+
+:root[data-theme="dark"] tr.account-row.drop-before td {
+  box-shadow: inset 0 2px 0 #60a5fa;
+}
+
+:root[data-theme="dark"] tr.account-strip-row.drop-after td {
+  box-shadow: inset 0 -2px 0 #60a5fa;
+}
+
+/* Context screen: date intervals of what was going on in life. */
+.contexts-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+}
+
+.contexts-table th,
+.contexts-table td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid #f1f1f4;
+}
+
+.contexts-table th.num,
+.contexts-table td.num {
+  text-align: right;
+}
+
+.context-row {
+  cursor: pointer;
+}
+
+.context-row:hover td {
+  background: #f4f4f5;
+}
+
+.context-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+
+.context-title {
+  font-weight: 500;
+}
+
+.context-period {
+  white-space: nowrap;
+}
+
+.context-note {
+  color: #52525b;
+}
+
+.context-dates {
+  display: flex;
+  gap: 12px;
+}
+
+.context-dates label {
+  flex: 1;
+}
+
+/* Context column on the Transactions screen — right after the checkbox. */
+.page--transactions th.col-context,
+.page--transactions td.col-context {
+  max-width: 220px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.context-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 4px;
+  padding: 0 6px;
+  border: 1px solid;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.context-chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+:root[data-theme="dark"] .contexts-table th,
+:root[data-theme="dark"] .contexts-table td {
+  border-bottom-color: #27272a;
+}
+
+:root[data-theme="dark"] .context-row:hover td {
+  background: #27272a;
+}
+
+:root[data-theme="dark"] .context-note {
+  color: #a1a1aa;
+}
+
+/* Documents: four filter groups (AND) and the Pause / Resume button of the
+   background recognition queue. */
+.documents-filter-group {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-right: 12px;
+}
+
+.documents-filter-label {
+  font-size: 12px;
+  color: #71717a;
+  margin-right: 2px;
+}
+
+.documents-queue-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+:root[data-theme="dark"] .documents-filter-label {
+  color: #a1a1aa;
 }

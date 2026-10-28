@@ -16,6 +16,7 @@ import {
   Account,
   AttachmentLink,
   Category,
+  LifeContext,
   LINK_ERROR_CODES,
   LinkErrorCode,
   Transaction,
@@ -33,6 +34,7 @@ import {
   listAccounts,
   listAttachmentLinks,
   listCategories,
+  listLifeContexts,
   listTransactionSuggestions,
   listTransactionLinks,
   listTransactions,
@@ -90,16 +92,18 @@ const DELTA_MODES: DeltaMode[] = ["percent", "absolute"];
 const DELTA_MODE_SETTING_KEY = "transactions.delta_display_mode";
 
 type ColumnKey =
+  | "context"
   | "delta"
   | "category"
   | "note"
   | "suggestion"
   | "peer"
   | "bank_description";
-// Picker order follows the table: fixed money/date block, Note, Suggestion,
-// category, then the transfer columns (🔗 always shown, Δ optional), then
-// free text.
+// Picker order follows the table: Context (leftmost, before the checkbox),
+// the fixed money/date block, Note, Suggestion, category, then the transfer
+// columns (🔗 always shown, Δ optional), then free text.
 const COLUMN_KEYS: ColumnKey[] = [
+  "context",
   "note",
   "suggestion",
   "category",
@@ -236,6 +240,8 @@ export function TransactionsPage({
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [suggestionsVersion, setSuggestionsVersion] = useState(0);
   const [categories, setCategories] = useState<Category[]>([]);
+  // Life-context intervals (the Context screen) for the Context column.
+  const [lifeContexts, setLifeContexts] = useState<LifeContext[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selectedKinds, setSelectedKinds] = useState<RowKind[]>(() => [
     ...ROW_KINDS,
@@ -374,6 +380,29 @@ export function TransactionsPage({
       cancelled = true;
     };
   }, [version]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listLifeContexts()
+      .then((c) => {
+        if (!cancelled) setLifeContexts(c);
+      })
+      .catch(() => {
+        // Only feeds the Context column — the table works without.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [version]);
+
+  // Oldest interval first, so overlapping contexts keep a stable order.
+  const lifeContextsAsc = useMemo(
+    () =>
+      [...lifeContexts].sort(
+        (a, b) => a.startsOn.localeCompare(b.startsOn) || a.endsOn.localeCompare(b.endsOn),
+      ),
+    [lifeContexts],
+  );
 
   const suggestionsByTxn = useMemo(() => {
     const map = new Map<number, Suggestion[]>();
@@ -604,6 +633,7 @@ export function TransactionsPage({
   const showCategory = visibleColumns.includes("category");
   const showNote = visibleColumns.includes("note");
   const showSuggestion = visibleColumns.includes("suggestion");
+  const showContext = visibleColumns.includes("context");
   const showDelta = visibleColumns.includes("delta");
   const showPeer = visibleColumns.includes("peer");
   const showBankDescription = visibleColumns.includes("bank_description");
@@ -1016,6 +1046,11 @@ export function TransactionsPage({
         <table>
           <thead ref={theadRef}>
             <tr>
+              {showContext && (
+                <th className="col-context" title={t("transactions.tableContextTitle")}>
+                  {t("transactions.tableContext")}
+                </th>
+              )}
               <th className="col-select">
                 <input
                   type="checkbox"
@@ -1207,6 +1242,47 @@ export function TransactionsPage({
                       setHovered((cur) => (cur?.id === x.id ? null : cur))
                     }
                   >
+                    {showContext && (() => {
+                      // The day as shown in the Date column (local time).
+                      const day = formatInstantLocal(x.occurredAtUtc).slice(0, 10);
+                      const on = lifeContextsAsc.filter((c) => c.startsOn <= day && day <= c.endsOn);
+                      const formatDay = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString(locale);
+                      // Per event: title, period, note; two empty lines
+                      // between events so each one stands apart.
+                      const text = on
+                        .map((c) =>
+                          [
+                            c.title,
+                            c.startsOn === c.endsOn
+                              ? formatDay(c.startsOn)
+                              : `${formatDay(c.startsOn)} – ${formatDay(c.endsOn)}`,
+                            c.note,
+                          ]
+                            .filter(Boolean)
+                            .join("\n"),
+                        )
+                        .join("\n\n\n");
+                      return (
+                        <td
+                          className="col-context"
+                          onMouseEnter={(e) => {
+                            if (!text) return;
+                            const r = e.currentTarget.getBoundingClientRect();
+                            // The column is at the very left edge: keep the
+                            // centred tooltip (max 280px + padding) on screen.
+                            setTooltip({ x: Math.max(r.left + r.width / 2, 160), y: r.top, text });
+                          }}
+                          onMouseLeave={() => setTooltip(null)}
+                        >
+                          {on.map((c) => (
+                            <span key={c.id} className="context-chip" style={{ borderColor: c.color }}>
+                              <span className="context-chip-dot" style={{ background: c.color }} />
+                              {c.title}
+                            </span>
+                          ))}
+                        </td>
+                      );
+                    })()}
                     <td className="col-select">
                       <SelectCheckbox
                         selected={isSelected}

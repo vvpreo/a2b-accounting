@@ -10,6 +10,11 @@
 //! environment problem (`ocr.unavailable` — missing models, LLM endpoint
 //! down) pauses the queue until the next wake; the error is shown on the
 //! Documents screen.
+//!
+//! The user can also pause the queue (Documents → Pause): the document being
+//! recognised is finished, then nothing more is picked — not even the linking
+//! pass — until Resume. The flag lives in `app_settings`, so a restart does
+//! not silently resume.
 
 use std::sync::Mutex;
 
@@ -22,6 +27,8 @@ use crate::document_analysis::{self, LinkSummary};
 use crate::host::{AppHandle, State};
 
 pub const STATUS_EVENT: &str = "recognition-status";
+/// `app_settings` key of the user's pause; `"true"` while paused.
+const PAUSED_BY_USER_KEY: &str = "recognition.paused_by_user";
 
 static WAKE: Notify = Notify::const_new();
 /// Why the queue is paused, if it is.
@@ -37,6 +44,8 @@ pub struct RecognitionStatus {
     /// Documents automatic linking left for the user (several candidates).
     pub ambiguous: i64,
     pub paused_error: Option<String>,
+    /// The user paused the queue (Documents → Pause).
+    pub paused_by_user: bool,
     pub last_link: Option<LinkSummary>,
 }
 
@@ -71,6 +80,11 @@ pub fn spawn(app: AppHandle) {
 async fn step(app: &AppHandle) -> Result<bool, String> {
     let next: Option<(i64, i64)> = {
         let conn = app.db().lock().map_err(|e| e.to_string())?;
+        // Checked before picking the next document: the one in flight (if
+        // any) has already finished by now.
+        if is_paused_by_user(&conn) {
+            return Ok(false);
+        }
         conn.query_row(
             "SELECT id, upload_id FROM attachments WHERE extract_status = 'pending'
              ORDER BY upload_id DESC, id LIMIT 1",
@@ -119,6 +133,44 @@ async fn step(app: &AppHandle) -> Result<bool, String> {
     Ok(true)
 }
 
+fn is_paused_by_user(conn: &rusqlite::Connection) -> bool {
+    conn.query_row(
+        "SELECT value FROM app_settings WHERE key = ?1",
+        [PAUSED_BY_USER_KEY],
+        |r| r.get::<_, String>(0),
+    )
+    .optional()
+    .ok()
+    .flatten()
+    .is_some_and(|v| v == "true")
+}
+
+/// Pause (finish the current document, then stop) or resume the queue.
+pub fn set_recognition_paused(
+    app: AppHandle,
+    state: State<'_, DbState>,
+    paused: bool,
+) -> Result<RecognitionStatus, String> {
+    {
+        let conn = state.lock().map_err(|e| e.to_string())?;
+        if paused {
+            conn.execute(
+                "INSERT INTO app_settings (key, value) VALUES (?1, 'true')
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [PAUSED_BY_USER_KEY],
+            )
+        } else {
+            conn.execute("DELETE FROM app_settings WHERE key = ?1", [PAUSED_BY_USER_KEY])
+        }
+        .map_err(|e| e.to_string())?;
+    }
+    if !paused {
+        wake();
+    }
+    emit_status(&app);
+    recognition_status(state)
+}
+
 fn mark_failed(db: &DbState, id: i64, error: &str) -> Result<(), String> {
     let conn = db.lock().map_err(|e| e.to_string())?;
     conn.execute(
@@ -165,6 +217,7 @@ pub fn recognition_status(state: State<'_, DbState>) -> Result<RecognitionStatus
         pending,
         ambiguous,
         paused_error: PAUSED.lock().unwrap_or_else(|p| p.into_inner()).clone(),
+        paused_by_user: is_paused_by_user(&conn),
         last_link: LAST_LINK.lock().unwrap_or_else(|p| p.into_inner()).clone(),
     })
 }

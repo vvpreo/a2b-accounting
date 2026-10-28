@@ -221,6 +221,7 @@ async fn rpc(
             id: i64, name: String, kind: Option<String>, bank: String, currency: String,
             account_number: Option<String>, owner_name: Option<String>]),
         "delete_account" => run!(state crate::accounts::delete_account, [id: i64]),
+        "reorder_accounts" => run!(state crate::accounts::reorder_accounts, [ids: Vec<i64>]),
 
         "account_monthly_status" => run!(state crate::account_status::account_monthly_status, [
             months: Vec<crate::account_status::MonthRange>]),
@@ -312,6 +313,9 @@ async fn rpc(
         "finish_attachment_upload" => run!(state crate::attachments::finish_attachment_upload, [
             upload_id: i64]),
         "recognition_status" => run!(state crate::recognition_queue::recognition_status),
+        "set_recognition_paused" => {
+            run!(app_state crate::recognition_queue::set_recognition_paused, [paused: bool])
+        }
         "list_attachment_uploads" => run!(state crate::attachments::list_attachment_uploads),
         "list_attachments" => run!(state crate::attachments::list_attachments),
         "delete_attachment" => run!(state crate::attachments::delete_attachment, [id: i64]),
@@ -337,6 +341,15 @@ async fn rpc(
             run!(state crate::attachments::list_attachment_candidates, [
                 transaction_id: i64, window_minutes: i64])
         }
+
+        "list_life_contexts" => run!(state crate::life_contexts::list_life_contexts),
+        "create_life_context" => run!(state crate::life_contexts::create_life_context, [
+            title: String, starts_on: String, ends_on: String, color: String,
+            note: Option<String>]),
+        "update_life_context" => run!(state crate::life_contexts::update_life_context, [
+            id: i64, title: String, starts_on: String, ends_on: String, color: String,
+            note: Option<String>]),
+        "delete_life_context" => run!(state crate::life_contexts::delete_life_context, [id: i64]),
 
         "get_setting" => run!(state crate::settings::get_setting, [key: String]),
         "set_setting" => run!(state crate::settings::set_setting, [key: String, value: String]),
