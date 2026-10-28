@@ -11,9 +11,10 @@
 //! 3. Report what happened and the document's memo — the note the user wrote
 //!    on the slip, which is what categorisation needs.
 //!
-//! Recognition is local (see `ocr.rs`); nothing is sent anywhere. Work runs on
-//! a blocking thread; the DB lock is only taken for short reads/writes, never
-//! across OCR.
+//! Recognition is local by default (PaddleOCR, see `ocr.rs`); Settings →
+//! Recognition can switch it to a vision LLM (`llm_ocr.rs`), in which case the
+//! image goes to the configured endpoint. Work runs on a blocking thread; the
+//! DB lock is only taken for short reads/writes, never across recognition.
 
 use std::path::Path;
 
@@ -24,7 +25,7 @@ use serde_json::{json, Map, Value};
 use crate::attachments::{attachment_candidates_in, attachments_dir, stored_file_name};
 use crate::db::DbState;
 use crate::host::AppHandle;
-use crate::{money, ocr, slip_extract};
+use crate::{llm_ocr, money, ocr, slip_extract};
 
 pub const AUTO_MATCH_WINDOW_MINUTES: i64 = 5;
 
@@ -69,15 +70,28 @@ pub fn recognise_attachment(db: &DbState, data_dir: &Path, id: i64, force: bool)
     // else is recomputed.
     doc.retain(|_, v| v.get("source").and_then(Value::as_str) == Some("filename"));
 
+    let config = {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        llm_ocr::load_config(&conn)?
+    };
     let path = attachments_dir(data_dir).join(stored_file_name(&sha256, &mime));
     let bytes = std::fs::read(&path).map_err(|e| format!("attachments.file_missing: {e}"))?;
-    let (new_status, ocr_text) = match recognise_fields(&bytes, &mime) {
+    let (result, source) = if config.uses_llm() {
+        // We are on a blocking thread of the runtime: block on the request.
+        let result = tokio::runtime::Handle::current()
+            .block_on(llm_ocr::recognise(&config, &bytes, &mime))
+            .map(|(fields, text)| (fields, ocr::qr_from_image(&bytes), text));
+        (result, "llm")
+    } else {
+        (recognise_fields(&bytes, &mime), "ocr")
+    };
+    let (new_status, ocr_text) = match result {
         Err(e) if e.starts_with("ocr.unavailable") => return Err(e),
         Err(e) => {
             doc.insert("error".into(), json!(e));
             ("failed", None)
         }
-        Ok((fields, qr, text)) => (apply_fields(&mut doc, &fields, qr.as_deref()), Some(text)),
+        Ok((fields, qr, text)) => (apply_fields(&mut doc, &fields, qr.as_deref(), source), Some(text)),
     };
 
     let conn = db.lock().map_err(|e| e.to_string())?;
@@ -89,30 +103,14 @@ pub fn recognise_attachment(db: &DbState, data_dir: &Path, id: i64, force: bool)
     Ok(())
 }
 
-/// OCR at ×1.5; when the amount was missed, once more at ×2 — amount fields
-/// from the second pass, everything else from whichever pass found it.
-/// Returns the fields, the QR payload and the text kept for troubleshooting.
+/// OCR (layout-aware text) + field extractors. Returns the fields, the QR
+/// payload and the text kept for troubleshooting.
 fn recognise_fields(
     bytes: &[u8],
     mime: &str,
 ) -> Result<(slip_extract::TextFields, Option<String>, String), String> {
-    let first = ocr::recognise(bytes, mime, 150)?;
-    let mut fields = slip_extract::extract(&first.text);
-    if fields.amount_minor.is_some() {
-        return Ok((fields, first.qr, first.text));
-    }
-    let second = ocr::recognise(bytes, mime, 200)?;
-    let retry = slip_extract::extract(&second.text);
-    if retry.amount_minor.is_none() {
-        return Ok((fields, first.qr, first.text));
-    }
-    fields.amount_minor = retry.amount_minor;
-    fields.all_amounts_minor = retry.all_amounts_minor;
-    fields.occurred_at = fields.occurred_at.or(retry.occurred_at);
-    fields.direction = fields.direction.or(retry.direction);
-    fields.account_mask = fields.account_mask.or(retry.account_mask);
-    fields.memo = fields.memo.or(retry.memo);
-    Ok((fields, first.qr.or(second.qr), second.text))
+    let found = ocr::recognise(bytes, mime)?;
+    Ok((slip_extract::extract(&found.text), found.qr, found.text))
 }
 
 /// Merge recognised fields into the extraction JSON; returns the status.
@@ -120,8 +118,9 @@ fn apply_fields(
     doc: &mut Map<String, Value>,
     fields: &slip_extract::TextFields,
     qr: Option<&str>,
+    source: &str,
 ) -> &'static str {
-    let ocr = |value: Value| json!({ "value": value, "source": "ocr" });
+    let ocr = |value: Value| json!({ "value": value, "source": source });
 
     if !doc.contains_key("occurredAt") {
         if let Some(t) = fields.occurred_at {
@@ -148,6 +147,13 @@ fn apply_fields(
         let bank = ocr::thai_bank_name(code).map(str::to_string).unwrap_or_else(|| code.clone());
         doc.insert("bank".into(), json!({ "value": bank, "source": "qr" }));
         doc.insert("reference".into(), json!({ "value": reference, "source": "qr" }));
+    } else {
+        if let Some(b) = &fields.bank {
+            doc.insert("bank".into(), ocr(json!(b)));
+        }
+        if let Some(r) = &fields.reference {
+            doc.insert("reference".into(), ocr(json!(r)));
+        }
     }
 
     if fields.amount_minor.is_none() && fields.memo.is_none() && fields.occurred_at.is_none() && slip_qr.is_none() {
@@ -265,6 +271,15 @@ pub async fn analyze_transaction_documents(app: AppHandle, transaction_id: i64) 
 }
 
 /// Re-run recognition of one document (Documents screen / document viewer).
+/// Settings → Recognition "Test": a tiny request to the configured LLM.
+pub async fn recognition_test_connection(app: AppHandle) -> Result<String, String> {
+    let config = {
+        let conn = app.db().lock().map_err(|e| e.to_string())?;
+        llm_ocr::load_config(&conn)?
+    };
+    llm_ocr::test_connection(&config).await
+}
+
 pub async fn recognise_document(app: AppHandle, attachment_id: i64) -> Result<(), String> {
     let data_dir = crate::data_dir_context().data_dir.clone();
     tokio::task::spawn_blocking(move || recognise_attachment(app.db(), &data_dir, attachment_id, true))
@@ -277,7 +292,7 @@ mod tests {
     use super::*;
 
     fn apply_text(doc: &mut Map<String, Value>, text: &str) -> &'static str {
-        apply_fields(doc, &slip_extract::extract(text), None)
+        apply_fields(doc, &slip_extract::extract(text), None, "ocr")
     }
 
     #[test]

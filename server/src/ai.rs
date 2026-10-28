@@ -128,7 +128,7 @@ fn load_config(conn: &Connection) -> Result<AiConfig, String> {
 /// environment (so the secret is never persisted); anything else is taken
 /// literally. An empty key is allowed — local servers (Ollama/LM Studio) don't
 /// need one.
-fn resolve_api_key(raw: &str) -> Result<String, String> {
+pub(crate) fn resolve_api_key(raw: &str) -> Result<String, String> {
     let raw = raw.trim();
     if let Some(var) = raw.strip_prefix("env:") {
         let var = var.trim();

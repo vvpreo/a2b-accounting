@@ -283,7 +283,7 @@
     "bulkDocs": {
       "title": "Document matching",
       "intro": "For the selected transactions ({count}): recognise linked slips, and where there is none, find a document within ±5 minutes and link it automatically when exactly one matches the amount and direction. Notes from the slips will appear in the AI column.",
-      "local": "Recognition runs locally on the server — nothing is sent to the cloud. About a second per transaction.",
+      "local": "Recognition uses the method from Settings (local PaddleOCR by default; about 2–3 seconds per slip).",
       "progress": "Processed {done} of {count}",
       "outcome": {
         "auto_linked": "Linked automatically",
@@ -488,7 +488,8 @@
     "tabs": {
       "general": "General",
       "currencies": "Currencies",
-      "ai": "AI"
+      "ai": "AI",
+      "recognition": "Recognition"
     },
     "ai": {
       "title": "AI provider",
@@ -514,6 +515,16 @@
       "summaryLine": "{count} records · {earliest} → {latest}",
       "baseHint": "Rates are stored as \"1 EUR = X {code}\" (Frankfurter base is EUR).",
       "downloadFailed": "Failed to download rates for {currency}: {error}"
+    },
+    "recognition": {
+      "title": "Document recognition",
+      "hint": "How slips and receipts are read by “Match documents” and “Recognise”.",
+      "engineLabel": "Method",
+      "engineLocal": "Local — PaddleOCR (default, nothing leaves the computer)",
+      "engineLlm": "LLM — an image-capable model (OpenAI-compatible API)",
+      "llmWarning": "Document images will be sent to this address. If it is a cloud service, your slips (names, account numbers, notes) leave the computer. For fully local use, run Ollama on your own machine.",
+      "modelHint": "The model must understand images (vision), e.g. Qwen2.5-VL.",
+      "rerunHint": "Switching the method does not re-read documents already processed — use “Recognise” on a document for that."
     }
   },
   "builder": {

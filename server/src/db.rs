@@ -92,6 +92,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "018_attachments_reset_match_on_unlink",
         include_str!("../migrations/018_attachments_reset_match_on_unlink.sql"),
     ),
+    (
+        19,
+        "019_reset_ocr_results_for_paddleocr",
+        include_str!("../migrations/019_reset_ocr_results_for_paddleocr.sql"),
+    ),
 ];
 
 pub fn open(data_dir: &Path) -> rusqlite::Result<Connection> {

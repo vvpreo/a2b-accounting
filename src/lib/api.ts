@@ -1130,3 +1130,39 @@ export function listAttachmentCandidates(
     windowMinutes,
   });
 }
+
+// ---- Document recognition (Settings → Recognition) ----
+
+/** How documents (slips) are recognised. `local` = PaddleOCR on the server
+ *  (default, nothing leaves the machine); `llm` = a vision LLM behind an
+ *  OpenAI-compatible endpoint — the document image is sent there. */
+export interface RecognitionConfig {
+  engine: "local" | "llm";
+  presetId?: string;
+  baseUrl: string;
+  model: string;
+  /** Literal key or `env:VAR_NAME`. */
+  apiKey: string;
+  temperature?: number;
+}
+
+export const RECOGNITION_CONFIG_KEY = "document_recognition_config";
+
+export async function loadRecognitionConfig(): Promise<RecognitionConfig> {
+  const fallback: RecognitionConfig = { engine: "local", baseUrl: "", model: "", apiKey: "" };
+  const raw = await getSetting(RECOGNITION_CONFIG_KEY);
+  if (!raw) return fallback;
+  try {
+    return { ...fallback, ...(JSON.parse(raw) as Partial<RecognitionConfig>) };
+  } catch {
+    return fallback;
+  }
+}
+
+export function saveRecognitionConfig(config: RecognitionConfig): Promise<void> {
+  return setSetting(RECOGNITION_CONFIG_KEY, JSON.stringify(config));
+}
+
+export function recognitionTestConnection(): Promise<string> {
+  return invoke<string>("recognition_test_connection");
+}

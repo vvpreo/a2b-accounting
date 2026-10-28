@@ -1142,4 +1142,38 @@ mod tests {
             .unwrap();
         assert!(extraction.contains("2026-10-27T11:58:55"));
     }
+
+    /// Migration 019 (switch to PaddleOCR) keeps only the file-name time and
+    /// re-queues recognised documents; re-running it is harmless.
+    #[test]
+    fn ocr_reset_migration_keeps_file_name_time() {
+        let (dir, db) = setup();
+        let upload = begin_attachment_upload(&db, None).unwrap();
+        ingest_upload(&db, dir.path(), upload, "016300115855CPM09866.jpeg", JPEG).unwrap();
+        ingest_upload(&db, dir.path(), upload, "receipt.png", PNG).unwrap();
+        let conn = db.lock().unwrap();
+        conn.execute(
+            "UPDATE attachments SET extract_status = 'done', ocr_text = 'old',
+               extraction = json_set(COALESCE(extraction, '{}'), '$.memo', json_object('value', 'x', 'source', 'ocr'))",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch(include_str!("../migrations/019_reset_ocr_results_for_paddleocr.sql"))
+            .unwrap();
+        let rows: Vec<(String, Option<String>, Option<String>)> = conn
+            .prepare("SELECT extract_status, extraction, ocr_text FROM attachments ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(rows.iter().all(|(st, _, text)| st == "pending" && text.is_none()));
+        // The file-name time survives as a real JSON object, the memo is gone.
+        assert_eq!(
+            extraction_time(rows[0].1.as_deref()),
+            time_from_file_name("016300115855CPM09866.jpeg", 2026)
+        );
+        assert!(!rows[0].1.as_deref().unwrap().contains("memo"));
+        assert_eq!(rows[1].1, None);
+    }
 }

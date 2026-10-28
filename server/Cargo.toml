@@ -30,6 +30,12 @@ sha2 = "0.10"
 regex = "1"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 rqrr = "0.8"
+base64 = "0.22"
+# PaddleOCR on ONNX Runtime. Its own "download-binaries" feature forces
+# native TLS (system OpenSSL); instead ort is enabled directly below with the
+# same binary download over rustls. Versions must match oar-ocr's pin.
+oar-ocr = { version = "0.10.2", default-features = false, features = ["simd"] }
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "download-binaries", "tls-rustls"] }
 
 [dev-dependencies]
 tempfile = "3"

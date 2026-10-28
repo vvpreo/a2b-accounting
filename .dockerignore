@@ -12,8 +12,10 @@ server/target
 docs
 samples
 scripts
-# …except the icon stand-badging step the frontend build runs
+# …except the icon stand-badging step the frontend build runs and the OCR
+# model download
 !scripts/badge-icons.mjs
+!scripts/fetch-ocr-models.sh
 *.log
 README.md
 TODO.md

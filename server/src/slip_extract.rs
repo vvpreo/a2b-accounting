@@ -5,10 +5,14 @@
 //! positions, so a new slip design or another bank does not need new code.
 //! Every function may come up empty — callers treat each field as optional.
 //!
-//! OCR of mixed-script slips routinely swaps Latin letters for Cyrillic
-//! look-alikes (`ххх-х-х6813-х`, `11:58 РМ`). Structured fields (dates,
-//! account masks) are read from a [`latinize`]d copy; the memo is read from
-//! the original text, because it is often written in Russian.
+//! Input is the layout-aware text from `ocr.rs`: one line per visual line,
+//! `" | "` where there is a wide gap (typically label | value).
+//!
+//! OCR of mixed-script slips can swap Latin letters for Cyrillic look-alikes
+//! (`Мето` for `Memo`, `ххх-х-х6813-х`). Structured fields (dates, account
+//! masks) are read from a [`latinize`]d copy and labels are matched fuzzily;
+//! the memo text itself is read from the original, because it is often
+//! written in Russian.
 
 use std::sync::OnceLock;
 
@@ -33,6 +37,10 @@ pub struct TextFields {
     pub account_mask: Option<String>,
     /// The user's note on the document.
     pub memo: Option<String>,
+    /// Sending bank and transaction reference — only the LLM recogniser
+    /// reports these (the local pipeline reads them from the slip QR).
+    pub bank: Option<String>,
+    pub reference: Option<String>,
 }
 
 fn re(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
@@ -76,6 +84,8 @@ pub fn extract(text: &str) -> TextFields {
         direction: direction(&latin),
         account_mask: account_mask(&latin),
         memo: memo(text),
+        bank: None,
+        reference: None,
     }
 }
 
@@ -89,10 +99,12 @@ fn occurred_at(text: &str) -> Option<NaiveDateTime> {
     static DATE: OnceLock<Regex> = OnceLock::new();
     let date = re(
         &DATE,
-        r"(?i)\b(\d{1,2})\s+([a-z]{3})[a-z]*\.?\s+(\d{2}|\d{4}),?\s+(\d{1,2})[:.](\d{2})(?:[:.](\d{2}))?[ \t]*(am|pm)?\b",
+        r"(?i)(?:^|[^\d])(\d{1,2})\s*([a-z0]{3})[a-z]*\.?\s*(\d{2}|\d{4})(?:,\s*|\s+)(\d{1,2})[:.](\d{2})(?:[:.](\d{2}))?[ \t]*(am|pm)?\b",
     );
     for c in date.captures_iter(text) {
-        let Some(month) = MONTHS.iter().position(|m| c[2].eq_ignore_ascii_case(m)) else {
+        // OCR reads "Oct" as "0ct" now and then.
+        let month_name = c[2].to_lowercase().replace('0', "o");
+        let Some(month) = MONTHS.iter().position(|m| month_name == *m) else {
             continue;
         };
         let mut year: i32 = c[3].parse().ok()?;
@@ -181,27 +193,55 @@ fn account_mask(text: &str) -> Option<String> {
     mask.find(text).map(|m| m.as_str().to_lowercase())
 }
 
-/// Text after a note label (`Memo:`, `Note`, `Remark`, `Заметка`,
-/// `บันทึกช่วยจำ`) up to the next known label or the end of the block.
+/// Levenshtein distance (labels are short — a tiny DP is plenty).
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut cur = vec![i + 1];
+        for (j, &cb) in b.iter().enumerate() {
+            cur.push((prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + usize::from(ca != cb)));
+        }
+        prev = cur;
+    }
+    prev[b.len()]
+}
+
+const MEMO_LABELS: [&str; 5] = ["memo", "note", "remark", "заметка", "комментарий"];
+
+/// If `line` starts with a note label (fuzzy: one typo or a Cyrillic
+/// look-alike allowed), return the rest of the line after it.
+fn after_memo_label(line: &str) -> Option<&str> {
+    let line = line.trim_start();
+    let end = line
+        .find(|c: char| c.is_whitespace() || c == ':' || c == '：' || c == '|')
+        .unwrap_or(line.len());
+    let word = latinize(&line[..end]).to_lowercase();
+    let is_label = word == "บันทึกช่วยจำ"
+        || (word.chars().count() >= 3 && MEMO_LABELS.iter().any(|l| edit_distance(&word, l) <= 1));
+    is_label.then(|| line[end..].trim_start_matches(|c: char| c.is_whitespace() || matches!(c, ':' | '：' | '|')))
+}
+
+/// Text after a note label (`Memo:`, `Note | …`, `Remark`, `Заметка`,
+/// `บันทึกช่วยจำ`), continued over the following lines until the next field:
+/// a known footer label, another `label | value` line, or an empty line.
 fn memo(text: &str) -> Option<String> {
-    static LABEL: OnceLock<Regex> = OnceLock::new();
     static STOP: OnceLock<Regex> = OnceLock::new();
-    let label = re(
-        &LABEL,
-        r"(?i)^\s*(?:memo|note|remark|заметка|комментарий|บันทึกช่วยจำ)\s*[:：]?\s*(.*)$",
-    );
     let stop = re(
         &STOP,
-        r"(?i)^\s*(bank reference|transaction reference|transaction id|reference no|scan|amount|fee)\b",
+        r"(?i)^\s*(bank reference|transaction reference|transaction id|reference no|ref\.? no|scan|amount|fee|from|to)\b",
     );
+    // Footer labels end a memo wherever they appear in a line (OCR may glue
+    // the reference number in front: "391380 Bank reference no.").
+    static FOOTER: OnceLock<Regex> = OnceLock::new();
+    let footer = re(&FOOTER, r"(?i)\b(bank reference|transaction reference|reference no|scan to verify)\b");
     let lines: Vec<&str> = text.lines().collect();
-    let start = lines.iter().position(|l| label.is_match(l))?;
+    let (start, first) = lines.iter().enumerate().find_map(|(i, l)| after_memo_label(l).map(|rest| (i, rest)))?;
     let mut parts: Vec<String> = Vec::new();
-    let first = label.captures(lines[start])?[1].trim().to_string();
-    if !first.is_empty() {
-        parts.push(first);
+    if !first.trim().is_empty() {
+        parts.push(first.trim().to_string());
     }
-    for line in &lines[start + 1..] {
+    for line in lines[start + 1..].iter().take(4) {
         let line = line.trim();
         if line.is_empty() {
             if parts.is_empty() {
@@ -209,7 +249,7 @@ fn memo(text: &str) -> Option<String> {
             }
             break;
         }
-        if stop.is_match(line) {
+        if stop.is_match(line) || footer.is_match(line) || line.contains(" | ") {
             break;
         }
         parts.push(line.to_string());
@@ -226,102 +266,93 @@ mod tests {
         NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").unwrap()
     }
 
-    /// K PLUS slip as Tesseract reads it (names replaced), incl. the usual
-    /// OCR noise: Cyrillic `ххх`, `O` for `0`, a garbled `Baht`.
-    const KPLUS: &str = "Payment Completed
-๑ 27 Oct 26 11:58 AM K+
-
-MR. TEST P
-
-KBank
-ง ххх-х-х1234-х
-
-๐ DEPARTMENT OF
-HIGHWAY, M-FLOW
-
-PAYMENT
-326102700000015842
-
-Amount:
-
-360.00 sant п
-
-0.00 Baht У
-oe
-
-Transaction ID: Sean for
-016300115855CPMO9866 Verify Slip
-
-Fee:
-
-Memo: штраф за неоплату своевременную платной
-дороги в Бангкоке
-";
-
-    /// Older K PLUS layout (Transaction ID above Amount), PM read as Cyrillic.
-    const KPLUS_OLD: &str = "| Payment Completed |<
-7 Feb 25 5:58 РМ =
-
+    /// K PLUS slip as PaddleOCR + layout reads it (names/accounts replaced).
+    /// The memo line was read by the Cyrillic model, so its label came out as
+    /// Cyrillic "Мето".
+    const KPLUS: &str = "7 Jun 26 10:17 AM Payment Completed | K+
 MR. TEST P
 KBank
-
-ххх-х-х1234-х
-SURINSHOP
-
+XXX-X-x1234-X
+SCB มณี SHOP (MY NAMEIS YOO)
+แm | 014000007441876
+SCB
 Transaction ID:
+016158101719CPM05020
+Amount:
+100.00Baht
+Fee:
+0.00Baht Scan for Verify Slip
+Мето: кофе на спартане";
 
+    /// Older K PLUS layout (Transaction ID above Amount), Latin memo.
+    const KPLUS_OLD: &str = "Payment Completed 7 Feb 25 5:58 PM | K+
+MR. TEST P
+KBank
+XXX-X-x1234-X
+ร้านถุงเงิน (สุรินทร์ ของชำ)
+川 | 2338207053016041559
+SURINSHOP
+Transaction ID:
 015038175808APM06920
 Amount:
-210.00 Baht
-0.00 Baht Scan for Verify Slip
+210.00Baht
+Fee:
+0.00Baht Scan for Verify Slip
+Memo: bike fuel";
 
-Memo: bike fuel
-";
-
-    /// Bangkok Bank slip (24-hour clock, `Note` on the same line).
-    const BBL: &str = "(©) Bangkok Bank
-
+    /// Bangkok Bank: label | value columns, a note wrapped over two lines,
+    /// no space after the comma in the date.
+    const BBL: &str = "Bangkok Bank
 Transaction successful
-
-04 Feb 25, 15:23
-
+01Aug 25,14:20
 Amount
-
-16,632.00 THB
-
-From MR TEST
+15,000.00 THB
+From | MR TEST
 953-7-xxx999
 Bangkok Bank
-
-To OAK MEADOW IN
-435-0-xxx855
-Siam Commercial Bank
-
-Fee 0.00 THB
-
-Note OMIS venya feb
-
+To | BITKUB ONLINE
+Biller ID:010555911712807
+REFERENCE 1
+TESTREFERENCE
+REFERENCE 2 (Optional)
+THBDP0024923891
+Fee | 0.00 THB
+Note | Для августовских платежей по
+сториджару
 Bank reference no.
-366496
-Transaction reference
-2025020415232024009442308
-";
+316533
+Transaction r reference
+2025080114200723009096908
+Scan to verify";
+
+    /// Bangkok Bank slip without a note.
+    const BBL_NO_NOTE: &str = "Bangkok Bank
+Transaction successful
+Amount
+10,000.00 THB
+From | MR TEST
+953-7-xxx999
+Bangkok Bank
+To | MRS. TEST
+143-8-xxx302
+Kasikornbank
+Fee | 0.00 THB
+Bank reference no.
+602867
+Scan to verify";
 
     #[test]
     fn kplus_slip() {
         let f = extract(KPLUS);
-        assert_eq!(f.occurred_at, Some(dt("2026-10-27 11:58:00")));
-        assert_eq!(f.amount_minor, Some(36000));
+        assert_eq!(f.occurred_at, Some(dt("2026-06-07 10:17:00")));
+        assert_eq!(f.amount_minor, Some(10000));
         assert_eq!(f.direction, Some("debit"));
         assert_eq!(f.account_mask.as_deref(), Some("xxx-x-x1234-x"));
-        assert_eq!(
-            f.memo.as_deref(),
-            Some("штраф за неоплату своевременную платной дороги в Бангкоке")
-        );
+        assert_eq!(f.memo.as_deref(), Some("кофе на спартане"));
     }
 
     #[test]
-    fn kplus_old_layout_with_cyrillic_pm() {
+    fn kplus_old_layout() {
         let f = extract(KPLUS_OLD);
         assert_eq!(f.occurred_at, Some(dt("2025-02-07 17:58:00")));
         assert_eq!(f.amount_minor, Some(21000));
@@ -331,11 +362,22 @@ Transaction reference
     #[test]
     fn bangkok_bank_slip() {
         let f = extract(BBL);
-        assert_eq!(f.occurred_at, Some(dt("2025-02-04 15:23:00")));
-        assert_eq!(f.amount_minor, Some(1_663_200));
-        assert!(f.all_amounts_minor.contains(&1_663_200));
+        assert_eq!(f.occurred_at, Some(dt("2025-08-01 14:20:00")));
+        assert_eq!(f.amount_minor, Some(1_500_000));
         assert_eq!(f.account_mask.as_deref(), Some("953-7-xxx999"));
-        assert_eq!(f.memo.as_deref(), Some("OMIS venya feb"));
+        assert_eq!(f.memo.as_deref(), Some("Для августовских платежей по сториджару"));
+        assert_eq!(extract(BBL_NO_NOTE).memo, None);
+    }
+
+    #[test]
+    fn memo_labels_are_fuzzy() {
+        assert_eq!(after_memo_label("Note | OMIS venya feb"), Some("OMIS venya feb"));
+        assert_eq!(after_memo_label("Мето: латте"), Some("латте"));
+        assert_eq!(after_memo_label("Memо: x"), Some("x"), "Cyrillic о inside");
+        assert_eq!(after_memo_label("Nate: typo"), Some("typo"), "one typo");
+        assert_eq!(after_memo_label("Notebook"), None);
+        assert_eq!(after_memo_label("Total"), None);
+        assert_eq!(after_memo_label("No"), None, "too short to be fuzzy");
     }
 
     #[test]

@@ -192,7 +192,8 @@ a2b-accounting/
 │       ├── Settings.tsx              language selector (stored in the DB), backup/restore, data dir info
 │       └── ImportDialog.tsx          two-step CSV import wizard (preview + import)
 ├── server/                           Rust backend (axum HTTP server)
-│   ├── Cargo.toml                    dependencies: axum, tower-http, tokio, rusqlite, rust_decimal, chrono, reqwest, zip, sha2, regex, image, rqrr
+│   ├── Cargo.toml                    dependencies: axum, tower-http, tokio, rusqlite, rust_decimal, chrono, reqwest, zip, sha2, regex, image, rqrr, oar-ocr + ort (ONNX Runtime, binaries via rustls), base64
+│   ├── ocr/                          character dictionaries of the PaddleOCR recognition models
 │   ├── migrations/
 │   │   ├── 001_init.sql              accounts, import_batches, transactions
 │   │   ├── 002_add_account_name.sql  accounts.name
@@ -218,7 +219,8 @@ a2b-accounting/
 │       ├── currencies.rs             list_currencies (currency dictionary + rate_source) + tests
 │       ├── settings.rs               get_setting / set_setting (UPSERT into app_settings)
 │       ├── attachments.rs            document storage: content-addressed files, ZIP unpacking, upload batches, document time from file names, linking to transactions
-│       ├── ocr.rs                    local OCR: greyscale + upscale (image), Tesseract CLI via stdin, QR via rqrr, Thai slip-verify QR parsing
+│       ├── ocr.rs                    local OCR: PaddleOCR PP-OCRv5 on ONNX Runtime (oar-ocr) — detect once, Latin+Cyrillic recognisers on every fragment, Thai where unsure, layout text with " | " column gaps; QR via rqrr
+│       ├── llm_ocr.rs                alternative recognition through a vision LLM (OpenAI-compatible endpoint) — Settings → Recognition
 │       ├── slip_extract.rs           layout-agnostic field extractors over OCR text: date-time, amount(s), direction, account mask, memo
 │       ├── document_analysis.rs      "analyze documents" per transaction: recognise linked slip or auto-link one (time + amount + direction, unique)
 │       └── backup.rs                 backup_zip_bytes / restore_from_zip_bytes / data_dir_info + tests
@@ -226,6 +228,7 @@ a2b-accounting/
 ├── docker-compose.yml                local run of the Docker Hub image (loopback port, data volume)
 ├── scripts/
 │   ├── badge-icons.mjs               favicon per stand (APP_ENV) from src/assets/app-icon.svg
+│   ├── fetch-ocr-models.sh           downloads the PaddleOCR ONNX models (SHA-256 checked); used by the Dockerfile and dev runs
 │   ├── dev.sh                        dev run (axum on :3701 + Vite on :3700)
 │   └── build.sh                      release build without Docker (dist/ + release binary)
 ├── samples/                          example statements (for manual import testing)
@@ -320,8 +323,8 @@ occurred_at,credit,debit,balance,peer,bank_description,comment
 ## Configuration
 
 ### Environment variables (server)
-- **`FINANCES_TESSERACT`** — OCR binary (default `tesseract`; installed in the Docker image). Without it, document analysis returns `ocr.unavailable`; uploading and manual linking still work. For a dev run on macOS: `brew install tesseract tesseract-lang`.
-- **`FINANCES_OCR_LANGS`** — Tesseract languages (default `eng+rus+tha`).
+- **`FINANCES_OCR_MODELS`** — directory with the PaddleOCR PP-OCRv5 ONNX models (`/app/ocr-models` in the image; for dev runs `./scripts/fetch-ocr-models.sh ocr-models` downloads them, SHA-256 checked). Without them, document analysis returns `ocr.unavailable`; uploading and manual linking still work.
+- **`FINANCES_OCR_DICTS`** — directory with the matching character dictionaries (`/app/ocr-dicts` in the image; `server/ocr/` in a checkout, found automatically).
 - **`FINANCES_DATA_DIR`** — absolute path to the data directory (`finances.db` + WAL). Set to `/data` in the Docker image (where the volume mounts); set via `.envrc` in dev. When unset — falls back to `~/.local/share/net.vvpreo.finances/`. The path is created if missing.
 - **`FINANCES_BIND`** — address:port for the HTTP server. Default `127.0.0.1:3701` (dev); in the image — `0.0.0.0:8080` (Docker decides what to publish, loopback-only on the host by default).
 - **`FINANCES_STATIC_DIR`** — directory with the built frontend. `/app/static` in the image; not needed in dev (Vite serves the frontend).
@@ -359,7 +362,7 @@ Done:
 - i18n (ru/en), the selected language stored in the DB.
 - Web delivery: an axum server with an RPC contract 1:1 with the former Tauri `invoke`, SSE events, a multi-arch Docker image, CI publishing to Docker Hub, docker-compose for a local run with your own data.
 - DB backup and restore via the UI (Settings): browser ZIP download (preceded by `wal_checkpoint(TRUNCATE)`), restore by uploading an archive with validation (valid SQLite + a `schema_migrations` table present) and automatic renaming of the current `finances.db` to `finances.db.bak-<UTC-timestamp>`. After a restore the server reopens the DB in place and the page reloads.
-- Documents tab (next to Categories): upload bank slips / receipts as files or whole ZIP archives (e.g. a Google Drive download — unpacked on the server; type detected by content, not extension), deduplication by content hash, every upload recorded with its counters (history + "last upload N days ago"), list grouped by upload, document viewer with a recognition-result panel. Documents are included in the backup ZIP. Documents are linked to transactions by hand from the transaction modal (documents within ±5 min / ±30 min / ±1 day of the transaction, by the time taken from the file name), and the Transactions table shows a single "Note" column (it replaced the 📎, AI and Comment columns): an icon — a sticker when the user wrote a comment (it outranks a slip), a paperclip when a document is linked — and the text, i.e. the comment or else the slip's note. A click anywhere in the cell opens the "Document & comment" dialog: slip preview, the transaction's facts, the user's own comment and the document picker. Bulk action "Analyze documents" (Actions ▾ on the Transactions screen) runs local OCR (Tesseract eng+rus+tha inside the Docker image; ×1.5 upscale, retried at ×2 when the amount is missed) and auto-links a slip when exactly one document within ±5 min carries the transaction's amount with a compatible direction; the note from the slip is shown in the Note column. Quick period buttons (1/3/6/12 months) sit next to the date filter. LLM categorisation from the note is the next stage — see [docs/plans/transaction-slips.md](docs/plans/transaction-slips.md).
+- Documents tab (next to Categories): upload bank slips / receipts as files or whole ZIP archives (e.g. a Google Drive download — unpacked on the server; type detected by content, not extension), deduplication by content hash, every upload recorded with its counters (history + "last upload N days ago"), list grouped by upload, document viewer with a recognition-result panel. Documents are included in the backup ZIP. Documents are linked to transactions by hand from the transaction modal (documents within ±5 min / ±30 min / ±1 day of the transaction, by the time taken from the file name), and the Transactions table shows a single "Note" column (it replaced the 📎, AI and Comment columns): an icon — a sticker when the user wrote a comment (it outranks a slip), a paperclip when a document is linked — and the text, i.e. the comment or else the slip's note. A click anywhere in the cell opens the "Document & comment" dialog: slip preview, the transaction's facts, the user's own comment and the document picker. Bulk action "Match documents" (Actions ▾ on the Transactions screen) runs local OCR — PaddleOCR PP-OCRv5 models on ONNX Runtime inside the server, chosen over Tesseract after a side-by-side test on real slips (notes found on 59/60 vs 34/60); Settings → Recognition can switch it to a vision LLM behind any OpenAI-compatible endpoint (the image is then sent there) — and auto-links a slip when exactly one document within ±5 min carries the transaction's amount with a compatible direction; the note from the slip is shown in the Note column. Quick period buttons (1/3/6/12 months) sit next to the date filter. LLM categorisation from the note is the next stage — see [docs/plans/transaction-slips.md](docs/plans/transaction-slips.md).
 - The data directory is fixed at server startup (`FINANCES_DATA_DIR` / Docker volume); Settings displays the current path. Runtime directory switching from the UI was removed together with the desktop build.
 
 In the queue (`TO REVIEW` in [TODO.md](TODO.md)):

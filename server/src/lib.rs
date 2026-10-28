@@ -13,6 +13,7 @@ mod exchange_rates;
 mod frankfurter;
 pub mod host;
 mod http;
+mod llm_ocr;
 mod money;
 mod ocr;
 mod report_views;

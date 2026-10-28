@@ -321,6 +321,9 @@ async fn rpc(
         }
         "recognise_document" => run!(app_async crate::document_analysis::recognise_document, [
             attachment_id: i64]),
+        "recognition_test_connection" => {
+            run!(app_async crate::document_analysis::recognition_test_connection)
+        }
         "list_attachment_candidates" => {
             run!(state crate::attachments::list_attachment_candidates, [
                 transaction_id: i64, window_minutes: i64])
