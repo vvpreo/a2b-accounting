@@ -2296,6 +2296,7 @@ fn wipe(conn: &Connection) -> rusqlite::Result<()> {
     // their content-addressed files stay on disk and are reused on re-upload.
     conn.execute("DELETE FROM attachments", [])?;
     conn.execute("DELETE FROM attachment_uploads", [])?;
+    conn.execute("DELETE FROM transaction_suggestions", [])?;
     conn.execute("DELETE FROM transaction_links", [])?;
     conn.execute("DELETE FROM transaction_categories", [])?;
     conn.execute("DELETE FROM transactions", [])?;

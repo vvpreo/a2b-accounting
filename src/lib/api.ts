@@ -49,10 +49,6 @@ export interface Transaction {
   bankDescription: string | null;
   comment: string | null;
   isCorrecting: boolean;
-  /** Structured JSON produced by the AI agent (see `AgentState`), or `null`
-   *  until the agent has been run on this transaction. Parse with
-   *  `parseAgentState`. */
-  agent: string | null;
 }
 
 export type CategoryKind = "income" | "expense";
@@ -565,7 +561,7 @@ export function setSetting(key: string, value: string): Promise<void> {
   return invoke<void>("set_setting", { key, value });
 }
 
-// ---- AI agent ----
+// ---- AI provider ----
 
 /** Provider configuration, stored as JSON under the `ai_provider_config`
  *  setting key. `apiKey` may be a literal key or an `env:VAR_NAME` reference
@@ -594,82 +590,79 @@ export function saveAiConfig(config: AiProviderConfig): Promise<void> {
   return setSetting(AI_CONFIG_KEY, JSON.stringify(config));
 }
 
-export interface ChatMsg {
-  role: "user" | "assistant";
-  /** The model's verbatim answer (single source of truth — the verdict marker
-   *  lines are part of it and hidden at display time via stripVerdictMarkers). */
-  content: string;
-}
-
-/** Structured answer from the agent for a single chat turn. The model answers
- *  in plain text; the backend parses the verdict out of marker lines. */
-export interface AgentReply {
-  /** The model's verbatim answer (stored as-is). */
-  reply: string;
-  suggestedCategory: string | null;
-  confidence: number | null;
-}
-
-/** The human-readable part of an agent answer: everything before the `---`
- *  separator that precedes the YAML verdict block. Used for a clean chat
- *  display without storing a second stripped copy of the text. */
-export function agentReplyText(text: string): string {
-  const lines = text.split("\n");
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const t = lines[i].trim();
-    if (t.length >= 3 && /^-+$/.test(t)) {
-      return lines.slice(0, i).join("\n").trim();
-    }
-  }
-  return text.trim();
-}
-
-/** Full agent state persisted in `Transaction.agent` as JSON: the latest
- *  verdict (category + confidence) plus the running dialog history. */
-export interface AgentState {
-  suggestedCategory: string | null;
-  confidence: number | null;
-  messages: ChatMsg[];
-  updatedAt: string;
-}
-
-export function parseAgentState(raw: string | null): AgentState | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as Partial<AgentState>;
-    return {
-      suggestedCategory: parsed.suggestedCategory ?? null,
-      confidence: parsed.confidence ?? null,
-      messages: Array.isArray(parsed.messages) ? parsed.messages : [],
-      updatedAt: parsed.updatedAt ?? "",
-    };
-  } catch {
-    return null;
-  }
-}
-
 /** Send a tiny prompt to the configured provider to validate it. Returns a
  *  short human-readable summary (model + reply snippet). */
 export function aiTestConnection(): Promise<string> {
   return invoke<string>("ai_test_connection");
 }
 
-/** Run the agent over one transaction. `messages` is the dialog history; the
- *  backend prepends a per-transaction system prompt with the transaction
- *  fields (minus balance) and the category list. */
-export function aiTransactionChat(
-  transactionId: number,
-  messages: ChatMsg[],
-): Promise<AgentReply> {
-  return invoke<AgentReply>("ai_transaction_chat", { transactionId, messages });
+// ---- Suggestions (server/src/suggestions.rs) ----
+
+export type SuggestionKind = "category" | "transfer" | "cash_withdrawal";
+
+/** A pending suggestion on what to do with a transaction. Nothing is applied
+ *  until `applySuggestion`; existing categories and links are never changed
+ *  by the suggestion pipeline itself. */
+export interface Suggestion {
+  id: number;
+  transactionId: number;
+  kind: SuggestionKind;
+  source: "llm" | "rule" | "history";
+  categoryId: number | null;
+  /** The other side of a suggested transfer (stored on both sides). */
+  partnerTxnId: number | null;
+  /** Where a suggested cash withdrawal goes. */
+  cashAccountId: number | null;
+  /** 0..10. */
+  confidence: number;
+  /** Why the confidence is what it is. */
+  rationale: string;
+  /** The model's own reasoning, when it returned any. */
+  reasoning: string | null;
+  /** Exactly what was sent to the model. */
+  prompt: string | null;
+  model: string | null;
+  createdAt: string;
 }
 
-/** Persist the agent JSON blob for a transaction (`null` clears it). */
-export function setTransactionAgent(
-  transactionId: number,
-  agent: string | null,
-): Promise<void> {
-  return invoke<void>("set_transaction_agent", { transactionId, agent });
+/** Outcome of a bulk detection run: suggestions made and skip reasons
+ *  (codes localised under `suggestions.skip.*`) with their counts. */
+export interface SuggestionRunSummary {
+  suggested: number;
+  skipped: Record<string, number>;
+}
+
+export function detectCashWithdrawals(
+  transactionIds: number[],
+  redo: boolean,
+): Promise<SuggestionRunSummary> {
+  return invoke<SuggestionRunSummary>("detect_cash_withdrawals", { transactionIds, redo });
+}
+
+export function detectTransfers(
+  transactionIds: number[],
+  redo: boolean,
+): Promise<SuggestionRunSummary> {
+  return invoke<SuggestionRunSummary>("detect_transfers", { transactionIds, redo });
+}
+
+export function listTransactionSuggestions(): Promise<Suggestion[]> {
+  return invoke<Suggestion[]>("list_transaction_suggestions");
+}
+
+export function applySuggestion(id: number): Promise<void> {
+  return invoke<void>("apply_suggestion", { id });
+}
+
+export function dismissSuggestion(id: number): Promise<void> {
+  return invoke<void>("dismiss_suggestion", { id });
+}
+
+/** The selected transactions as a reference set (JSON) for evaluating models
+ *  and rules — model context without the balance, the user's own answer and
+ *  the transfer-window neighbours. */
+export function exportReferenceSet(transactionIds: number[]): Promise<unknown> {
+  return invoke<unknown>("export_reference_set", { transactionIds });
 }
 
 export interface Currency {
@@ -977,7 +970,9 @@ export type AttachmentMatchStatus =
   | "auto"
   | "probable"
   | "manual"
-  | "ambiguous";
+  | "ambiguous"
+  /** Unlinked by the user — automatic linking leaves it alone. */
+  | "detached";
 
 export interface Attachment {
   id: number;
@@ -1039,6 +1034,30 @@ export function uploadAttachmentFile(
   });
 }
 
+/** Tell the server the upload's last file has been sent: once its documents
+ *  are recognised (in the background) they are linked to transactions. */
+export function finishAttachmentUpload(uploadId: number): Promise<void> {
+  return invoke<void>("finish_attachment_upload", { uploadId });
+}
+
+/** Background recognition queue; also pushed as the `recognition-status` event. */
+export interface RecognitionStatus {
+  /** Documents waiting for recognition. */
+  pending: number;
+  /** Unlinked documents with several fitting transactions. */
+  ambiguous: number;
+  /** Why the queue is paused (e.g. OCR models missing), if it is. */
+  pausedError: string | null;
+  /** The latest automatic linking pass that linked something. */
+  lastLink: { linked: number; ambiguous: number } | null;
+}
+
+export const RECOGNITION_STATUS_EVENT = "recognition-status";
+
+export function recognitionStatus(): Promise<RecognitionStatus> {
+  return invoke<RecognitionStatus>("recognition_status");
+}
+
 export function listAttachmentUploads(): Promise<AttachmentUpload[]> {
   return invoke<AttachmentUpload[]>("list_attachment_uploads");
 }
@@ -1049,6 +1068,13 @@ export function listAttachments(): Promise<Attachment[]> {
 
 export function deleteAttachment(id: number): Promise<void> {
   return invoke<void>("delete_attachment", { id });
+}
+
+/** Delete several documents together with their links (the slip note shown on
+ *  a transaction comes from the document, so it goes too). Returns how many
+ *  were deleted. */
+export function deleteAttachments(ids: number[]): Promise<number> {
+  return invoke<number>("delete_attachments", { ids });
 }
 
 export function attachmentFileUrl(id: number): string {

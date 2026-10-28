@@ -183,14 +183,6 @@ body {
   min-width: 336px;
 }
 
-/* AI agent column: suggested category + truncated reasoning, clickable to
- * open the transaction modal. */
-
-/* Suggested-category chip (analysed rows); click opens the transaction. */
-
-/* Compact ✨ "analyze" button — faint until hovered, so rows without a note
-   read as empty and rows with one stand out. */
-
 /* The three "long text" columns truncate with an ellipsis when their
  * content doesn't fit, instead of pushing the table wider than the
  * viewport. The `max-width: 0` trick lets the cell shrink to whatever
@@ -657,6 +649,8 @@ td.cell-placeholder {
    between Balance and Note). */
 .page--transactions th.col-note,
 .page--transactions td.col-note,
+.page--transactions th.col-suggestion,
+.page--transactions td.col-suggestion,
 .page--transactions th.col-category,
 .page--transactions td.col-category,
 .page--transactions th.col-link,
@@ -700,6 +694,8 @@ tr.month-separator td {
 
 :root[data-theme="dark"] .page--transactions th.col-note,
 :root[data-theme="dark"] .page--transactions td.col-note,
+:root[data-theme="dark"] .page--transactions th.col-suggestion,
+:root[data-theme="dark"] .page--transactions td.col-suggestion,
 :root[data-theme="dark"] .page--transactions th.col-category,
 :root[data-theme="dark"] .page--transactions td.col-category,
 :root[data-theme="dark"] .page--transactions th.col-link,
@@ -4642,167 +4638,6 @@ code {
   color: #52525b;
 }
 
-/* AI agent section inside the transaction modal */
-.txn-agent {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  border-top: 1px solid #e4e4e7;
-  padding-top: 12px;
-}
-
-.txn-agent-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.txn-agent-actions {
-  display: flex;
-  gap: 6px;
-}
-
-.txn-agent-verdict {
-  background: #f4f4f5;
-  border: 1px solid #e4e4e7;
-  border-radius: 8px;
-  padding: 8px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.txn-agent-verdict-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.txn-agent-category {
-  font-weight: 600;
-}
-
-.txn-agent-confidence {
-  margin-left: auto;
-  font-variant-numeric: tabular-nums;
-  color: #52525b;
-  font-size: 12px;
-}
-
-.txn-agent-reasoning {
-  margin: 0;
-  font-size: 13px;
-  color: #3f3f46;
-  white-space: pre-wrap;
-}
-
-.txn-agent-log {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-height: 220px;
-  overflow-y: auto;
-}
-
-.txn-agent-msg {
-  padding: 6px 9px;
-  border-radius: 8px;
-  font-size: 13px;
-  white-space: pre-wrap;
-  max-width: 90%;
-}
-
-.txn-agent-msg--user {
-  align-self: flex-end;
-  background: #e0e7ff;
-}
-
-.txn-agent-msg--assistant {
-  align-self: flex-start;
-  background: #f4f4f5;
-}
-
-.txn-agent-msg-reasoning {
-  margin-top: 4px;
-}
-
-.txn-agent-reasoning-toggle {
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  font-size: 11px;
-  color: #6d28d9;
-}
-
-.txn-agent-reasoning-toggle:hover {
-  text-decoration: underline;
-}
-
-.txn-agent-msg-reasoning .txn-agent-reasoning {
-  margin: 4px 0 0;
-  padding-left: 8px;
-  border-left: 2px solid #ddd6fe;
-  color: #52525b;
-}
-
-.txn-agent-yaml {
-  max-height: 340px;
-  overflow: auto;
-  background: #1e1e2e;
-  border-radius: 8px;
-  padding: 10px 12px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.55;
-  color: #cdd6f4;
-}
-
-.txn-agent-yaml .yml-line {
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.txn-agent-yaml .yml-key {
-  color: #89b4fa;
-}
-
-.txn-agent-yaml .yml-str {
-  color: #a6e3a1;
-}
-
-.txn-agent-yaml .yml-num {
-  color: #fab387;
-}
-
-.txn-agent-yaml .yml-null {
-  color: #f38ba8;
-  font-style: italic;
-}
-
-.txn-agent-yaml .yml-punct {
-  color: #9399b2;
-}
-
-.txn-agent-input {
-  display: flex;
-  gap: 6px;
-  align-items: flex-end;
-}
-
-/* Unified multi-line text entry — same look as the .txn-field textarea
- * (Комментарий), so every multi-line input in the modal is consistent. */
-.txn-agent-input textarea {
-  flex: 1;
-  box-sizing: border-box;
-  padding: 6px 8px;
-  border: 1px solid #d4d4d8;
-  border-radius: 4px;
-  font: inherit;
-  resize: vertical;
-}
-
 .txn-modal-footer {
   align-items: center;
 }
@@ -5300,51 +5135,6 @@ tbody tr.is-selected td.col-select {
     background: #3f3f46;
   }
 
-/* Dark overrides for the AI agent UI. These components were added after the
-   original dark theme was written, so they need their own dark rules (the
-   .txn-agent-yaml block is intentionally dark in both themes and is left as-is). */
-:root[data-theme="dark"] .txn-agent {
-  border-top-color: #3f3f46;
-}
-
-:root[data-theme="dark"] .txn-agent-verdict {
-  background: #27272a;
-  border-color: #3f3f46;
-}
-
-:root[data-theme="dark"] .txn-agent-confidence {
-  color: #a1a1aa;
-}
-
-:root[data-theme="dark"] .txn-agent-reasoning {
-  color: #d4d4d8;
-}
-
-:root[data-theme="dark"] .txn-agent-msg--user {
-  background: #312e54;
-  color: #e4e4e7;
-}
-
-:root[data-theme="dark"] .txn-agent-msg--assistant {
-  background: #27272a;
-  color: #e4e4e7;
-}
-
-:root[data-theme="dark"] .txn-agent-msg-reasoning .txn-agent-reasoning {
-  border-left-color: #4c3a78;
-  color: #a1a1aa;
-}
-
-:root[data-theme="dark"] .txn-agent-reasoning-toggle {
-  color: #c4b5fd;
-}
-
-:root[data-theme="dark"] .txn-agent-input textarea {
-  background: #18181b;
-  border-color: #3f3f46;
-  color: inherit;
-}
-
 /* Dark overrides for the currency cards + exchange-rate weeks calendar
    (Settings → Currencies). Added after the original dark theme. */
 :root[data-theme="dark"] .currency-card {
@@ -5484,6 +5274,7 @@ tbody tr.is-selected td.col-select {
 }
 
 .documents-progress,
+.documents-queue,
 .documents-report {
   display: flex;
   align-items: center;
@@ -5494,6 +5285,16 @@ tbody tr.is-selected td.col-select {
   border-radius: 6px;
   background: #fff;
   font-size: 13px;
+}
+
+.documents-queue {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.documents-queue .error {
+  margin: 0;
 }
 
 .documents-progress progress {
@@ -5602,6 +5403,36 @@ tbody tr.is-selected td.col-select {
 
 .documents-row:hover {
   background: #f8fafc;
+}
+
+.documents-row.is-selected {
+  background: #eef2ff;
+}
+
+.documents-table .col-select {
+  width: 28px;
+  cursor: pointer;
+}
+
+.documents-table .col-select input {
+  pointer-events: none;
+}
+
+.documents-table thead .col-select input {
+  pointer-events: auto;
+}
+
+.documents-selection {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.documents-selection .danger-confirm {
+  flex-basis: 100%;
 }
 
 .documents-table .col-thumb {
@@ -5784,6 +5615,7 @@ a.btn-ghost {
 }
 
 :root[data-theme="dark"] .documents-progress,
+:root[data-theme="dark"] .documents-queue,
 :root[data-theme="dark"] .documents-report,
 :root[data-theme="dark"] .documents-history,
 :root[data-theme="dark"] .documents-table {
@@ -5811,6 +5643,10 @@ a.btn-ghost {
 
 :root[data-theme="dark"] .documents-row:hover {
   background: #27272a;
+}
+
+:root[data-theme="dark"] .documents-row.is-selected {
+  background: #1e1b4b;
 }
 
 :root[data-theme="dark"] .documents-filter {
@@ -6258,4 +6094,183 @@ a.btn-ghost {
 
 :root[data-theme="dark"] .note-cell.is-startable:hover .note-cell-icon {
   color: #86efac;
+}
+
+/* Suggestion column: the main pending suggestion as a one-line chip (icon,
+   target, confidence); a click opens the Suggestions dialog. */
+.page--transactions th.col-suggestion,
+.page--transactions td.col-suggestion {
+  min-width: 180px;
+  max-width: 280px;
+}
+
+.page--transactions td.col-suggestion {
+  position: relative;
+  padding: 0;
+}
+
+.suggestion-cell {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.suggestion-cell:hover {
+  background: #f5f3ff;
+}
+
+.suggestion-cell-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.suggestion-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.suggestion-confidence {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.suggestion-confidence.is-high {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.suggestion-confidence.is-mid {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.suggestion-confidence.is-low {
+  background: #f4f4f5;
+  color: #71717a;
+}
+
+.suggestion-more {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: #71717a;
+}
+
+.modal--suggestions {
+  width: min(680px, 94vw);
+  bottom: auto;
+  max-height: calc(100vh - 24px);
+}
+
+.suggestion-card {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid #e4e4e7;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.suggestion-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.suggestion-card-kind {
+  font-weight: 600;
+}
+
+.suggestion-card-target {
+  flex: 1;
+  min-width: 0;
+  color: #52525b;
+}
+
+.suggestion-rationale {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.suggestion-partner {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.suggestion-details pre {
+  margin: 6px 0 0;
+  padding: 8px;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 12px;
+  background: #f4f4f5;
+  border-radius: 6px;
+}
+
+.suggestion-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.suggestion-skips {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  color: #52525b;
+}
+
+:root[data-theme="dark"] .suggestion-cell:hover {
+  background: #2e1065;
+}
+
+:root[data-theme="dark"] .suggestion-confidence.is-high {
+  background: #14532d;
+  color: #86efac;
+}
+
+:root[data-theme="dark"] .suggestion-confidence.is-mid {
+  background: #451a03;
+  color: #fcd34d;
+}
+
+:root[data-theme="dark"] .suggestion-confidence.is-low {
+  background: #27272a;
+  color: #a1a1aa;
+}
+
+:root[data-theme="dark"] .suggestion-card {
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .suggestion-card-target,
+:root[data-theme="dark"] .suggestion-skips {
+  color: #a1a1aa;
+}
+
+:root[data-theme="dark"] .suggestion-details pre {
+  background: #18181b;
 }

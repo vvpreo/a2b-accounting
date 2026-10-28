@@ -258,9 +258,14 @@ async fn rpc(
 
         "list_transfer_deltas" => run!(state crate::transfer_deltas::list_transfer_deltas),
 
-        "import_transactions" => run!(state crate::transactions::import_transactions, [
-            account_id: i64, source_filename: Option<String>,
-            default_timezone_offset: String, rows: Vec<crate::transactions::TxnImportRow>]),
+        "import_transactions" => {
+            let response = run!(state crate::transactions::import_transactions, [
+                account_id: i64, source_filename: Option<String>,
+                default_timezone_offset: String, rows: Vec<crate::transactions::TxnImportRow>]);
+            // New transactions may fit documents waiting for a link.
+            crate::recognition_queue::wake();
+            response
+        }
         "list_transactions" => run!(state crate::transactions::list_transactions, [
             account_ids: Option<Vec<i64>>]),
         "first_transaction_date" => run!(state crate::transactions::first_transaction_date, [
@@ -304,9 +309,13 @@ async fn rpc(
 
         "begin_attachment_upload" => run!(state crate::attachments::begin_attachment_upload, [
             source_name: Option<String>]),
+        "finish_attachment_upload" => run!(state crate::attachments::finish_attachment_upload, [
+            upload_id: i64]),
+        "recognition_status" => run!(state crate::recognition_queue::recognition_status),
         "list_attachment_uploads" => run!(state crate::attachments::list_attachment_uploads),
         "list_attachments" => run!(state crate::attachments::list_attachments),
         "delete_attachment" => run!(state crate::attachments::delete_attachment, [id: i64]),
+        "delete_attachments" => run!(state crate::attachments::delete_attachments, [ids: Vec<i64>]),
         "link_attachment" => run!(state crate::attachments::link_attachment, [
             attachment_id: i64, transaction_id: i64]),
         "unlink_attachment" => run!(state crate::attachments::unlink_attachment, [
@@ -333,10 +342,18 @@ async fn rpc(
         "set_setting" => run!(state crate::settings::set_setting, [key: String, value: String]),
 
         "ai_test_connection" => run!(app_async crate::ai::ai_test_connection),
-        "ai_transaction_chat" => run!(app_async crate::ai::ai_transaction_chat, [
-            transaction_id: i64, messages: Vec<crate::ai::ChatMsg>]),
-        "set_transaction_agent" => run!(state crate::ai::set_transaction_agent, [
-            transaction_id: i64, agent: Option<String>]),
+
+        "detect_cash_withdrawals" => run!(state crate::suggestions::detect_cash_withdrawals, [
+            transaction_ids: Vec<i64>, redo: bool]),
+        "detect_transfers" => run!(state crate::suggestions::detect_transfers, [
+            transaction_ids: Vec<i64>, redo: bool]),
+        "list_transaction_suggestions" => {
+            run!(state crate::suggestions::list_transaction_suggestions)
+        }
+        "apply_suggestion" => run!(state crate::suggestions::apply_suggestion, [id: i64]),
+        "dismiss_suggestion" => run!(state crate::suggestions::dismiss_suggestion, [id: i64]),
+        "export_reference_set" => run!(state crate::suggestions::export_reference_set, [
+            transaction_ids: Vec<i64>]),
 
         "list_exchange_rates" => run!(state crate::exchange_rates::list_exchange_rates),
         "upsert_exchange_rate" => run!(state crate::exchange_rates::upsert_exchange_rate, [

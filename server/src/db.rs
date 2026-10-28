@@ -97,6 +97,16 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "019_reset_ocr_results_for_paddleocr",
         include_str!("../migrations/019_reset_ocr_results_for_paddleocr.sql"),
     ),
+    (
+        20,
+        "020_attachment_upload_finished",
+        include_str!("../migrations/020_attachment_upload_finished.sql"),
+    ),
+    (
+        21,
+        "021_add_transaction_suggestions",
+        include_str!("../migrations/021_add_transaction_suggestions.sql"),
+    ),
 ];
 
 pub fn open(data_dir: &Path) -> rusqlite::Result<Connection> {

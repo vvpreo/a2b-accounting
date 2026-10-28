@@ -10,21 +10,26 @@ interface Props {
   /// Not a bulk action — always enabled; listed last.
   onImportTransactions: () => void;
   onAnalyzeDocuments: () => void;
-  onProposeCategories: () => void;
+  onDetectCashWithdrawals: () => void;
+  onDetectTransfers: () => void;
   onAssignCategory: () => void;
+  onExportReferenceSet: () => void;
 }
 
 /// Always-visible "Actions ▾" dropdown for the transactions section. Mirrors
 /// the outside-click / Escape behaviour of the filter dropdowns. Bulk actions
-/// on the selection, in pipeline order — match documents (slips), propose
-/// categories (AI), assign a category — then "Import transactions", which
-/// needs no selection.
+/// on the selection, in pipeline order — match documents (slips), find cash
+/// withdrawals, find transfers between own accounts, assign a category,
+/// export a reference set — then "Import transactions", which needs no
+/// selection.
 export function BulkActionsMenu({
   selectedCount,
   onImportTransactions,
   onAnalyzeDocuments,
-  onProposeCategories,
+  onDetectCashWithdrawals,
+  onDetectTransfers,
   onAssignCategory,
+  onExportReferenceSet,
 }: Props) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -70,8 +75,10 @@ export function BulkActionsMenu({
         <div className="bulk-actions-popover" role="menu">
           {[
             { label: t("transactions.bulk.analyzeDocuments"), run: onAnalyzeDocuments },
-            { label: t("transactions.bulk.proposeCategories"), run: onProposeCategories },
+            { label: t("transactions.bulk.detectCashWithdrawals"), run: onDetectCashWithdrawals },
+            { label: t("transactions.bulk.detectTransfers"), run: onDetectTransfers },
             { label: t("transactions.bulk.assignCategory"), run: onAssignCategory },
+            { label: t("transactions.bulk.exportReferenceSet"), run: onExportReferenceSet },
           ].map((item) => (
             <button
               key={item.label}

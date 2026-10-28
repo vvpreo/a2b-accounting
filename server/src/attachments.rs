@@ -18,22 +18,27 @@
 //! the lock is taken once per request only to insert the collected rows.
 //!
 //! Recognition is a set of independent per-field extractors writing into the
-//! `extraction` JSON (`{field: {value, source}}`). The first and cheapest one
-//! runs at ingest: the document time from the *file name* (see
-//! [`time_from_file_name`]) — enough to offer documents around a transaction's
-//! time for manual linking before any OCR has run.
+//! `extraction` JSON (`{field: {value, source}}`). The cheap ones run at
+//! ingest, before any OCR: the document time from the *file name* (see
+//! [`time_from_file_name`]) and from the image's EXIF, and the slip QR code
+//! (bank, transaction reference and — when the reference embeds it — the
+//! time). That is enough to offer documents around a transaction's time for
+//! manual linking right away. Full OCR then runs in the background
+//! (`recognition_queue.rs`). When several sources give a time, the most
+//! trusted one wins — see [`offer_time`].
 
 use std::fs;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
 use chrono::{DateTime, Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime, SecondsFormat, Utc};
 use regex::Regex;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use zip::ZipArchive;
 
@@ -49,6 +54,14 @@ const MAX_ZIP_TOTAL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 /// How many skipped names an ingest report echoes back to the UI.
 const MAX_REPORTED_SKIPS: usize = 50;
+
+/// ZIP entries prepared in parallel at a time: QR decoding is the slow part
+/// of ingest (~50–250 ms per image) and runs on every core; the chunk bounds
+/// how many unpacked files are held in memory at once.
+const PREPARE_CHUNK: usize = 64;
+
+/// Distinguishes temp files of concurrent writers of the same content.
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -163,7 +176,7 @@ fn prepare(dir: &Path, name: &str, bytes: &[u8]) -> Result<Option<Prepared>, Str
     if !path.exists() {
         // Write to a temp name first so a crash never leaves a truncated file
         // under the final (content-addressed) name.
-        let tmp = dir.join(format!(".{sha256}.part"));
+        let tmp = dir.join(format!(".{sha256}.{}.part", TMP_SEQ.fetch_add(1, Ordering::Relaxed)));
         fs::write(&tmp, bytes).map_err(|e| format!("attachments.write: {e}"))?;
         fs::rename(&tmp, &path).map_err(|e| format!("attachments.write: {e}"))?;
     }
@@ -172,8 +185,52 @@ fn prepare(dir: &Path, name: &str, bytes: &[u8]) -> Result<Option<Prepared>, Str
         original_name: name.to_string(),
         mime_type: mime,
         size_bytes: bytes.len() as i64,
-        extraction: filename_extraction(name, Utc::now().year()),
+        extraction: ingest_extraction(name, bytes, mime, Utc::now().year()),
     }))
+}
+
+/// Prepare ZIP entries on all cores, keeping their order; unsupported ones
+/// are counted as skipped.
+fn prepare_chunk(
+    dir: &Path,
+    items: Vec<(String, Vec<u8>)>,
+    report: &mut IngestReport,
+    out: &mut Vec<Prepared>,
+) -> Result<(), String> {
+    let threads = std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .min(items.len().max(1));
+    let next = AtomicUsize::new(0);
+    let mut done = std::thread::scope(|s| {
+        let workers: Vec<_> = (0..threads)
+            .map(|_| {
+                s.spawn(|| {
+                    let mut mine = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        let Some((name, bytes)) = items.get(i) else { break };
+                        mine.push((i, prepare(dir, name, bytes)));
+                    }
+                    mine
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .map(|w| w.join().map_err(|_| "attachments.prepare_panicked".to_string()))
+            .collect::<Result<Vec<_>, String>>()
+    })?
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    done.sort_by_key(|(i, _)| *i);
+    for (i, result) in done {
+        match result? {
+            Some(p) => out.push(p),
+            None => note_skip(report, &items[i].0, "unsupported"),
+        }
+    }
+    Ok(())
 }
 
 fn note_skip(report: &mut IngestReport, name: &str, reason: &str) {
@@ -209,6 +266,7 @@ fn prepare_upload(
         return Err("attachments.zip_too_many_entries".into());
     }
     let mut total: u64 = 0;
+    let mut chunk = Vec::new();
     for i in 0..archive.len() {
         let mut entry = archive
             .by_index(i)
@@ -240,11 +298,12 @@ fn prepare_upload(
             note_skip(report, &entry_name, "nested archive");
             continue;
         }
-        match prepare(dir, &entry_name, &buf)? {
-            Some(p) => out.push(p),
-            None => note_skip(report, &entry_name, "unsupported"),
+        chunk.push((entry_name, buf));
+        if chunk.len() >= PREPARE_CHUNK {
+            prepare_chunk(dir, std::mem::take(&mut chunk), report, &mut out)?;
         }
     }
+    prepare_chunk(dir, chunk, report, &mut out)?;
     Ok(out)
 }
 
@@ -319,7 +378,24 @@ pub fn ingest_upload(
     let prepared = prepare_upload(&attachments_dir(data_dir), name, bytes, &mut report)?;
     let conn = db.lock().map_err(|e| e.to_string())?;
     insert_prepared(&conn, upload_id, prepared, &mut report)?;
+    drop(conn);
+    // Recognition starts while the rest of the upload is still arriving.
+    crate::recognition_queue::wake();
     Ok(report)
+}
+
+/// Mark an upload complete — the frontend has sent its last file. Its
+/// documents become eligible for automatic linking once all are recognised.
+pub fn finish_attachment_upload(state: State<'_, DbState>, upload_id: i64) -> Result<(), String> {
+    let conn = state.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE attachment_uploads SET finished_at = ?2 WHERE id = ?1 AND finished_at IS NULL",
+        params![upload_id, now_utc()],
+    )
+    .map_err(|e| e.to_string())?;
+    drop(conn);
+    crate::recognition_queue::wake();
+    Ok(())
 }
 
 /// Open a new upload record; files are then posted against its id.
@@ -386,7 +462,42 @@ pub fn delete_attachment(state: State<'_, DbState>, id: i64) -> Result<(), Strin
     delete_attachment_in(&conn, &crate::data_dir_context().data_dir, id)
 }
 
+/// Delete several documents at once (multi-select on the Documents screen).
+/// A deleted document takes its link and everything recognised on it — the
+/// slip's note shown on the transaction is read from the document — with it.
+/// Returns how many were deleted; ids that no longer exist are skipped.
+pub fn delete_attachments(state: State<'_, DbState>, ids: Vec<i64>) -> Result<usize, String> {
+    let conn = state.lock().map_err(|e| e.to_string())?;
+    delete_attachments_in(&conn, &crate::data_dir_context().data_dir, &ids)
+}
+
+fn delete_attachments_in(conn: &Connection, data_dir: &Path, ids: &[i64]) -> Result<usize, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let mut files = Vec::new();
+    for &id in ids {
+        if let Some(path) = delete_attachment_row(&tx, data_dir, id)? {
+            files.push(path);
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    // Files go only once the rows are gone for good.
+    for path in &files {
+        let _ = fs::remove_file(path);
+    }
+    Ok(files.len())
+}
+
 fn delete_attachment_in(conn: &Connection, data_dir: &Path, id: i64) -> Result<(), String> {
+    let path = delete_attachment_row(conn, data_dir, id)?
+        .ok_or_else(|| format!("attachment {id} does not exist"))?;
+    // A missing file is not an error — the row is what the user sees.
+    let _ = fs::remove_file(path);
+    Ok(())
+}
+
+/// Delete a document row; returns its file's path, or `None` when there is
+/// no such document.
+fn delete_attachment_row(conn: &Connection, data_dir: &Path, id: i64) -> Result<Option<PathBuf>, String> {
     let row: Option<(String, String)> = conn
         .query_row(
             "DELETE FROM attachments WHERE id = ?1 RETURNING sha256, mime_type",
@@ -395,13 +506,7 @@ fn delete_attachment_in(conn: &Connection, data_dir: &Path, id: i64) -> Result<(
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    let Some((sha256, mime)) = row else {
-        return Err(format!("attachment {id} does not exist"));
-    };
-    let path = attachments_dir(data_dir).join(stored_file_name(&sha256, &mime));
-    // A missing file is not an error — the row is what the user sees.
-    let _ = fs::remove_file(path);
-    Ok(())
+    Ok(row.map(|(sha256, mime)| attachments_dir(data_dir).join(stored_file_name(&sha256, &mime))))
 }
 
 /// Resolve a document id to its MIME type and on-disk path (for serving).
@@ -452,7 +557,7 @@ impl DocTime {
     }
 
     /// Absolute instant, interpreting local wall time in `offset`.
-    fn to_utc(self, offset: FixedOffset) -> DateTime<Utc> {
+    pub(crate) fn to_utc(self, offset: FixedOffset) -> DateTime<Utc> {
         match self {
             DocTime::Utc(t) => t,
             DocTime::Local(t) => (t - Duration::seconds(offset.local_minus_utc() as i64)).and_utc(),
@@ -473,25 +578,12 @@ fn regex(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
 ///    `Screenshot_20250823-114627` (camera / screenshot names);
 /// 3. a 13-digit epoch-milliseconds stamp — `BBl-Screenshot-1738657402211`.
 pub fn time_from_file_name(name: &str, ref_year: i32) -> Option<DocTime> {
-    static KPLUS: OnceLock<Regex> = OnceLock::new();
     static CALENDAR: OnceLock<Regex> = OnceLock::new();
     static EPOCH_MS: OnceLock<Regex> = OnceLock::new();
     let base = name.rsplit('/').next().unwrap_or(name);
 
-    let kplus = regex(&KPLUS, r"(?:^|[^0-9])0\d(\d)(\d{3})(\d{2})(\d{2})(\d{2})(?:[A-Z]{3}\d{5}|\d{6}(?:[^0-9]|$))");
-    let from_kplus = kplus.captures(base).and_then(|c| {
-        let digit: i32 = c[1].parse().ok()?;
-        // Latest year ≤ ref_year whose last digit matches.
-        let mut year = ref_year - ref_year.rem_euclid(10) + digit;
-        if year > ref_year {
-            year -= 10;
-        }
-        let day: u32 = c[2].parse().ok()?;
-        let (h, m, s): (u32, u32, u32) = (c[3].parse().ok()?, c[4].parse().ok()?, c[5].parse().ok()?);
-        NaiveDate::from_yo_opt(year, day)?.and_hms_opt(h, m, s)
-    });
-    if let Some(t) = from_kplus {
-        return Some(DocTime::Local(t));
+    if let Some(t) = kplus_time(base, ref_year) {
+        return Some(t);
     }
 
     let calendar = regex(
@@ -514,6 +606,154 @@ pub fn time_from_file_name(name: &str, ref_year: i32) -> Option<DocTime> {
     None
 }
 
+/// K PLUS transaction reference `0 1 Y DDD HHMMSS …` anywhere in `text` (a
+/// file name or the slip QR): one-digit year — the latest year ≤ `ref_year`
+/// with that last digit — and the day of the year.
+fn kplus_time(text: &str, ref_year: i32) -> Option<DocTime> {
+    static KPLUS: OnceLock<Regex> = OnceLock::new();
+    let kplus = regex(&KPLUS, r"(?:^|[^0-9])0\d(\d)(\d{3})(\d{2})(\d{2})(\d{2})(?:[A-Z]{3}\d{5}|\d{6}(?:[^0-9]|$))");
+    let c = kplus.captures(text)?;
+    let digit: i32 = c[1].parse().ok()?;
+    let mut year = ref_year - ref_year.rem_euclid(10) + digit;
+    if year > ref_year {
+        year -= 10;
+    }
+    let day: u32 = c[2].parse().ok()?;
+    let (h, m, s): (u32, u32, u32) = (c[3].parse().ok()?, c[4].parse().ok()?, c[5].parse().ok()?);
+    NaiveDate::from_yo_opt(year, day)?.and_hms_opt(h, m, s).map(DocTime::Local)
+}
+
+/// Time embedded in a bank's transaction reference (read from the slip QR).
+/// Only K PLUS (Kasikorn, bank code 004) references are known to carry it.
+pub fn time_from_reference(bank_code: &str, reference: &str, ref_year: i32) -> Option<DocTime> {
+    match bank_code {
+        "004" => kplus_time(reference, ref_year),
+        _ => None,
+    }
+}
+
+/// Capture time from the image's EXIF — `DateTimeOriginal`, else
+/// `DateTimeDigitized`, else `DateTime`. With the matching `OffsetTime*` tag
+/// the time is absolute, otherwise it is local wall time.
+pub fn exif_time(bytes: &[u8]) -> Option<DocTime> {
+    use image::ImageDecoder;
+    let mut decoder = image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .into_decoder()
+        .ok()?;
+    exif_time_from_tiff(&decoder.exif_metadata().ok()??)
+}
+
+/// Minimal TIFF/EXIF walk: IFD0 → Exif sub-IFD, ASCII date tags only.
+fn exif_time_from_tiff(tiff: &[u8]) -> Option<DocTime> {
+    let tiff = tiff.strip_prefix(b"Exif\0\0").unwrap_or(tiff);
+    let le = match tiff.get(0..2)? {
+        b"II" => true,
+        b"MM" => false,
+        _ => return None,
+    };
+    let u16_at = |o: usize| -> Option<u16> {
+        let b: [u8; 2] = tiff.get(o..o + 2)?.try_into().ok()?;
+        Some(if le { u16::from_le_bytes(b) } else { u16::from_be_bytes(b) })
+    };
+    let u32_at = |o: usize| -> Option<u32> {
+        let b: [u8; 4] = tiff.get(o..o + 4)?.try_into().ok()?;
+        Some(if le { u32::from_le_bytes(b) } else { u32::from_be_bytes(b) })
+    };
+    // (tag, offset of its 12-byte entry)
+    let entries = |ifd: usize| -> Vec<(u16, usize)> {
+        let count = u16_at(ifd).unwrap_or(0) as usize;
+        (0..count)
+            .map(|i| ifd + 2 + i * 12)
+            .filter_map(|e| Some((u16_at(e)?, e)))
+            .collect()
+    };
+    let find = |ifd: &[(u16, usize)], tag: u16| ifd.iter().find(|(t, _)| *t == tag).map(|&(_, e)| e);
+    let ascii = |entry: usize| -> Option<String> {
+        let count = u32_at(entry + 4)? as usize;
+        let start = if count <= 4 { entry + 8 } else { u32_at(entry + 8)? as usize };
+        let raw = tiff.get(start..start.checked_add(count)?)?;
+        Some(String::from_utf8_lossy(raw).trim_end_matches('\0').trim().to_string())
+    };
+
+    let root = entries(u32_at(4)? as usize);
+    let exif = find(&root, 0x8769)
+        .and_then(|e| u32_at(e + 8))
+        .map(|o| entries(o as usize))
+        .unwrap_or_default();
+    let (stamp, offset) = [(0x9003, 0x9011), (0x9004, 0x9012)]
+        .iter()
+        .find_map(|&(tag, off)| Some((ascii(find(&exif, tag)?)?, find(&exif, off).and_then(ascii))))
+        .or_else(|| Some((ascii(find(&root, 0x0132)?)?, find(&exif, 0x9010).and_then(ascii))))?;
+    let local = NaiveDateTime::parse_from_str(&stamp, "%Y:%m:%d %H:%M:%S").ok()?;
+    Some(match offset.and_then(|o| o.parse::<FixedOffset>().ok()) {
+        Some(off) => DocTime::Utc((local - Duration::seconds(off.local_minus_utc() as i64)).and_utc()),
+        None => DocTime::Local(local),
+    })
+}
+
+/// How far a time source is trusted, lowest first: a file name may carry the
+/// save / download time; EXIF is when the image was made (usually right
+/// after the transfer); the date printed on the slip (OCR / vision LLM) is
+/// the bank's own; a QR reference is machine-readable and exact.
+fn time_rank(source: &str) -> u8 {
+    match source {
+        "qr" => 3,
+        "ocr" | "llm" => 2,
+        "exif" => 1,
+        _ => 0,
+    }
+}
+
+/// Set the document time from `source` unless a more trusted source already
+/// gave one (an equally trusted one is replaced — a re-run of an extractor).
+pub fn offer_time(doc: &mut Map<String, Value>, time: DocTime, source: &str) {
+    let current = doc
+        .get("occurredAt")
+        .and_then(|v| v.get("source"))
+        .and_then(Value::as_str)
+        .map(time_rank);
+    if current.is_none_or(|rank| rank <= time_rank(source)) {
+        doc.insert("occurredAt".into(), json!({ "value": time.to_value(), "source": source }));
+    }
+}
+
+/// Record a Thai slip-verification QR: sending bank, transaction reference
+/// and, when the reference embeds it, the time. `false` when the payload is
+/// not a slip QR.
+pub fn apply_slip_qr(doc: &mut Map<String, Value>, payload: &str, ref_year: i32) -> bool {
+    let Some((code, reference)) = crate::ocr::parse_slip_verify_qr(payload) else {
+        return false;
+    };
+    let bank = crate::ocr::thai_bank_name(&code).map(str::to_string).unwrap_or_else(|| code.clone());
+    doc.insert("bank".into(), json!({ "value": bank, "source": "qr" }));
+    doc.insert("reference".into(), json!({ "value": reference, "source": "qr" }));
+    if let Some(t) = time_from_reference(&code, &reference, ref_year) {
+        offer_time(doc, t, "qr");
+    }
+    true
+}
+
+/// Initial `extraction` JSON for a freshly uploaded file — what can be read
+/// without OCR: the time from the file name and EXIF, and the slip QR code.
+/// `None` when nothing was found.
+fn ingest_extraction(name: &str, bytes: &[u8], mime: &str, ref_year: i32) -> Option<String> {
+    let mut doc = Map::new();
+    if let Some(t) = time_from_file_name(name, ref_year) {
+        offer_time(&mut doc, t, "filename");
+    }
+    if mime.starts_with("image/") {
+        if let Some(t) = exif_time(bytes) {
+            offer_time(&mut doc, t, "exif");
+        }
+        if let Some(payload) = crate::ocr::qr_from_image(bytes) {
+            apply_slip_qr(&mut doc, &payload, ref_year);
+        }
+    }
+    (!doc.is_empty()).then(|| Value::Object(doc).to_string())
+}
+
 /// Initial `extraction` JSON for a freshly uploaded file, or `None` when the
 /// name carries nothing.
 fn filename_extraction(name: &str, ref_year: i32) -> Option<String> {
@@ -522,7 +762,7 @@ fn filename_extraction(name: &str, ref_year: i32) -> Option<String> {
 }
 
 /// The document time recorded in an `extraction` JSON, if any.
-fn extraction_time(extraction: Option<&str>) -> Option<DocTime> {
+pub(crate) fn extraction_time(extraction: Option<&str>) -> Option<DocTime> {
     let v: Value = serde_json::from_str(extraction?).ok()?;
     DocTime::parse(v.get("occurredAt")?.get("value")?.as_str()?)
 }
@@ -642,12 +882,22 @@ fn link_attachment_in(conn: &Connection, attachment_id: i64, transaction_id: i64
     Ok(())
 }
 
-/// Unlink a document; the status reset is done by the
-/// `attachments_reset_match_on_unlink` trigger.
+/// Unlink a document. The `attachments_reset_match_on_unlink` trigger resets
+/// the status to 'unmatched'; an explicit unlink by the user then marks it
+/// 'detached', so automatic linking never re-attaches what the user took off.
 pub fn unlink_attachment(state: State<'_, DbState>, attachment_id: i64) -> Result<(), String> {
     let conn = state.lock().map_err(|e| e.to_string())?;
+    unlink_attachment_in(&conn, attachment_id)
+}
+
+fn unlink_attachment_in(conn: &Connection, attachment_id: i64) -> Result<(), String> {
     conn.execute(
         "UPDATE attachments SET transaction_id = NULL WHERE id = ?1",
+        [attachment_id],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE attachments SET match_status = 'detached' WHERE id = ?1 AND transaction_id IS NULL",
         [attachment_id],
     )
     .map_err(|e| e.to_string())?;
@@ -817,6 +1067,117 @@ mod tests {
             }
         }
         zip.finish().unwrap().into_inner()
+    }
+
+    /// Little-endian TIFF: IFD0 → Exif IFD with DateTimeOriginal and,
+    /// optionally, OffsetTimeOriginal.
+    fn tiff_with_exif_time(stamp: &str, offset: Option<&str>) -> Vec<u8> {
+        let mut entries: Vec<(u16, String)> = vec![(0x9003, format!("{stamp}\0"))];
+        if let Some(o) = offset {
+            entries.push((0x9011, format!("{o}\0")));
+        }
+        let mut t = b"II*\0".to_vec();
+        t.extend(8u32.to_le_bytes());
+        // IFD0: one entry — the Exif IFD pointer.
+        let exif_ifd = 8 + 2 + 12 + 4;
+        t.extend(1u16.to_le_bytes());
+        t.extend(0x8769u16.to_le_bytes());
+        t.extend(4u16.to_le_bytes());
+        t.extend(1u32.to_le_bytes());
+        t.extend((exif_ifd as u32).to_le_bytes());
+        t.extend(0u32.to_le_bytes());
+        // Exif IFD, values right after it.
+        let mut data_at = exif_ifd + 2 + entries.len() * 12 + 4;
+        t.extend((entries.len() as u16).to_le_bytes());
+        for (tag, value) in &entries {
+            t.extend(tag.to_le_bytes());
+            t.extend(2u16.to_le_bytes());
+            t.extend((value.len() as u32).to_le_bytes());
+            t.extend((data_at as u32).to_le_bytes());
+            data_at += value.len();
+        }
+        t.extend(0u32.to_le_bytes());
+        for (_, value) in &entries {
+            t.extend(value.as_bytes());
+        }
+        t
+    }
+
+    #[test]
+    fn exif_time_local_and_with_offset() {
+        let local = NaiveDate::from_ymd_opt(2026, 10, 27).unwrap().and_hms_opt(11, 58, 55).unwrap();
+        assert_eq!(
+            exif_time_from_tiff(&tiff_with_exif_time("2026:10:27 11:58:55", None)),
+            Some(DocTime::Local(local))
+        );
+        let mut with_header = b"Exif\0\0".to_vec();
+        with_header.extend(tiff_with_exif_time("2026:10:27 11:58:55", Some("+07:00")));
+        assert_eq!(
+            exif_time_from_tiff(&with_header),
+            Some(DocTime::Utc((local - Duration::hours(7)).and_utc()))
+        );
+        assert_eq!(exif_time_from_tiff(b"not a tiff"), None);
+        assert_eq!(exif_time(JPEG), None);
+    }
+
+    #[test]
+    fn time_from_kplus_reference_only() {
+        let t = time_from_reference("004", "016173120851BPM00053", 2026).unwrap();
+        assert_eq!(t.to_value(), "2026-06-22T12:08:51");
+        // Krungsri references are not decoded (yet).
+        assert_eq!(time_from_reference("025", "KMA2502191049138N6xgJcw0n", 2026), None);
+    }
+
+    #[test]
+    fn time_sources_by_trust() {
+        let at = |h| DocTime::Local(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap().and_hms_opt(h, 0, 0).unwrap());
+        let mut doc = Map::new();
+        offer_time(&mut doc, at(1), "filename");
+        offer_time(&mut doc, at(2), "exif");
+        assert_eq!(doc["occurredAt"]["source"], "exif");
+        offer_time(&mut doc, at(3), "filename");
+        assert_eq!(doc["occurredAt"]["value"], "2026-01-01T02:00:00");
+        offer_time(&mut doc, at(4), "qr");
+        offer_time(&mut doc, at(5), "ocr");
+        assert_eq!(doc["occurredAt"]["source"], "qr");
+        assert_eq!(doc["occurredAt"]["value"], "2026-01-01T04:00:00");
+    }
+
+    #[test]
+    fn duplicate_entries_in_one_zip_are_stored_once() {
+        let (dir, db) = setup();
+        let upload = begin_attachment_upload(&db, None).unwrap();
+        let entries: Vec<(String, &[u8])> = (0..100).map(|i| (format!("s/{i}.jpeg"), JPEG)).collect();
+        let refs: Vec<(&str, &[u8])> = entries.iter().map(|(n, b)| (n.as_str(), *b)).collect();
+        let report = ingest_upload(&db, dir.path(), upload, "dups.zip", &zip_of(&refs)).unwrap();
+        assert_eq!((report.added, report.duplicates), (1, 99));
+        assert_eq!(stored_files(dir.path()).len(), 1);
+    }
+
+    #[test]
+    fn bulk_delete_takes_links_and_files_along() {
+        let (dir, db) = setup();
+        let upload = begin_attachment_upload(&db, None).unwrap();
+        ingest_upload(&db, dir.path(), upload, "a.jpeg", JPEG).unwrap();
+        ingest_upload(&db, dir.path(), upload, "b.png", PNG).unwrap();
+        let ids: Vec<i64> = list_attachments(&db).unwrap().iter().map(|d| d.id).collect();
+        let txn = insert_txn(&db.lock().unwrap());
+        link_attachment(&db, ids[0], txn).unwrap();
+        db.lock()
+            .unwrap()
+            .execute(
+                "UPDATE attachments SET extraction = json_object('memo', json_object('value', 'кофе', 'source', 'ocr'))",
+                [],
+            )
+            .unwrap();
+        assert_eq!(list_attachment_links(&db).unwrap()[0].memo.as_deref(), Some("кофе"));
+
+        let deleted = delete_attachments_in(&db.lock().unwrap(), dir.path(), &[ids[0], ids[1], 9999]).unwrap();
+        assert_eq!(deleted, 2);
+        assert!(list_attachments(&db).unwrap().is_empty());
+        assert!(list_attachment_links(&db).unwrap().is_empty());
+        assert!(list_transaction_attachments(&db, txn).unwrap().is_empty());
+        assert!(stored_files(dir.path()).is_empty());
     }
 
     #[test]
@@ -1108,7 +1469,8 @@ mod tests {
 
         unlink_attachment(&db, doc).unwrap();
         assert!(list_transaction_attachments(&db, txn).unwrap().is_empty());
-        assert_eq!(list_attachments(&db).unwrap()[0].match_status, "unmatched");
+        // Unlinked by the user → kept away from automatic linking.
+        assert_eq!(list_attachments(&db).unwrap()[0].match_status, "detached");
     }
 
     #[test]

@@ -230,6 +230,7 @@
     },
     "column": {
       "note": "Note",
+      "suggestion": "Suggestion",
       "category": "Category",
       "delta": "Δ (FX difference on transfers)",
       "peer": "Counterparty",
@@ -276,7 +277,9 @@
       "doneSkippedZero": "Skipped (zero amount): {count}",
       "doneErrors": "Errors: {count}",
       "analyzeDocuments": "Match documents",
-      "proposeCategories": "Propose categories (AI)"
+      "detectCashWithdrawals": "Find cash withdrawals",
+      "detectTransfers": "Find transfers between accounts",
+      "exportReferenceSet": "Export reference set"
     },
     "openDocument": "Open document",
     "filterPeriod": "Period",
@@ -304,18 +307,14 @@
       "3": "Last 3 months",
       "6": "Last 6 months",
       "12": "Last 12 months",
+      "36": "Last 36 months",
+      "all": "All time",
       "custom": "Custom range"
     },
-    "bulkPropose": {
-      "title": "Propose categories",
-      "intro": "The AI agent will analyse the selected transactions ({count}) and propose a category for each. Nothing is applied — proposals appear in the AI column, you apply them.",
-      "provider": "Transaction data (without the balance) goes to the provider from the AI settings: {provider}. Slip notes are not sent yet.",
-      "providerUnknown": "not configured",
-      "redo": "Re-analyse the ones that already have a proposal ({count})",
-      "result": "Proposed: {proposed}, errors: {failed}."
-    },
     "tableNote": "Note",
-    "tableNoteTitle": "Comment or the note from the slip; click to link a document or write a comment"
+    "tableNoteTitle": "Comment or the note from the slip; click to link a document or write a comment",
+    "tableSuggestion": "Suggestion",
+    "tableSuggestionTitle": "What to do with the transaction: withdrawal to cash, transfer between own accounts or a category; click for the rationale and to apply"
   },
   "import": {
     "title": "Import transactions",
@@ -493,7 +492,7 @@
     },
     "ai": {
       "title": "AI provider",
-      "hint": "Configure an OpenAI-compatible provider used by the per-transaction agent. OpenRouter is the default.",
+      "hint": "Configure an OpenAI-compatible provider for category suggestions — a local one (Ollama) keeps slip notes on your machines.",
       "presetLabel": "Preset",
       "baseUrlLabel": "Base URL",
       "modelLabel": "Model",
@@ -621,21 +620,6 @@
     "categories": "Categories",
     "editCategories": "Edit categories",
     "confirmDelete": "Delete transaction?",
-    "agent": {
-      "title": "AI agent",
-      "analyze": "Analyze with AI",
-      "clear": "Clear analysis",
-      "showJson": "YAML",
-      "showChat": "Chat",
-      "send": "Send",
-      "thinking": "Thinking…",
-      "placeholder": "Ask the agent about this transaction…",
-      "suggested": "Suggested category",
-      "confidence": "Confidence",
-      "reasoning": "Reasoning",
-      "none": "—",
-      "empty": "The agent hasn't analyzed this transaction yet."
-    },
     "documents": "Document",
     "linkDocument": "Link document",
     "hideDocumentPicker": "Hide picker",
@@ -700,7 +684,21 @@
       "pending": "Not recognised",
       "recognised": "Recognised",
       "unmatched": "Not linked",
+      "ambiguous": "Several candidates",
       "matched": "Linked"
+    },
+    "selection": {
+      "count": "Selected: {count}",
+      "delete": "Delete selected",
+      "clear": "Clear selection",
+      "all": "Select all visible",
+      "confirm": "Delete the selected documents ({count})? The files are removed from storage, their links to transactions are dropped and their slip notes disappear from the Note column. Transaction comments stay."
+    },
+    "queue": {
+      "pending": "Recognising documents in the background: {count} left. Linking to transactions starts once the whole batch is recognised.",
+      "paused": "Recognition paused: {error}",
+      "linked": "Latest automatic linking: documents linked to outgoing transactions — {count}.",
+      "ambiguous": "Documents with several candidates — {count}: link them by hand (filter “Several candidates”)."
     },
     "colFile": "File",
     "colStatus": "Recognition",
@@ -718,10 +716,11 @@
       "auto": "Linked automatically",
       "probable": "Needs review",
       "manual": "Linked manually",
-      "ambiguous": "Several candidates"
+      "ambiguous": "Several candidates",
+      "detached": "Unlinked by hand"
     },
     "resultTitle": "Recognition result",
-    "notRecognisedYet": "Not recognised yet — recognition comes in the next step.",
+    "notRecognisedYet": "Queued for recognition — it runs in the background right after upload.",
     "field": {
       "bank": "Bank",
       "account": "Account",
@@ -747,7 +746,9 @@
       "filename": "file name",
       "qr": "QR code",
       "ocr": "recognised text",
-      "ref": "transaction reference"
+      "ref": "transaction reference",
+      "exif": "image metadata (EXIF)",
+      "llm": "LLM recognition"
     },
     "deltaH": "{n} h",
     "deltaM": "{n} min",
@@ -757,6 +758,60 @@
     "direction": {
       "debit": "Debit",
       "credit": "Credit"
+    }
+  },
+  "suggestions": {
+    "title": "Suggestions",
+    "more": "More suggestions: {count}",
+    "kind": {
+      "cash_withdrawal": "Withdrawal to cash",
+      "transfer": "Transfer between own accounts",
+      "category": "Category"
+    },
+    "chip": {
+      "cash": "To cash → {account}",
+      "transfer": "Transfer ↔ {account}, {time}"
+    },
+    "confidence": "Confidence {value}/10",
+    "rationale": "Rationale",
+    "partner": "Other side",
+    "cashHint": "A {amount} credit will be created on the cash account and linked with this transaction.",
+    "reasoning": "Model's reasoning",
+    "prompt": "Sent to the model {model}",
+    "recompute": "Recompute",
+    "dismiss": "Dismiss",
+    "apply": "Apply",
+    "error": {
+      "not_found": "Suggestion not found — reload the page",
+      "not_pending": "The suggestion was already applied or dismissed",
+      "already_categorized": "The transaction already has categories — the suggestion is not applied"
+    },
+    "run": {
+      "nothingApplied": "Nothing is applied — suggestions appear in the Suggestion column, you apply them.",
+      "redo": "Recompute the ones that already have a suggestion ({count})",
+      "running": "Searching…",
+      "cash_withdrawal": {
+        "title": "Find cash withdrawals",
+        "intro": "Among the selected transactions ({count}) find cash withdrawals (ATM, bank counter) and suggest a new linked transaction on the cash account for each.",
+        "result": "Cash withdrawals found: {count}."
+      },
+      "transfer": {
+        "title": "Find transfers between accounts",
+        "intro": "For the selected transactions ({count}) find the other side on another own bank account: same amount and currency, opposite direction, at most 5 minutes apart.",
+        "result": "Pairs found: {count}."
+      }
+    },
+    "skip": {
+      "not_found": "not found",
+      "not_bank_debit": "not a debit on a bank account",
+      "not_bank": "not a bank account",
+      "linked": "already linked",
+      "no_signal": "does not look like a cash withdrawal",
+      "already_suggested": "already has a suggestion",
+      "no_cash_account": "no cash account in this currency",
+      "dismissed": "dismissed earlier",
+      "cash_pending": "has a cash-withdrawal suggestion",
+      "no_candidate": "no other side found"
     }
   }
 }

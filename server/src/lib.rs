@@ -16,11 +16,13 @@ mod http;
 mod llm_ocr;
 mod money;
 mod ocr;
+mod recognition_queue;
 mod report_views;
 mod reports;
 mod seed;
 mod settings;
 mod slip_extract;
+mod suggestions;
 mod transaction_categories;
 mod transaction_links;
 mod transactions;
@@ -130,6 +132,9 @@ pub fn run() {
         if let Err(err) = exchange_rates::spawn_missing_rate_downloads(app.clone()) {
             eprintln!("startup rate prefill failed: {err}");
         }
+        // Documents left pending (a restart mid-queue, older uploads) are
+        // picked up right away.
+        recognition_queue::spawn(app.clone());
         http::serve(app).await;
     });
 }

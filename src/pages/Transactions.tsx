@@ -15,9 +15,11 @@ import { useI18n, useT } from "../i18n";
 import {
   Account,
   AttachmentLink,
+  Category,
   LINK_ERROR_CODES,
   LinkErrorCode,
   Transaction,
+  Suggestion,
   TransactionCategoryView,
   TransferDelta,
   TxnLink,
@@ -25,10 +27,13 @@ import {
   WithdrawalErrorCode,
   convertAmount,
   createCashWithdrawal,
+  exportReferenceSet,
   getSetting,
   linkTransactions,
   listAccounts,
   listAttachmentLinks,
+  listCategories,
+  listTransactionSuggestions,
   listTransactionLinks,
   listTransactions,
   listTransactionsCategories,
@@ -41,9 +46,10 @@ import { formatMoney, parseMoneyToMinor } from "../lib/money";
 import { TransactionModal } from "../components/TransactionModal";
 import { BulkCategorizeModal } from "../components/BulkCategorizeModal";
 import { BulkAnalyzeDocumentsModal } from "../components/BulkAnalyzeDocumentsModal";
-import { BulkProposeCategoriesModal } from "../components/BulkProposeCategoriesModal";
+import { BulkDetectSuggestionsModal, DetectKind } from "../components/BulkDetectSuggestionsModal";
 import { CategoriesCell } from "./transactions/CategoriesCell";
 import { NoteCell } from "./transactions/NoteCell";
+import { SuggestionCell } from "./transactions/SuggestionCell";
 import { BulkActionsMenu } from "./transactions/BulkActionsMenu";
 import { PeriodDropdown, PeriodPreset } from "./transactions/PeriodDropdown";
 import { SelectCheckbox } from "./transactions/SelectCheckbox";
@@ -87,12 +93,15 @@ type ColumnKey =
   | "delta"
   | "category"
   | "note"
+  | "suggestion"
   | "peer"
   | "bank_description";
-// Picker order follows the table: fixed money/date block, Note, category,
-// then the transfer columns (🔗 always shown, Δ optional), then free text.
+// Picker order follows the table: fixed money/date block, Note, Suggestion,
+// category, then the transfer columns (🔗 always shown, Δ optional), then
+// free text.
 const COLUMN_KEYS: ColumnKey[] = [
   "note",
+  "suggestion",
   "category",
   "delta",
   "peer",
@@ -155,15 +164,19 @@ interface Props {
   onPendingMonthFilterApplied?: () => void;
 }
 
-/// Quick date ranges: the current month plus the N previous ones.
-const DATE_PRESETS = [1, 3, 6, 12];
+/// Quick date ranges: the current month plus the N previous ones, then "all
+/// time" — no lower bound (an empty `from` disables it in the filter).
+const DATE_PRESETS = [1, 3, 6, 12, 36];
 
 function periodPresets(): PeriodPreset[] {
-  return DATE_PRESETS.map((n) => ({
-    key: String(n),
-    from: defaultDateFrom(n),
-    to: defaultDateTo(),
-  }));
+  return [
+    ...DATE_PRESETS.map((n) => ({
+      key: String(n),
+      from: defaultDateFrom(n),
+      to: defaultDateTo(),
+    })),
+    { key: "all", from: "", to: defaultDateTo() },
+  ];
 }
 
 function defaultDateFrom(monthsBack = 12): string {
@@ -217,7 +230,12 @@ export function TransactionsPage({
   const [lastSelectedId, setLastSelectedId] = useState<number | null>(null);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkDocsOpen, setBulkDocsOpen] = useState(false);
-  const [bulkProposeOpen, setBulkProposeOpen] = useState(false);
+  const [bulkDetect, setBulkDetect] = useState<DetectKind | null>(null);
+  // Pending suggestions (cash withdrawal / transfer / category) for the
+  // Suggestion column, and the categories to describe category suggestions.
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [suggestionsVersion, setSuggestionsVersion] = useState(0);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selectedKinds, setSelectedKinds] = useState<RowKind[]>(() => [
     ...ROW_KINDS,
@@ -328,6 +346,46 @@ export function TransactionsPage({
       cancelled = true;
     };
   }, [version, localRefresh, docLinksVersion]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listTransactionSuggestions()
+      .then((s) => {
+        if (!cancelled) setSuggestions(s);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [version, localRefresh, suggestionsVersion, categoriesVersion, links]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listCategories()
+      .then((c) => {
+        if (!cancelled) setCategories(c);
+      })
+      .catch(() => {
+        // Only used to label category suggestions — the table works without.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [version]);
+
+  const suggestionsByTxn = useMemo(() => {
+    const map = new Map<number, Suggestion[]>();
+    for (const s of suggestions) {
+      const list = map.get(s.transactionId);
+      if (list) list.push(s);
+      else map.set(s.transactionId, [s]);
+    }
+    return map;
+  }, [suggestions]);
+  const categoryById = useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories]);
+  const txnById = useMemo(() => new Map(txns.map((x) => [x.id, x])), [txns]);
 
   const docLinksByTxn = useMemo(() => {
     const map = new Map<number, AttachmentLink[]>();
@@ -545,6 +603,7 @@ export function TransactionsPage({
     pendingSourceTxn.credit === "0.00";
   const showCategory = visibleColumns.includes("category");
   const showNote = visibleColumns.includes("note");
+  const showSuggestion = visibleColumns.includes("suggestion");
   const showDelta = visibleColumns.includes("delta");
   const showPeer = visibleColumns.includes("peer");
   const showBankDescription = visibleColumns.includes("bank_description");
@@ -712,6 +771,37 @@ export function TransactionsPage({
       return t(`transactions.linkError.${code as WithdrawalErrorCode}`);
     }
     return code;
+  }
+
+  function localizedSuggestionError(code: string): string {
+    if (code.startsWith("suggestion.")) {
+      return t(`suggestions.error.${code.slice("suggestion.".length)}`);
+    }
+    return localizedLinkError(code);
+  }
+
+  // Applying a suggestion may add a cash transaction, a link or categories —
+  // reload all of them along with the suggestions.
+  function onSuggestionApplied() {
+    setLocalRefresh((v) => v + 1);
+    setCategoriesVersion((v) => v + 1);
+    setSuggestionsVersion((v) => v + 1);
+    void refreshLinks();
+  }
+
+  async function downloadReferenceSet() {
+    try {
+      const data = await exportReferenceSet(bulkTargets.map((x) => x.id));
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `a2b-reference-set-${new Date().toISOString().slice(0, 10)}-${bulkTargets.length}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(String(e));
+    }
   }
 
   async function refreshLinks() {
@@ -902,8 +992,10 @@ export function TransactionsPage({
                 selectedCount={bulkTargets.length}
                 onImportTransactions={onImportTransactions}
                 onAnalyzeDocuments={() => setBulkDocsOpen(true)}
-                onProposeCategories={() => setBulkProposeOpen(true)}
+                onDetectCashWithdrawals={() => setBulkDetect("cash_withdrawal")}
+                onDetectTransfers={() => setBulkDetect("transfer")}
                 onAssignCategory={() => setBulkOpen(true)}
+                onExportReferenceSet={() => void downloadReferenceSet()}
               />
             </div>
           </div>
@@ -949,6 +1041,11 @@ export function TransactionsPage({
               {showNote && (
                 <th className="col-note" title={t("transactions.tableNoteTitle")}>
                   {t("transactions.tableNote")}
+                </th>
+              )}
+              {showSuggestion && (
+                <th className="col-suggestion" title={t("transactions.tableSuggestionTitle")}>
+                  {t("transactions.tableSuggestion")}
                 </th>
               )}
               {showCategory && (
@@ -1174,6 +1271,23 @@ export function TransactionsPage({
                         onSaveComment={(c) => persistComment(x.id, c)}
                         links={docLinksByTxn.get(x.id) ?? []}
                         onChanged={() => setDocLinksVersion((v) => v + 1)}
+                      />
+                    )}
+                    {showSuggestion && (
+                      <SuggestionCell
+                        txn={x}
+                        suggestions={suggestionsByTxn.get(x.id) ?? []}
+                        note={
+                          x.comment?.trim() ||
+                          docLinksByTxn.get(x.id)?.find((l) => l.memo)?.memo ||
+                          null
+                        }
+                        txnById={txnById}
+                        accountById={accountById}
+                        categoryById={categoryById}
+                        formatDate={formatInstantLocal}
+                        localizeError={localizedSuggestionError}
+                        onChanged={onSuggestionApplied}
                       />
                     )}
                     {showCategory && (() => {
@@ -1443,11 +1557,13 @@ export function TransactionsPage({
           }}
         />
       )}
-      {bulkProposeOpen && (
-        <BulkProposeCategoriesModal
+      {bulkDetect !== null && (
+        <BulkDetectSuggestionsModal
+          kind={bulkDetect}
           transactions={bulkTargets}
-          onClose={() => setBulkProposeOpen(false)}
-          onDone={() => setLocalRefresh((v) => v + 1)}
+          suggestions={suggestions}
+          onClose={() => setBulkDetect(null)}
+          onDone={() => setSuggestionsVersion((v) => v + 1)}
         />
       )}
       {bulkDocsOpen && (

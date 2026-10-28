@@ -10,17 +10,34 @@ import {
   AttachmentUpload,
   attachmentFileUrl,
   beginAttachmentUpload,
+  deleteAttachments,
+  finishAttachmentUpload,
   IngestReport,
   listAttachments,
   listAttachmentUploads,
+  RECOGNITION_STATUS_EVENT,
+  recognitionStatus,
+  RecognitionStatus,
   uploadAttachmentFile,
 } from "../lib/api";
+import { listen } from "../lib/events";
+import { rangeIds } from "./transactions/selection";
 import { useI18n, useT, useTPlural } from "../i18n";
 
 /** Accepted by the file picker; the server re-checks every file by content. */
 const ACCEPT = "image/jpeg,image/png,image/webp,application/pdf,.zip,application/zip";
 
-type StatusFilter = "all" | "pending" | "recognised" | "unmatched" | "matched";
+type StatusFilter =
+  | "all"
+  | "pending"
+  | "recognised"
+  | "unmatched"
+  | "ambiguous"
+  | "matched";
+
+/** While the background queue runs, the (large) document list is reloaded
+ *  at most this often; it is reloaded once more when the queue empties. */
+const QUEUE_REFRESH_MS = 20_000;
 
 function matchesFilter(doc: Attachment, filter: StatusFilter): boolean {
   switch (filter) {
@@ -32,6 +49,8 @@ function matchesFilter(doc: Attachment, filter: StatusFilter): boolean {
       return doc.extractStatus === "done" || doc.extractStatus === "partial";
     case "unmatched":
       return doc.transactionId === null;
+    case "ambiguous":
+      return doc.transactionId === null && doc.matchStatus === "ambiguous";
     case "matched":
       return doc.transactionId !== null;
   }
@@ -50,6 +69,13 @@ export function DocumentsPage() {
   const tPlural = useTPlural();
   const { locale } = useI18n();
   const [docs, setDocs] = useState<Attachment[]>([]);
+  // False until the first list arrives — the list can take a moment, and an
+  // empty-state flash before a big list is misleading.
+  const [loaded, setLoaded] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [anchorId, setAnchorId] = useState<number | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [uploads, setUploads] = useState<AttachmentUpload[]>([]);
   const [version, setVersion] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -59,7 +85,37 @@ export function DocumentsPage() {
   const [lastReport, setLastReport] = useState<IngestReport | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
+  const [queue, setQueue] = useState<RecognitionStatus | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const lastQueueRefresh = useRef(0);
+
+  // Background recognition: progress comes as SSE events; the document list
+  // follows it (throttled) so statuses, memos and links show up as they land.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+    const onStatus = (status: RecognitionStatus) => {
+      setQueue(status);
+      const now = Date.now();
+      if (status.pending === 0 || now - lastQueueRefresh.current > QUEUE_REFRESH_MS) {
+        lastQueueRefresh.current = now;
+        setVersion((v) => v + 1);
+      }
+    };
+    recognitionStatus()
+      .then((s) => !cancelled && setQueue(s))
+      .catch(() => {});
+    void listen<RecognitionStatus>(RECOGNITION_STATUS_EVENT, (e) => onStatus(e.payload)).then(
+      (fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      },
+    );
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -68,8 +124,13 @@ export function DocumentsPage() {
         if (cancelled) return;
         setDocs(d);
         setUploads(u);
+        setLoaded(true);
       })
-      .catch((e) => !cancelled && setError(String(e)));
+      .catch((e) => {
+        if (cancelled) return;
+        setError(String(e));
+        setLoaded(true);
+      });
     return () => {
       cancelled = true;
     };
@@ -110,8 +171,9 @@ export function DocumentsPage() {
       skipped: 0,
       skippedNames: [],
     };
+    let uploadId: number | null = null;
     try {
-      const uploadId = await beginAttachmentUpload(sourceName);
+      uploadId = await beginAttachmentUpload(sourceName);
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         setProgress({
@@ -134,6 +196,10 @@ export function DocumentsPage() {
     } catch (e) {
       setError(String(e));
     } finally {
+      // Even after an error: what did arrive gets recognised and linked.
+      if (uploadId !== null) {
+        await finishAttachmentUpload(uploadId).catch((e) => setError(String(e)));
+      }
       setProgress(null);
       refresh();
     }
@@ -156,6 +222,64 @@ export function DocumentsPage() {
     return [...byUpload.entries()];
   }, [visible]);
 
+  // Selection only ever covers visible rows: a bulk delete must never touch
+  // something hidden behind a filter.
+  useEffect(() => {
+    setSelected((prev) => {
+      if (prev.size === 0) return prev;
+      const visibleIds = new Set(visible.map((d) => d.id));
+      const next = new Set([...prev].filter((id) => visibleIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [visible]);
+
+  // Rows in display order (grouped by upload), for Shift+click ranges.
+  const orderedIds = useMemo(
+    () => groups.flatMap(([, rows]) => rows.map((d) => d.id)),
+    [groups],
+  );
+
+  function toggleSelect(id: number, shift: boolean) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (shift && anchorId !== null) {
+        for (const r of rangeIds(orderedIds, anchorId, id)) next.add(r);
+      } else if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+    setAnchorId(id);
+    setConfirmingDelete(false);
+  }
+
+  const allVisibleSelected =
+    visible.length > 0 && visible.every((d) => selected.has(d.id));
+
+  function toggleSelectAll() {
+    setSelected(allVisibleSelected ? new Set() : new Set(visible.map((d) => d.id)));
+    setAnchorId(null);
+    setConfirmingDelete(false);
+  }
+
+  async function deleteSelected() {
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteAttachments([...selected]);
+      setSelected(new Set());
+      setAnchorId(null);
+      setConfirmingDelete(false);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setDeleting(false);
+      refresh();
+    }
+  }
+
   const uploadById = useMemo(
     () => new Map(uploads.map((u) => [u.id, u])),
     [uploads],
@@ -167,6 +291,7 @@ export function DocumentsPage() {
       pending: 0,
       recognised: 0,
       unmatched: 0,
+      ambiguous: 0,
       matched: 0,
     };
     for (const d of docs) {
@@ -248,6 +373,22 @@ export function DocumentsPage() {
         </div>
       )}
 
+      {queue && (queue.pending > 0 || queue.pausedError || queue.lastLink || queue.ambiguous > 0) && (
+        <div className="documents-queue">
+          {queue.pausedError ? (
+            <div className="error">{t("documents.queue.paused", { error: queue.pausedError })}</div>
+          ) : (
+            queue.pending > 0 && <div>{t("documents.queue.pending", { count: queue.pending })}</div>
+          )}
+          {queue.lastLink && (
+            <div className="hint">{t("documents.queue.linked", { count: queue.lastLink.linked })}</div>
+          )}
+          {queue.ambiguous > 0 && (
+            <div className="hint">{t("documents.queue.ambiguous", { count: queue.ambiguous })}</div>
+          )}
+        </div>
+      )}
+
       {lastReport && (
         <div className="documents-report">
           {t("documents.reportSummary", {
@@ -304,7 +445,9 @@ export function DocumentsPage() {
         </table>
       )}
 
-      {docs.length === 0 ? (
+      {!loaded ? (
+        <div className="report-loading">{t("common.loading")}</div>
+      ) : docs.length === 0 ? (
         <div
           className="documents-dropzone"
           onClick={() => fileInput.current?.click()}
@@ -328,9 +471,70 @@ export function DocumentsPage() {
             <span className="hint documents-drop-hint">{t("documents.dropHint")}</span>
           </div>
 
+          {selected.size > 0 && (
+            <div className="documents-selection">
+              <span>{t("documents.selection.count", { count: selected.size })}</span>
+              <button
+                type="button"
+                className="btn-danger btn-small"
+                onClick={() => setConfirmingDelete(true)}
+                disabled={deleting || confirmingDelete}
+              >
+                {t("documents.selection.delete")}
+              </button>
+              <button
+                type="button"
+                className="btn-ghost btn-small"
+                onClick={() => {
+                  setSelected(new Set());
+                  setAnchorId(null);
+                  setConfirmingDelete(false);
+                }}
+                disabled={deleting}
+              >
+                {t("documents.selection.clear")}
+              </button>
+              {confirmingDelete && (
+                <div className="danger-confirm">
+                  <p>{t("documents.selection.confirm", { count: selected.size })}</p>
+                  <div className="danger-confirm-actions">
+                    <button
+                      type="button"
+                      className="btn-danger"
+                      onClick={() => void deleteSelected()}
+                      disabled={deleting}
+                    >
+                      {deleting ? t("common.deleting") : t("common.delete")}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      onClick={() => setConfirmingDelete(false)}
+                      disabled={deleting}
+                    >
+                      {t("common.cancel")}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <table className="documents-table">
             <thead>
               <tr>
+                <th className="col-select">
+                  <input
+                    type="checkbox"
+                    aria-label={t("documents.selection.all")}
+                    title={t("documents.selection.all")}
+                    checked={allVisibleSelected}
+                    ref={(el) => {
+                      if (el) el.indeterminate = !allVisibleSelected && selected.size > 0;
+                    }}
+                    onChange={toggleSelectAll}
+                  />
+                </th>
                 <th className="col-thumb" />
                 <th>{t("documents.colFile")}</th>
                 <th>{t("documents.colStatus")}</th>
@@ -343,7 +547,7 @@ export function DocumentsPage() {
               return (
                 <tbody key={uploadId}>
                   <tr className="documents-group">
-                    <td colSpan={5}>
+                    <td colSpan={6}>
                       {upload ? formatDateTime(upload.uploadedAt) : ""}
                       {upload?.sourceName && <> · {upload.sourceName}</>}
                       <span className="hint">
@@ -353,7 +557,13 @@ export function DocumentsPage() {
                     </td>
                   </tr>
                   {rows.map((d) => (
-                    <DocumentRow key={d.id} doc={d} onOpen={() => setOpenId(d.id)} />
+                    <DocumentRow
+                      key={d.id}
+                      doc={d}
+                      selected={selected.has(d.id)}
+                      onToggle={(shift) => toggleSelect(d.id, shift)}
+                      onOpen={() => setOpenId(d.id)}
+                    />
                   ))}
                 </tbody>
               );
@@ -377,11 +587,32 @@ export function DocumentsPage() {
   );
 }
 
-function DocumentRow({ doc, onOpen }: { doc: Attachment; onOpen: () => void }) {
+function DocumentRow({
+  doc,
+  selected,
+  onToggle,
+  onOpen,
+}: {
+  doc: Attachment;
+  selected: boolean;
+  /** `shift` — Shift+click: select the range from the previous click. */
+  onToggle: (shift: boolean) => void;
+  onOpen: () => void;
+}) {
   const t = useT();
   const extraction = parseExtraction(doc.extraction);
   return (
-    <tr className="documents-row" onClick={onOpen}>
+    <tr className={`documents-row${selected ? " is-selected" : ""}`} onClick={onOpen}>
+      <td
+        className="col-select"
+        onClick={(e) => {
+          // The whole cell is the hit area; it never opens the document.
+          e.stopPropagation();
+          onToggle(e.shiftKey);
+        }}
+      >
+        <input type="checkbox" checked={selected} readOnly tabIndex={-1} />
+      </td>
       <td className="col-thumb">
         {doc.mimeType.startsWith("image/") ? (
           <img src={attachmentFileUrl(doc.id)} alt="" loading="lazy" />
