@@ -49,6 +49,7 @@ import {
 } from "../lib/api";
 import { formatMoney, parseMoneyToMinor } from "../lib/money";
 import { useViewState } from "../lib/view-state";
+import { buildTree, flattenTree } from "../lib/category-tree";
 import { isUnsure } from "../lib/suggestion-state";
 import { TransactionModal } from "../components/TransactionModal";
 import { BulkCategorizeModal } from "../components/BulkCategorizeModal";
@@ -75,10 +76,13 @@ type RowKind =
   | "linked"
   | "unlinked"
   | "with_suggestion"
-  | "without_suggestion";
+  | "without_suggestion"
+  | "with_category"
+  | "without_category";
 
-/// The Filter dropdown has four groups: row kinds, note presence, transfer
-/// links and pending suggestions. Within a group items combine with OR, the groups combine
+/// The Filter dropdown has five groups: row kinds, note presence, transfer
+/// links, pending suggestions and categories (any category / none; which
+/// categories is the separate Categories filter). Within a group items combine with OR, the groups combine
 /// with AND — so "Outgoing" + "Without note" means outgoing rows nothing is
 /// known about yet, and unticking "Linked pairs" hides both sides of every
 /// transfer / cash withdrawal.
@@ -93,6 +97,8 @@ type RowKind =
 const NOTE_KINDS: RowKind[] = ["with_note", "without_note"];
 const LINK_KINDS: RowKind[] = ["linked", "unlinked"];
 const SUGGESTION_KINDS: RowKind[] = ["with_suggestion", "without_suggestion"];
+const CATEGORY_KINDS: RowKind[] = ["with_category", "without_category"];
+const GROUPED_KINDS: RowKind[] = [...NOTE_KINDS, ...LINK_KINDS, ...SUGGESTION_KINDS, ...CATEGORY_KINDS];
 const ROW_KINDS: RowKind[] = [
   "correcting",
   "incoming",
@@ -102,6 +108,7 @@ const ROW_KINDS: RowKind[] = [
   ...NOTE_KINDS,
   ...LINK_KINDS,
   ...SUGGESTION_KINDS,
+  ...CATEGORY_KINDS,
 ];
 
 /// Two display modes for the Δ column. "percent" is the default:
@@ -193,6 +200,8 @@ function rowMatchesKind(row: { isCorrecting: boolean; credit: string; debit: str
     case "unlinked":
     case "with_suggestion":
     case "without_suggestion":
+    case "with_category":
+    case "without_category":
       // Note, link and suggestion presence are decided by the caller (they
       // need the document-link, transfer-link and suggestion maps).
       return false;
@@ -292,7 +301,7 @@ export function TransactionsPage({
   const [lifeContexts, setLifeContexts] = useState<LifeContext[]>([]);
   const [error, setError] = useState<string | null>(null);
   // Filters survive switching tabs (see lib/view-state.ts).
-  const [selectedKinds, setSelectedKinds] = useViewState<RowKind[]>("transactions.kinds.v3", () => [
+  const [selectedKinds, setSelectedKinds] = useViewState<RowKind[]>("transactions.kinds.v4", () => [
     ...ROW_KINDS,
   ]);
   const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(() => [
@@ -671,6 +680,38 @@ export function TransactionsPage({
     return map;
   }, [txnCategories]);
 
+  // Categories filter: `null` = all (no filtering). Picking a category also
+  // takes its subcategories, so the set holds every matching id.
+  const [categoryFilter, setCategoryFilter] = useViewState<number[] | null>("transactions.categories", null);
+  const categoryFilterIds = useMemo(() => {
+    if (categoryFilter === null) return null;
+    const ids = new Set(categoryFilter);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const c of categories) {
+        if (c.parentId !== null && ids.has(c.parentId) && !ids.has(c.id)) {
+          ids.add(c.id);
+          grew = true;
+        }
+      }
+    }
+    return ids;
+  }, [categoryFilter, categories]);
+  // Tree order for the picker: income then expense, system ones first.
+  const categoryFilterItems = useMemo(
+    () =>
+      (["income", "expense"] as const).flatMap((kind) =>
+        flattenTree(buildTree(categories, kind)).map((n) => ({
+          id: n.category.id,
+          label: n.category.name,
+          depth: n.depth,
+          group: t(kind === "income" ? "categories.sectionIncome" : "categories.sectionExpense"),
+        })),
+      ),
+    [categories, t],
+  );
+
   // First-time default for the account filter: select all accounts. After this
   // initialisation the user owns the selection — clearing it stays cleared.
   useEffect(() => {
@@ -777,15 +818,17 @@ export function TransactionsPage({
       const noteKinds = selectedKinds.filter((k) => NOTE_KINDS.includes(k));
       const linkKinds = selectedKinds.filter((k) => LINK_KINDS.includes(k));
       const suggestionKinds = selectedKinds.filter((k) => SUGGESTION_KINDS.includes(k));
-      const rowKinds = selectedKinds.filter(
-        (k) => !NOTE_KINDS.includes(k) && !LINK_KINDS.includes(k) && !SUGGESTION_KINDS.includes(k),
-      );
+      const categoryKinds = selectedKinds.filter((k) => CATEGORY_KINDS.includes(k));
+      const rowKinds = selectedKinds.filter((k) => !GROUPED_KINDS.includes(k));
       const hasNote = !!x.comment?.trim() || docLinksByTxn.has(x.id);
       if (!noteKinds.some((k) => (k === "with_note") === hasNote)) return false;
       const isLinked = linkPartnerById.has(x.id);
       if (!linkKinds.some((k) => (k === "linked") === isLinked)) return false;
       const hasSuggestion = (suggestionsByTxn.get(x.id) ?? []).some((s) => !isUnsure(s, agentMinConfidence));
       if (!suggestionKinds.some((k) => (k === "with_suggestion") === hasSuggestion)) return false;
+      const txnCats = categoriesByTxn.get(x.id) ?? [];
+      if (!categoryKinds.some((k) => (k === "with_category") === txnCats.length > 0)) return false;
+      if (categoryFilterIds !== null && !txnCats.some((c) => categoryFilterIds.has(c.categoryId))) return false;
       return rowKinds.some((k) => rowMatchesKind(x, k));
     });
   }, [
@@ -798,6 +841,8 @@ export function TransactionsPage({
     linkPartnerById,
     suggestionsByTxn,
     agentMinConfidence,
+    categoriesByTxn,
+    categoryFilterIds,
   ]);
 
   // The "same account" hover tint only tells something when the visible rows
@@ -1130,7 +1175,9 @@ export function TransactionsPage({
                       ? t("transactions.filterGroupLink")
                       : SUGGESTION_KINDS.includes(k)
                         ? t("transactions.filterGroupSuggestion")
-                        : t("transactions.filterGroupKind"),
+                        : CATEGORY_KINDS.includes(k)
+                          ? t("transactions.filterGroupCategory")
+                          : t("transactions.filterGroupKind"),
                 }))}
                 selected={selectedKinds}
                 onApply={setSelectedKinds}
@@ -1140,6 +1187,19 @@ export function TransactionsPage({
                 multiSelectedLabel={(count) =>
                   t("transactions.filterKindMany", { count })
                 }
+                applyLabel={t("transactions.applyButton")}
+              />
+            </label>
+            <label className="filter-field">
+              <span>{t("transactions.filterCategories")}</span>
+              <MultiSelectDropdown<number>
+                items={categoryFilterItems}
+                selected={categoryFilter ?? categoryFilterItems.map((i) => i.id)}
+                onApply={(ids) => setCategoryFilter(ids.length === categoryFilterItems.length ? null : ids)}
+                allLabel={t("transactions.filterCategoriesAll")}
+                noneLabel={t("transactions.filterCategoriesNone")}
+                emptyItemsLabel={t("transactions.filterCategoriesAll")}
+                multiSelectedLabel={(count) => t("transactions.filterCategoriesMany", { count })}
                 applyLabel={t("transactions.applyButton")}
               />
             </label>

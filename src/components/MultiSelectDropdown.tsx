@@ -6,6 +6,8 @@ export interface MultiSelectItem<T extends string | number> {
   /** Optional group heading. Consecutive items with the same group are
    *  rendered together; a divider + heading separates groups. */
   group?: string;
+  /** Optional nesting level (a tree, e.g. categories): indents the row. */
+  depth?: number;
 }
 
 interface Props<T extends string | number> {
@@ -127,7 +129,10 @@ export function MultiSelectDropdown<T extends string | number>({
                     <div className="dropdown-group">{item.group}</div>
                   </>
                 )}
-                <label className="dropdown-item">
+                <label
+                  className="dropdown-item"
+                  style={item.depth ? { paddingLeft: 8 + item.depth * 16 } : undefined}
+                >
                   <input
                     type="checkbox"
                     checked={pending.includes(item.id)}

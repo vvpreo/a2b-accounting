@@ -236,7 +236,9 @@
       "linked": "Связанные пары 🔗",
       "unlinked": "Без пары",
       "with_suggestion": "С предложениями",
-      "without_suggestion": "Без предложений"
+      "without_suggestion": "Без предложений",
+      "with_category": "С категорией",
+      "without_category": "Без категории"
     },
     "column": {
       "context": "Контекст",
@@ -347,7 +349,12 @@
     "tableContextTitle": "Что происходило в жизни в день транзакции (экран «Контекст»)",
     "tableExampleTitle": "Примеры для агента: ✨ — транзакцию агент видит как образец вашей разметки. Нажмите ✨ у размеченной транзакции, чтобы отметить или снять.",
     "splitHandle": "Потяните, чтобы отдать ширину «Предложению» или «Категории». Двойной щелчок — по умолчанию.",
-    "filterGroupSuggestion": "Предложения"
+    "filterGroupSuggestion": "Предложения",
+    "filterGroupCategory": "Категория",
+    "filterCategories": "Категории",
+    "filterCategoriesAll": "Все категории",
+    "filterCategoriesNone": "Ничего",
+    "filterCategoriesMany": "Выбрано: {count}"
   },
   "import": {
     "title": "Импорт транзакций",

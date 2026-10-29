@@ -232,7 +232,9 @@
       "linked": "Linked pairs 🔗",
       "unlinked": "Not linked",
       "with_suggestion": "With suggestions",
-      "without_suggestion": "Without suggestions"
+      "without_suggestion": "Without suggestions",
+      "with_category": "With a category",
+      "without_category": "Without a category"
     },
     "column": {
       "context": "Context",
@@ -343,7 +345,12 @@
     "tableContextTitle": "What was going on in life on the transaction day (the Context screen)",
     "tableExampleTitle": "Examples for the agent: ✨ — the agent sees this transaction as an example of how you categorise. Click ✨ on a categorised transaction to mark or unmark it.",
     "splitHandle": "Drag to give the width to Suggestion or Category. Double-click resets.",
-    "filterGroupSuggestion": "Suggestions"
+    "filterGroupSuggestion": "Suggestions",
+    "filterGroupCategory": "Category",
+    "filterCategories": "Categories",
+    "filterCategoriesAll": "All categories",
+    "filterCategoriesNone": "None",
+    "filterCategoriesMany": "Selected: {count}"
   },
   "import": {
     "title": "Import transactions",
