@@ -24,8 +24,8 @@ const LIST_LIMIT = 20;
 /// Categories screen → "Examples for the agent": per category, whether the
 /// agent has enough of the user's own categorisations to follow — how many
 /// there are, which ones the model sees, counterparties with mixed answers
-/// and the agent's own mistakes. Every row has ☆/★ to mark an example; the
-/// Transactions screen marks them too (★ in the category cell, Actions ▾).
+/// and the agent's own mistakes. Every row has ✨ to mark an example; the
+/// Transactions screen marks them too (the ✨ column, Actions ▾).
 export function AgentExamplesSection({ categories }: Props) {
   const t = useT();
   const { locale, tPlural } = useI18n();
@@ -102,7 +102,7 @@ export function AgentExamplesSection({ categories }: Props) {
           aria-pressed={isMarked}
           onClick={() => void toggle(id, !isMarked)}
         >
-          {isMarked ? "★" : "☆"}
+          ✨
         </button>
         <span className="agent-example-date">{new Date(x.occurredAtUtc).toLocaleDateString(locale)}</span>
         <span className="agent-example-amount">{amount}</span>

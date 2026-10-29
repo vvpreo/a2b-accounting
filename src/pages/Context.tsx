@@ -6,10 +6,16 @@ import {
   LifeContext,
   createLifeContext,
   deleteLifeContext,
+  getSetting,
   listLifeContexts,
+  setSetting,
   updateLifeContext,
 } from "../lib/api";
 import { ROOT_PALETTE, nextRootColor } from "../lib/colors";
+import { useViewState } from "../lib/view-state";
+
+/** `app_settings` key of the life description (server: `life_contexts::DESCRIPTION_KEY`). */
+const DESCRIPTION_KEY = "life.description";
 
 /** Inclusive number of days in `from..to` (YYYY-MM-DD). */
 function daysBetween(from: string, to: string): number {
@@ -17,11 +23,89 @@ function daysBetween(from: string, to: string): number {
   return Math.round(ms / 86_400_000) + 1;
 }
 
-/** "Context" screen: date intervals of what was going on in life (a trip with
- *  the kids, an illness, …). Intervals may overlap. The Transactions screen
- *  shows the contexts of each transaction's day, and the category model gets
- *  them too. */
+/** "Life context" screen, two tabs: "Context" — the user's own description of
+ *  their life (family, names, places, hobbies) that the category agent reads
+ *  — and "Events" — date intervals of what was going on. */
 export function ContextPage() {
+  const t = useT();
+  const [tab, setTab] = useViewState<"description" | "events">("context.tab", "description");
+  return (
+    <section className="page page--context">
+      <div className="settings-tabs">
+        {(["description", "events"] as const).map((key) => (
+          <button
+            key={key}
+            type="button"
+            className={"settings-tab-button" + (tab === key ? " active" : "")}
+            onClick={() => setTab(key)}
+          >
+            {t(`context.tabs.${key}`)}
+          </button>
+        ))}
+      </div>
+      {tab === "description" ? <LifeDescription /> : <EventsTab />}
+    </section>
+  );
+}
+
+/** "Context" tab: one free text about the user's life. Saved on blur and by
+ *  the button; the category agent gets it in its system prompt. */
+function LifeDescription() {
+  const t = useT();
+  const [text, setText] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getSetting(DESCRIPTION_KEY)
+      .then((v) => {
+        setText(v ?? "");
+        setSaved(v ?? "");
+      })
+      .catch((e) => setError(String(e)));
+  }, []);
+
+  async function save() {
+    if (text === null || text === saved) return;
+    setError(null);
+    try {
+      await setSetting(DESCRIPTION_KEY, text);
+      setSaved(text);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  if (text === null) return error ? <div className="error">{error}</div> : <p className="hint">{t("common.loading")}</p>;
+  return (
+    <div className="life-description">
+      <p className="hint">{t("context.description.hint")}</p>
+      <textarea
+        value={text}
+        rows={16}
+        placeholder={t("context.description.placeholder")}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={() => void save()}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void save();
+        }}
+      />
+      {error && <div className="error">{error}</div>}
+      <div className="settings-actions-row">
+        <button type="button" className="btn-primary" disabled={text === saved} onClick={() => void save()}>
+          {t("settings.ai.saveButton")}
+        </button>
+        <span className="hint">{text === saved ? t("context.description.saved") : t("context.description.unsaved")}</span>
+      </div>
+    </div>
+  );
+}
+
+/** "Events" tab: date intervals of what was going on in life (a trip with the
+ *  kids, an illness, …). Intervals may overlap. The Transactions screen shows
+ *  the events of each transaction's day, and the category model gets them
+ *  too. */
+function EventsTab() {
   const t = useT();
   const { locale } = useI18n();
   const [items, setItems] = useState<LifeContext[]>([]);
@@ -42,14 +126,13 @@ export function ContextPage() {
   const formatDay = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString(locale);
 
   return (
-    <section className="page page--context">
+    <>
       <header className="categories-section-header">
-        <h2>{t("context.title")}</h2>
+        <p className="hint">{t("context.hint")}</p>
         <button type="button" className="btn-primary" onClick={() => setEditing("new")}>
           {t("context.add")}
         </button>
       </header>
-      <p className="hint">{t("context.hint")}</p>
       {error && <div className="error">{error}</div>}
 
       {items.length === 0 ? (
@@ -96,7 +179,7 @@ export function ContextPage() {
           }}
         />
       )}
-    </section>
+    </>
   );
 }
 

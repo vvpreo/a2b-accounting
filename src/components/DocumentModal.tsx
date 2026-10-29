@@ -79,6 +79,9 @@ export function DocumentModal(props: {
   onDeleted: () => void;
   /** After unlinking from its transaction or re-recognising. */
   onChanged: () => void;
+  /** Opened from a transaction's document picker: link the document to that
+   *  transaction right here (the host closes the viewer afterwards). */
+  onLink?: () => Promise<void>;
 }) {
   const t = useT();
   const { locale } = useI18n();
@@ -200,7 +203,7 @@ export function DocumentModal(props: {
                 </button>
               </div>
             ) : (
-              <p className="hint">{t("documents.notLinkedHint")}</p>
+              <p className="hint">{props.onLink ? t("documents.linkHereHint") : t("documents.notLinkedHint")}</p>
             )}
 
             <h4>{t("documents.fileTitle")}</h4>
@@ -264,9 +267,25 @@ export function DocumentModal(props: {
           <a className="btn-ghost" href={url} target="_blank" rel="noreferrer">
             {t("documents.openOriginal")}
           </a>
-          <button type="button" className="btn-primary" onClick={props.onClose}>
-            {t("common.close")}
-          </button>
+          {props.onLink ? (
+            <>
+              <button type="button" className="btn-secondary" onClick={props.onClose}>
+                {t("common.close")}
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={busy}
+                onClick={() => run(props.onLink!, () => {})}
+              >
+                {t("transaction.link")}
+              </button>
+            </>
+          ) : (
+            <button type="button" className="btn-primary" onClick={props.onClose}>
+              {t("common.close")}
+            </button>
+          )}
         </footer>
       </div>
     </div>,

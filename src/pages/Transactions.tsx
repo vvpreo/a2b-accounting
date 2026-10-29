@@ -107,17 +107,20 @@ const DELTA_MODE_SETTING_KEY = "transactions.delta_display_mode";
 
 type ColumnKey =
   | "context"
+  | "example"
   | "delta"
   | "category"
   | "note"
   | "suggestion"
   | "peer"
   | "bank_description";
-// Picker order follows the table: Context (leftmost, before the checkbox),
-// the fixed money/date block, Note, Suggestion, category, then the transfer
-// columns (🔗 always shown, Δ optional), then free text.
+// Picker order follows the table: Context (leftmost), ✨ examples for the
+// agent, then the checkbox, the fixed money/date block, Note, Suggestion,
+// category, then the transfer columns (🔗 always shown, Δ optional), then
+// free text.
 const COLUMN_KEYS: ColumnKey[] = [
   "context",
+  "example",
   "note",
   "suggestion",
   "category",
@@ -253,8 +256,7 @@ export function TransactionsPage({
   const [bulkDocsOpen, setBulkDocsOpen] = useState(false);
   const [bulkDetect, setBulkDetect] = useState<DetectKind | null>(null);
   const [bulkSuggestOpen, setBulkSuggestOpen] = useState(false);
-  // Transactions marked as examples for the category agent (★ in the
-  // category cell).
+  // Transactions marked as examples for the category agent (the ✨ column).
   const [exampleIds, setExampleIds] = useState<Set<number>>(() => new Set());
   // Pending suggestions (cash withdrawal / transfer / category) for the
   // Suggestion column, and the categories to describe category suggestions.
@@ -682,6 +684,7 @@ export function TransactionsPage({
   const showNote = visibleColumns.includes("note");
   const showSuggestion = visibleColumns.includes("suggestion");
   const showContext = visibleColumns.includes("context");
+  const showExample = visibleColumns.includes("example");
   const showDelta = visibleColumns.includes("delta");
   const showPeer = visibleColumns.includes("peer");
   const showBankDescription = visibleColumns.includes("bank_description");
@@ -1108,6 +1111,11 @@ export function TransactionsPage({
                   {t("transactions.tableContext")}
                 </th>
               )}
+              {showExample && (
+                <th className="col-example" title={t("transactions.tableExampleTitle")}>
+                  <span className="col-example-icon">✨</span>
+                </th>
+              )}
               <th className="col-select">
                 <input
                   type="checkbox"
@@ -1340,6 +1348,25 @@ export function TransactionsPage({
                         </td>
                       );
                     })()}
+                    {showExample && (
+                      <td className="col-example">
+                        {(categoriesByTxn.get(x.id)?.length ?? 0) > 0 && (
+                          <button
+                            type="button"
+                            className={`txn-example-btn${exampleIds.has(x.id) ? " is-example" : ""}`}
+                            aria-pressed={exampleIds.has(x.id)}
+                            title={
+                              exampleIds.has(x.id)
+                                ? t("transactions.categories.exampleOn")
+                                : t("transactions.categories.exampleOff")
+                            }
+                            onClick={() => void markExamples([x.id], !exampleIds.has(x.id))}
+                          >
+                            ✨
+                          </button>
+                        )}
+                      </td>
+                    )}
                     <td className="col-select">
                       <SelectCheckbox
                         selected={isSelected}
@@ -1436,8 +1463,6 @@ export function TransactionsPage({
                           kind={kind}
                           entries={entries}
                           onChanged={() => setCategoriesVersion((v) => v + 1)}
-                          isExample={exampleIds.has(x.id)}
-                          onToggleExample={() => void markExamples([x.id], !exampleIds.has(x.id))}
                         />
                       );
                     })()}

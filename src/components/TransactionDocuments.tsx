@@ -12,8 +12,9 @@ import {
 } from "../lib/api";
 import { baseName, DocumentModal, formatDocTime, parseExtraction } from "./DocumentModal";
 
-/** Time windows offered when picking a document by eye, in minutes. */
-const WINDOWS = [5, 30, 24 * 60];
+/** Time windows offered when picking a document by eye, in minutes. ±2 days
+ *  is for old statements that kept only the date, not the time. */
+const WINDOWS = [5, 30, 24 * 60, 2 * 24 * 60];
 
 /** "+55 s", "−2 min 10 s", "+3 h 5 min" — document time relative to the
  *  transaction. */
@@ -64,6 +65,8 @@ export function TransactionDocuments({
   const [picking, setPicking] = useState(initialPicking);
   const [windowMinutes, setWindowMinutes] = useState(WINDOWS[0]);
   const [found, setFound] = useState<AttachmentCandidates | null>(null);
+  // Documents already linked to another transaction are hidden by default.
+  const [showLinkedElsewhere, setShowLinkedElsewhere] = useState(false);
   const [viewing, setViewing] = useState<Attachment | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
@@ -108,6 +111,10 @@ export function TransactionDocuments({
       setError(String(e));
     }
   }
+
+  const isElsewhere = (doc: Attachment) => doc.transactionId !== null && doc.transactionId !== transactionId;
+  const shown = (found?.candidates ?? []).filter((c) => showLinkedElsewhere || !isElsewhere(c.attachment));
+  const hiddenElsewhere = (found?.candidates.length ?? 0) - shown.length;
 
   const docTime = (doc: Attachment) => {
     const value = parseExtraction(doc.extraction)?.occurredAt?.value;
@@ -172,15 +179,21 @@ export function TransactionDocuments({
               </button>
             ))}
           </div>
+          <label className="checkbox-row txn-doc-picker-option">
+            <input
+              type="checkbox"
+              checked={showLinkedElsewhere}
+              onChange={(e) => setShowLinkedElsewhere(e.target.checked)}
+            />
+            <span>{t("transaction.showLinkedElsewhere")}</span>
+          </label>
           {!found ? (
             <p className="hint">{t("common.loading")}</p>
           ) : (
             <>
-              {found.candidates.length === 0 && (
-                <p className="hint">{t("transaction.noCandidates")}</p>
-              )}
+              {shown.length === 0 && <p className="hint">{t("transaction.noCandidates")}</p>}
               <ul className="txn-doc-list">
-                {found.candidates.map(({ attachment: doc, deltaSeconds }) => {
+                {shown.map(({ attachment: doc, deltaSeconds }) => {
                   const here = doc.transactionId === transactionId;
                   const elsewhere = doc.transactionId !== null && !here;
                   return (
@@ -213,6 +226,9 @@ export function TransactionDocuments({
                   );
                 })}
               </ul>
+              {!showLinkedElsewhere && hiddenElsewhere > 0 && (
+                <p className="hint">{t("transaction.hiddenLinkedElsewhere", { count: hiddenElsewhere })}</p>
+              )}
               {found.undatedCount > 0 && (
                 <p className="hint">
                   {t("transaction.undatedDocuments", { count: found.undatedCount })}
@@ -226,6 +242,15 @@ export function TransactionDocuments({
       {viewing && (
         <DocumentModal
           doc={viewing}
+          onLink={
+            viewing.transactionId === transactionId
+              ? undefined
+              : async () => {
+                  await linkAttachment(viewing.id, transactionId);
+                  setViewing(null);
+                  changed();
+                }
+          }
           onClose={() => setViewing(null)}
           onDeleted={() => {
             setViewing(null);

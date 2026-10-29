@@ -51,6 +51,12 @@ function accountLabel(acc: Account | undefined): string {
   return acc ? acc.name || acc.accountNumber || acc.bank : "—";
 }
 
+/** The category agent looked and was not sure: a mark with its reason, no
+ *  category, nothing to apply — only to dismiss. */
+function isUnsure(s: Suggestion): boolean {
+  return s.kind === "category" && s.categoryId === null;
+}
+
 function confidenceClass(c: number): string {
   if (c >= 8) return "is-high";
   if (c >= 5) return "is-mid";
@@ -74,7 +80,7 @@ function useTargetLabel(l: SuggestionLookups) {
         });
       }
       case "category":
-        return s.categoryId !== null ? categoryPath(s.categoryId, l.categoryById) : "—";
+        return s.categoryId !== null ? categoryPath(s.categoryId, l.categoryById) : t("suggestions.unsure");
     }
   };
 }
@@ -82,6 +88,7 @@ function useTargetLabel(l: SuggestionLookups) {
 function KindIcon({ s, categoryById }: { s: Suggestion; categoryById: Map<number, Category> }) {
   if (s.kind === "cash_withdrawal") return <span aria-hidden="true">💵</span>;
   if (s.kind === "transfer") return <span aria-hidden="true">🔗</span>;
+  if (isUnsure(s)) return <span className="suggestion-unsure-icon" aria-hidden="true">?</span>;
   const color = s.categoryId !== null ? categoryById.get(s.categoryId)?.color : undefined;
   return <span className="suggestion-dot" style={{ background: color ?? "#a1a1aa" }} aria-hidden="true" />;
 }
@@ -104,15 +111,17 @@ export function SuggestionCell({ txn, suggestions, note, onChanged, ...lookups }
       {main && (
         <button
           type="button"
-          className={`suggestion-cell suggestion-cell--${main.kind}`}
-          title={`${label(main)} · ${main.confidence}/10\n${main.rationale}`}
+          className={`suggestion-cell suggestion-cell--${main.kind}${isUnsure(main) ? " suggestion-cell--unsure" : ""}`}
+          title={isUnsure(main) ? `${label(main)}\n${main.rationale}` : `${label(main)} · ${main.confidence}/10\n${main.rationale}`}
           onClick={() => setOpen(true)}
         >
           <KindIcon s={main} categoryById={lookups.categoryById} />
           <span className="suggestion-cell-text">{label(main)}</span>
-          <span className={`suggestion-confidence ${confidenceClass(main.confidence)}`}>
-            {main.confidence}
-          </span>
+          {!isUnsure(main) && (
+            <span className={`suggestion-confidence ${confidenceClass(main.confidence)}`}>
+              {main.confidence}
+            </span>
+          )}
           {sorted.length > 1 && (
             <span className="suggestion-more" title={t("suggestions.more", { count: sorted.length - 1 })}>
               +{sorted.length - 1}
@@ -223,14 +232,19 @@ function SuggestionsModal({
                   <KindIcon s={s} categoryById={lookups.categoryById} />
                   <span className="suggestion-card-kind">{t(`suggestions.kind.${s.kind}`)}</span>
                   <span className="suggestion-card-target">{label(s)}</span>
-                  <span className={`suggestion-confidence ${confidenceClass(s.confidence)}`}>
-                    {t("suggestions.confidence", { value: s.confidence })}
-                  </span>
+                  {!isUnsure(s) && (
+                    <span className={`suggestion-confidence ${confidenceClass(s.confidence)}`}>
+                      {t("suggestions.confidence", { value: s.confidence })}
+                    </span>
+                  )}
                 </div>
                 <p className="suggestion-rationale">
-                  <span className="txn-field-label">{t("suggestions.rationale")}</span>
+                  <span className="txn-field-label">
+                    {isUnsure(s) ? t("suggestions.unsureRationale") : t("suggestions.rationale")}
+                  </span>
                   {s.rationale}
                 </p>
+                {isUnsure(s) && <p className="hint">{t("suggestions.unsureHint")}</p>}
                 {partner && (
                   <div className="suggestion-partner">
                     <span className="txn-field-label">{t("suggestions.partner")}</span>
@@ -283,14 +297,16 @@ function SuggestionsModal({
                   >
                     {t("suggestions.dismiss")}
                   </button>
-                  <button
-                    type="button"
-                    className="btn-primary"
-                    disabled={busy !== null}
-                    onClick={() => void act(s, "apply")}
-                  >
-                    {busy === s.id ? t("common.saving") : t("suggestions.apply")}
-                  </button>
+                  {!isUnsure(s) && (
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      disabled={busy !== null}
+                      onClick={() => void act(s, "apply")}
+                    >
+                      {busy === s.id ? t("common.saving") : t("suggestions.apply")}
+                    </button>
+                  )}
                 </div>
               </section>
             );

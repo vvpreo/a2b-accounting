@@ -3231,38 +3231,6 @@ code {
   opacity: 1;
 }
 
-/* ★ — an example for the category agent: always visible when set, on hover
-   otherwise (like ✎). */
-.txn-categories-example-btn {
-  position: absolute;
-  top: 2px;
-  right: 24px;
-  width: 20px;
-  height: 20px;
-  border: 0;
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.8);
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-  color: #1f2937;
-  opacity: 0;
-  transition: opacity 0.1s;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-}
-
-.txn-categories-cell:hover .txn-categories-example-btn,
-.txn-categories-example-btn.is-example {
-  opacity: 1;
-}
-
-.txn-categories-example-btn.is-example {
-  color: #d97706;
-}
-
 .txn-categories-tooltip {
   position: absolute;
   top: calc(100% + 4px);
@@ -3625,14 +3593,9 @@ code {
       );
   }
 
-:root[data-theme="dark"] .txn-categories-edit-btn,
-:root[data-theme="dark"] .txn-categories-example-btn {
+:root[data-theme="dark"] .txn-categories-edit-btn {
     background: rgba(24, 24, 27, 0.85);
     color: #e4e4e7;
-  }
-
-:root[data-theme="dark"] .txn-categories-example-btn.is-example {
-    color: #fbbf24;
   }
 
 :root[data-theme="dark"] .txn-categories-tooltip {
@@ -5010,6 +4973,8 @@ tbody tr.is-selected td.col-select {
   left: 0;
   z-index: 50;
   min-width: 220px;
+  width: max-content;
+  max-width: calc(100vw - 32px);
   background: #fff;
   border: 1px solid #e4e4e7;
   border-radius: 6px;
@@ -5035,6 +5000,34 @@ tbody tr.is-selected td.col-select {
 .bulk-actions-item:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+.bulk-actions-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, auto));
+  gap: 0 4px;
+}
+.bulk-actions-group + .bulk-actions-group {
+  border-left: 1px solid #e4e4e7;
+  padding-left: 4px;
+}
+.bulk-actions-group-title {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #71717a;
+  cursor: default;
+}
+@media (max-width: 560px) {
+  .bulk-actions-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .bulk-actions-group + .bulk-actions-group {
+    border-left: 0;
+    padding-left: 0;
+    border-top: 1px solid #e4e4e7;
+  }
 }
 .bulk-actions-hint {
   margin: 4px 8px 6px;
@@ -5183,6 +5176,14 @@ tbody tr.is-selected td.col-select {
 
 :root[data-theme="dark"] .bulk-actions-item:hover:not(:disabled) {
     background: #2a2a30;
+  }
+
+:root[data-theme="dark"] .bulk-actions-group + .bulk-actions-group {
+    border-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .bulk-actions-group-title {
+    color: #a1a1aa;
   }
 
 :root[data-theme="dark"] .btn-secondary {
@@ -5922,7 +5923,13 @@ a.btn-ghost {
 .txn-doc-picker-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
+  font-size: 13px;
+}
+
+.txn-doc-picker-option {
+  margin: 8px 0 4px;
   font-size: 13px;
 }
 
@@ -6528,6 +6535,56 @@ tr.account-strip-row.drop-after td {
 }
 
 /* Context column on the Transactions screen — right after the checkbox. */
+.page--transactions th.col-example,
+.page--transactions td.col-example {
+  width: 30px;
+  min-width: 30px;
+  max-width: 30px;
+  padding: 0;
+  text-align: center;
+}
+
+.txn-example-btn {
+  border: 0;
+  background: none;
+  padding: 2px;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  filter: grayscale(1);
+  opacity: 0;
+}
+
+tr:hover .txn-example-btn,
+.txn-example-btn:focus-visible {
+  opacity: 0.35;
+}
+
+.txn-example-btn.is-example,
+tr:hover .txn-example-btn.is-example {
+  filter: none;
+  opacity: 1;
+}
+
+/* ✨ for agent examples: the yellow emoji fades on a light background, so
+   in the light theme a marked one gets a thin dark-amber outline and an
+   unmarked one is less transparent. The dark theme needs neither. */
+:root:not([data-theme="dark"]) .txn-example-btn.is-example,
+:root:not([data-theme="dark"]) .agent-example.is-marked .agent-example-star,
+:root:not([data-theme="dark"]) .col-example-icon {
+  filter: drop-shadow(0 0 0.6px #78350f) drop-shadow(0 0 0.6px #78350f);
+}
+
+:root:not([data-theme="dark"]) tr:hover .txn-example-btn:not(.is-example),
+:root:not([data-theme="dark"]) .agent-example:not(.is-marked) .agent-example-star {
+  filter: grayscale(1) brightness(0.55);
+  opacity: 0.55;
+}
+
+:root:not([data-theme="dark"]) .agent-example:not(.is-marked) .agent-example-star:hover {
+  opacity: 0.8;
+}
+
 .page--transactions th.col-context,
 .page--transactions td.col-context {
   max-width: 220px;
@@ -6677,6 +6734,56 @@ tr.account-strip-row.drop-after td {
 .ai-usage .num {
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.suggestion-cell--unsure {
+  color: #71717a;
+  font-style: italic;
+}
+
+.suggestion-unsure-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px dashed #a1a1aa;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 600;
+  color: #71717a;
+  flex: none;
+}
+
+:root[data-theme="dark"] .suggestion-cell--unsure,
+:root[data-theme="dark"] .suggestion-unsure-icon {
+  color: #a1a1aa;
+  border-color: #71717a;
+}
+
+.life-description {
+  max-width: 860px;
+}
+
+.life-description textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 8px 0 10px;
+  padding: 10px 12px;
+  border: 1px solid #d4d4d8;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+:root[data-theme="dark"] .life-description textarea {
+  background: #18181b;
+  border-color: #3f3f46;
+  color: #f4f4f5;
 }
 
 .agent-progress {
@@ -6833,12 +6940,18 @@ tr.account-strip-row.drop-after td {
   background: none;
   padding: 0;
   cursor: pointer;
-  font-size: 14px;
-  color: #a1a1aa;
+  font-size: 13px;
+  filter: grayscale(1);
+  opacity: 0.35;
+}
+
+.agent-example-star:hover {
+  opacity: 0.7;
 }
 
 .agent-example.is-marked .agent-example-star {
-  color: #d97706;
+  filter: none;
+  opacity: 1;
 }
 
 .agent-example-date,
@@ -6873,10 +6986,6 @@ tr.account-strip-row.drop-after td {
   background: #18181b;
   border: 1px solid #3f3f46;
   color: #f4f4f5;
-}
-
-:root[data-theme="dark"] .agent-example.is-marked .agent-example-star {
-  color: #fbbf24;
 }
 
 :root[data-theme="dark"] .agent-examples-head,

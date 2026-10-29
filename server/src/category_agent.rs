@@ -602,7 +602,7 @@ for its owner. You do not chat: you return exactly one answer.
 
 {instructions}
 
-## Categories
+{life}## Categories
 
 Choose exactly one category id from this list. Any node may be chosen, not only a leaf: \
 when you cannot tell the subcategory, choose its parent. Format: `id: path — description`.
@@ -628,6 +628,14 @@ Reply with a single JSON object and nothing else:
 
 Confidence: 9-10 the examples or notes leave no doubt; 6-8 likely; 3-5 a reasonable guess; \
 0-2 nothing to go on.";
+
+/// The owner's own description of their life (Life context → Context), as a
+/// prompt section — empty when they wrote nothing.
+fn life_section(conn: &Connection) -> Result<String, String> {
+    Ok(crate::life_contexts::description(conn)?
+        .map(|text| format!("## The owner's life\n\nWho the owner is, where and how they live — use it to read names, places and purposes in transactions.\n\n{text}\n\n"))
+        .unwrap_or_default())
+}
 
 fn fill(template: &str, pairs: &[(&str, &str)]) -> String {
     pairs.iter().fold(template.to_string(), |acc, (k, v)| acc.replace(&format!("{{{k}}}"), v))
@@ -737,6 +745,7 @@ pub(crate) fn build_prompt(
         SYSTEM_TEMPLATE,
         &[
             ("instructions", settings.instructions.trim()),
+            ("life", &life_section(conn)?),
             ("categories", &category_lines(&paths, kind)),
             ("language", lang.pick("Russian", "English")),
         ],
@@ -929,26 +938,28 @@ fn prepare(conn: &Connection, transaction_id: i64, redo: bool) -> Result<Result<
     if link_pending {
         return Ok(Err(AgentOutcome::skipped("link_pending")));
     }
-    let existing: Option<(String, String)> = conn
+    let existing: Option<(String, String, Option<i64>)> = conn
         .query_row(
-            "SELECT status, input_hash FROM transaction_suggestions
+            "SELECT status, input_hash, category_id FROM transaction_suggestions
              WHERE transaction_id = ?1 AND kind = 'category'",
             [transaction_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    if !redo && existing.as_ref().is_some_and(|(s, _)| s == "pending") {
+    // A pending "not sure" mark (no category) does not block asking again:
+    // the check below decides by the input and the current threshold.
+    if !redo && existing.as_ref().is_some_and(|(s, _, c)| s == "pending" && c.is_some()) {
         return Ok(Err(AgentOutcome::skipped("already_suggested")));
     }
 
     let settings = load_settings(conn)?;
     let connection_id = settings.connection_id.ok_or(ERR_NO_CONNECTION)?;
     let connection = ai::load_connection(conn, connection_id).map_err(|_| ERR_NO_CONNECTION.to_string())?;
-    let api_key = ai::resolve_api_key(&connection.api_key)?;
+    let api_key = ai::resolve_api_key(&connection.api_key).map_err(|e| format!("{}: {e}", connection.name))?;
     let prompt = build_prompt(conn, &settings, &all, target)?;
     let input_hash = sha256_hex(&[&connection.base_url, &connection.model, &prompt.system, &prompt.user]);
-    if !redo && existing.as_ref().is_some_and(|(s, h)| s == "dismissed" && *h == input_hash) {
+    if !redo && existing.as_ref().is_some_and(|(s, h, _)| s == "dismissed" && *h == input_hash) {
         return Ok(Err(AgentOutcome::skipped("dismissed")));
     }
     // Already asked with exactly this input and the model was not sure: it
@@ -977,10 +988,12 @@ fn prepare(conn: &Connection, transaction_id: i64, redo: bool) -> Result<Result<
     Ok(Ok(Prepared { connection, api_key, prompt, input_hash, prompt_hash, min_confidence }))
 }
 
+/// The agent's answer as a suggestion: with a category when it is sure, or
+/// without one — the "agent is not sure" mark the user can only dismiss.
 fn upsert_llm_suggestion(
     conn: &Connection,
     transaction_id: i64,
-    category_id: i64,
+    category_id: Option<i64>,
     answer: &Answer,
     reasoning: Option<&str>,
     prompt_text: &str,
@@ -1081,14 +1094,15 @@ async fn run_suggest_category(app: AppHandle, transaction_id: i64, redo: bool) -
                 duration_ms += reply.duration_ms;
                 total_tokens += reply.usage.total_tokens.unwrap_or(0);
                 let parsed = parse_answer(&reply.content, &prompt.allowed);
-                // Only a sure answer becomes a suggestion; the rest is left
-                // to the user (and still logged, for evals).
+                // Only a sure answer carries a category; an unsure one becomes
+                // the "not sure" mark with its reason (the guess, if any, is
+                // only logged, for evals).
                 let offered = parsed
                     .as_ref()
                     .ok()
                     .and_then(|a| a.category_id.filter(|_| a.confidence >= min_confidence));
-                let suggestion_id = match (&parsed, offered) {
-                    (Ok(answer), Some(category_id)) => {
+                let suggestion_id = match &parsed {
+                    Ok(answer) => {
                         let prompt_text = format!(
                             "{}\n\n---\n\n{}",
                             prompt.system,
@@ -1097,7 +1111,7 @@ async fn run_suggest_category(app: AppHandle, transaction_id: i64, redo: bool) -
                         Some(upsert_llm_suggestion(
                             &conn,
                             transaction_id,
-                            category_id,
+                            offered,
                             answer,
                             reply.reasoning.as_deref(),
                             &prompt_text,
@@ -1105,18 +1119,7 @@ async fn run_suggest_category(app: AppHandle, transaction_id: i64, redo: bool) -
                             &input_hash,
                         )?)
                     }
-                    (Ok(_), None) => {
-                        // A redo that is no longer sure: the old suggestion goes.
-                        conn.execute(
-                            "DELETE FROM transaction_suggestions
-                             WHERE transaction_id = ?1 AND kind = 'category' AND source = 'llm'
-                               AND status = 'pending'",
-                            [transaction_id],
-                        )
-                        .map_err(|e| e.to_string())?;
-                        None
-                    }
-                    (Err(_), _) => None,
+                    Err(_) => None,
                 };
                 log(
                     &conn,
@@ -1567,7 +1570,7 @@ mod tests {
             let conn = fx.state.lock().unwrap();
             let suggest = |txn: i64, category: i64| {
                 let answer = Answer { category_id: Some(category), confidence: 8, rationale: "r".into() };
-                upsert_llm_suggestion(&conn, txn, category, &answer, None, "p", "m", &txn.to_string()).unwrap();
+                upsert_llm_suggestion(&conn, txn, Some(category), &answer, None, "p", "m", &txn.to_string()).unwrap();
             };
             suggest(txns[1], cafe); // right
             suggest(txns[3], cafe); // wrong: it is rent
@@ -1637,6 +1640,25 @@ mod tests {
     }
 
     #[test]
+    fn the_life_description_goes_into_the_system_prompt() {
+        let (fx, account, ..) = fixture();
+        let target = fx.txn(account, "2026-05-09T03:00:00.000Z", 5_000, "Somebody");
+        let conn = fx.state.lock().unwrap();
+        let system = |conn: &Connection| {
+            let settings = load_settings(conn).unwrap();
+            let all = sg::load_all_facts(conn).unwrap();
+            let t = all.iter().find(|f| f.id == target).unwrap();
+            build_prompt(conn, &settings, &all, t).unwrap().system
+        };
+        assert!(!system(&conn).contains("## The owner's life"));
+        put_setting(&conn, crate::life_contexts::DESCRIPTION_KEY, "  Lisbon. Kids: Masha, Petya.  ").unwrap();
+        let s = system(&conn);
+        assert!(s.contains("## The owner's life") && s.contains("Lisbon. Kids: Masha, Petya.\n\n## Categories"));
+        put_setting(&conn, crate::life_contexts::DESCRIPTION_KEY, "   ").unwrap();
+        assert!(!system(&conn).contains("## The owner's life"));
+    }
+
+    #[test]
     fn auto_examples_can_be_turned_off() {
         let (fx, account, ..) = fixture();
         let target = fx.txn(account, "2026-05-09T03:00:00.000Z", 5_000, "Somebody");
@@ -1679,7 +1701,7 @@ mod tests {
         {
             let conn = fx.state.lock().unwrap();
             let answer = Answer { category_id: Some(cafe), confidence: 6, rationale: "r".into() };
-            upsert_llm_suggestion(&conn, target, cafe, &answer, None, "p", "m", "h").unwrap();
+            upsert_llm_suggestion(&conn, target, Some(cafe), &answer, None, "p", "m", "h").unwrap();
         }
         set_transaction_categories_by_user(
             &fx.state,
@@ -1743,11 +1765,17 @@ mod tests {
             .unwrap()
         };
         answered(json!({ "categoryId": null, "confidence": 3 }));
+        // The "not sure" mark: a pending suggestion without a category.
+        let unsure = Answer { category_id: None, confidence: 3, rationale: "new counterparty".into() };
+        let mark = upsert_llm_suggestion(&conn, target, None, &unsure, None, "p", "m", &first.input_hash).unwrap();
+        let listed = sg::list_pending_for_tests(&conn);
+        assert!(listed.iter().any(|x| x.id == mark && x.category_id.is_none() && x.rationale == "new counterparty"));
         let outcome = prepare(&conn, target, false).unwrap().err().unwrap();
         assert_eq!(outcome.reason.as_deref(), Some(SKIP_NOT_CONFIDENT));
         // "Ask again" does ask.
         assert!(prepare(&conn, target, true).unwrap().is_ok());
-        // A sure answer that was later dismissed or lost is no reason to skip.
+        // A pending mark does not block asking again once the input or the
+        // threshold says so.
         answered(json!({ "categoryId": 1, "confidence": 9 }));
         assert!(prepare(&conn, target, false).unwrap().is_ok());
         // Below the threshold counts as unsure; lowering the threshold asks again.

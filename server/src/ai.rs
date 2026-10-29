@@ -59,6 +59,10 @@ pub struct AiConnection {
     pub api_key: String,
     #[serde(default)]
     pub temperature: Option<f64>,
+    /// Why the API key cannot be used right now (e.g. its `env:` variable is
+    /// not set) — computed, never stored; `None` when it is fine.
+    #[serde(default, skip_deserializing)]
+    pub key_problem: Option<String>,
 }
 
 fn row_to_connection(r: &rusqlite::Row) -> rusqlite::Result<AiConnection> {
@@ -71,6 +75,11 @@ fn row_to_connection(r: &rusqlite::Row) -> rusqlite::Result<AiConnection> {
         model: r.get(5)?,
         api_key: r.get(6)?,
         temperature: r.get(7)?,
+        key_problem: None,
+    })
+    .map(|mut c| {
+        c.key_problem = resolve_api_key(&c.api_key).err();
+        c
     })
 }
 
@@ -130,12 +139,29 @@ pub fn save_ai_connection(state: State<'_, DbState>, connection: AiConnection) -
         )
         .map_err(|e| e.to_string())?;
         let id = conn.last_insert_rowid();
-        // The first connection becomes the agent's.
-        conn.execute(
-            "INSERT OR IGNORE INTO app_settings (key, value) VALUES (?1, ?2)",
-            params![AGENT_CONNECTION_KEY, id.to_string()],
-        )
-        .map_err(|e| e.to_string())?;
+        // A new connection becomes the agent's when the agent has none, or
+        // has one it cannot use (its key is an unset `env:` variable) — the
+        // user evidently means the new one.
+        let current: Option<i64> = conn
+            .query_row("SELECT value FROM app_settings WHERE key = ?1", [AGENT_CONNECTION_KEY], |r| {
+                r.get::<_, String>(0)
+            })
+            .optional()
+            .map_err(|e| e.to_string())?
+            .and_then(|v| v.parse().ok());
+        let current = current.and_then(|cid| load_connection(&conn, cid).ok());
+        let take_over = match current {
+            None => true,
+            Some(cur) => cur.key_problem.is_some() && resolve_api_key(&c.api_key).is_ok(),
+        };
+        if take_over {
+            conn.execute(
+                "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                params![AGENT_CONNECTION_KEY, id.to_string()],
+            )
+            .map_err(|e| e.to_string())?;
+        }
         Ok(id)
     } else {
         let n = conn
@@ -188,7 +214,13 @@ pub fn migrate_legacy_config(conn: &Connection) -> rusqlite::Result<()> {
     let legacy: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
     let field = |k: &str| legacy[k].as_str().unwrap_or("").trim().to_string();
     let (base_url, model) = (field("baseUrl"), field("model"));
-    if !base_url.is_empty() && !model.is_empty() {
+    // The old app seeded this default itself; nobody chose it, and without
+    // its env variable it cannot work — not worth a connection of its own.
+    let untouched_seed = field("presetId") == "openrouter"
+        && model == "qwen/qwen3-30b-a3b"
+        && field("apiKey") == "env:OPENROUTER_API_KEY"
+        && resolve_api_key("env:OPENROUTER_API_KEY").is_err();
+    if !base_url.is_empty() && !model.is_empty() && !untouched_seed {
         let preset = match field("presetId").as_str() {
             "" => "custom".to_string(),
             p => p.to_string(),
@@ -475,7 +507,7 @@ mod tests {
         conn.execute(
             "INSERT INTO app_settings (key, value) VALUES ('ai_provider_config', ?1)",
             [json!({ "presetId": "openrouter", "baseUrl": "https://openrouter.ai/api/v1",
-                     "model": "qwen/qwen3-30b-a3b", "apiKey": "env:OPENROUTER_API_KEY",
+                     "model": "anthropic/claude-sonnet-5", "apiKey": "sk-or-test",
                      "temperature": 0 }).to_string()],
         )
         .unwrap();
@@ -485,7 +517,7 @@ mod tests {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?))
             })
             .unwrap();
-        assert_eq!((name.as_str(), protocol.as_str(), key.as_str()), ("OpenRouter", "openai", "env:OPENROUTER_API_KEY"));
+        assert_eq!((name.as_str(), protocol.as_str(), key.as_str()), ("OpenRouter", "openai", "sk-or-test"));
         let legacy: i64 = conn
             .query_row("SELECT COUNT(*) FROM app_settings WHERE key = 'ai_provider_config'", [], |r| r.get(0))
             .unwrap();
@@ -494,5 +526,64 @@ mod tests {
         migrate_legacy_config(&conn).unwrap();
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM ai_connections", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn the_untouched_seeded_default_is_not_migrated() {
+        if std::env::var("OPENROUTER_API_KEY").is_ok() {
+            return; // with the variable set, the old default does work
+        }
+        let dir = tempfile::TempDir::new().unwrap();
+        let conn = crate::db::open(dir.path()).unwrap();
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES ('ai_provider_config', ?1)",
+            [json!({ "presetId": "openrouter", "baseUrl": "https://openrouter.ai/api/v1",
+                     "model": "qwen/qwen3-30b-a3b", "apiKey": "env:OPENROUTER_API_KEY",
+                     "temperature": 0 }).to_string()],
+        )
+        .unwrap();
+        migrate_legacy_config(&conn).unwrap();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM ai_connections", [], |r| r.get(0)).unwrap();
+        let settings: i64 = conn
+            .query_row("SELECT COUNT(*) FROM app_settings WHERE key IN ('ai_provider_config', ?1)", [AGENT_CONNECTION_KEY], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!((n, settings), (0, 0));
+    }
+
+    #[test]
+    fn a_new_connection_replaces_an_unusable_agent_connection() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let state: DbState = std::sync::Mutex::new(crate::db::open(dir.path()).unwrap());
+        let connection = |name: &str, key: &str| AiConnection {
+            id: 0,
+            name: name.into(),
+            preset: "custom".into(),
+            protocol: PROTOCOL_OPENAI.into(),
+            base_url: "http://x/v1".into(),
+            model: "m".into(),
+            api_key: key.into(),
+            temperature: None,
+            key_problem: None,
+        };
+        let agent = |state: &DbState| -> String {
+            state
+                .lock()
+                .unwrap()
+                .query_row("SELECT value FROM app_settings WHERE key = ?1", [AGENT_CONNECTION_KEY], |r| r.get(0))
+                .unwrap()
+        };
+        let broken = save_ai_connection(&state, connection("Broken", "env:A2B_SURELY_UNSET_VAR_42")).unwrap();
+        // The only one becomes the agent's even with a broken key…
+        assert_eq!(agent(&state), broken.to_string());
+        let listed = list_ai_connections(&state).unwrap();
+        assert!(listed[0].key_problem.as_deref().unwrap().contains("A2B_SURELY_UNSET_VAR_42"));
+        // …and a working one added later takes over.
+        let wrapper = save_ai_connection(&state, connection("Wrapper", "sk-1")).unwrap();
+        assert_eq!(agent(&state), wrapper.to_string());
+        // A working agent connection is never replaced.
+        save_ai_connection(&state, connection("Another", "sk-2")).unwrap();
+        assert_eq!(agent(&state), wrapper.to_string());
     }
 }

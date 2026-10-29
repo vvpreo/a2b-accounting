@@ -1,21 +1,36 @@
-//! Life context: date intervals of what was going on in life (a trip with the
-//! kids, an illness, …) — the "Context" screen. Intervals may overlap. The
-//! Transactions screen shows the contexts of each transaction's day, and the
-//! category model gets them in its context (`suggestions::SuggestionContext`).
-//!
-//! Dates are calendar days (`YYYY-MM-DD`), both bounds inclusive.
+//! Life context — the "Life context" screen:
+//! - **Context**: a free-text description of the user's life (where they
+//!   live, what they do, the family and their names, hobbies). One text in
+//!   `app_settings`; the category agent gets it in its system prompt.
+//! - **Events**: date intervals of what was going on (a trip with the kids,
+//!   an illness, …). Intervals may overlap. The Transactions screen shows the
+//!   events of each transaction's day, and the category model gets them in its
+//!   context (`suggestions::SuggestionContext`). Dates are calendar days
+//!   (`YYYY-MM-DD`), both bounds inclusive.
 
 use chrono::NaiveDate;
-use rusqlite::{params, Connection, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::Serialize;
 
 use crate::db::DbState;
 use crate::host::State;
 
+/// The life description (`app_settings`); the UI writes it via `set_setting`.
+pub(crate) const DESCRIPTION_KEY: &str = "life.description";
+
 const ERR_EMPTY_TITLE: &str = "context.empty_title";
 const ERR_BAD_DATE: &str = "context.bad_date";
 const ERR_ENDS_BEFORE_STARTS: &str = "context.ends_before_starts";
 const ERR_NOT_FOUND: &str = "context.not_found";
+
+/// The user's description of their life, trimmed; `None` when empty.
+pub(crate) fn description(conn: &Connection) -> Result<Option<String>, String> {
+    let text: Option<String> = conn
+        .query_row("SELECT value FROM app_settings WHERE key = ?1", [DESCRIPTION_KEY], |r| r.get(0))
+        .optional()
+        .map_err(|e| e.to_string())?;
+    Ok(text.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()))
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

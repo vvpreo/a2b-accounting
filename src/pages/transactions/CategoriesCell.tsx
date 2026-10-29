@@ -21,9 +21,6 @@ interface Props {
   kind: CategoryKind;
   entries: TransactionCategoryView[]; // sorted by position
   onChanged: () => void;
-  /// Marked as an example for the category agent (★).
-  isExample?: boolean;
-  onToggleExample?: () => void;
 }
 
 export function CategoriesCell({
@@ -32,8 +29,6 @@ export function CategoriesCell({
   kind,
   entries,
   onChanged,
-  isExample = false,
-  onToggleExample,
 }: Props) {
   const t = useT();
   const cellRef = useRef<HTMLDivElement | null>(null);
@@ -129,7 +124,7 @@ export function CategoriesCell({
         onClick={(e) => {
           // Skip if click happened on the edit button (it has its own handler).
           const target = e.target as HTMLElement;
-          if (target.closest(".txn-categories-edit-btn, .txn-categories-example-btn")) return;
+          if (target.closest(".txn-categories-edit-btn")) return;
           openPicker();
         }}
       >
@@ -182,21 +177,6 @@ export function CategoriesCell({
         >
           ✎
         </button>
-        {onToggleExample && (
-          <button
-            type="button"
-            className={`txn-categories-example-btn${isExample ? " is-example" : ""}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleExample();
-            }}
-            title={isExample ? t("transactions.categories.exampleOn") : t("transactions.categories.exampleOff")}
-            aria-label={isExample ? t("transactions.categories.exampleOn") : t("transactions.categories.exampleOff")}
-            aria-pressed={isExample}
-          >
-            {isExample ? "★" : "☆"}
-          </button>
-        )}
 
         {hoverOpen && (
           <div className="txn-categories-tooltip">

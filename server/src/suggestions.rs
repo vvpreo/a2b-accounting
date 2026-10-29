@@ -775,6 +775,11 @@ pub fn detect_transfers(
 /// Pending suggestions that still make sense: link suggestions for
 /// transactions that got linked meanwhile, and category suggestions for
 /// transactions that got categories, are left out.
+#[cfg(test)]
+pub(crate) fn list_pending_for_tests(conn: &Connection) -> Vec<Suggestion> {
+    list_pending(conn).unwrap()
+}
+
 fn list_pending(conn: &Connection) -> Result<Vec<Suggestion>, String> {
     let mut stmt = conn
         .prepare(
@@ -1164,6 +1169,7 @@ fn build_reference_set(conn: &Connection, transaction_ids: &[i64]) -> Result<Val
             "exportedAt": Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
             "appVersion": env!("CARGO_PKG_VERSION"),
             "transferWindowSecs": TRANSFER_WINDOW_SECS,
+            "lifeDescription": crate::life_contexts::description(conn)?,
         },
         "categories": categories,
         "accounts": accounts,

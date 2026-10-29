@@ -99,6 +99,7 @@ export function AiProviderTab() {
                     <div className="hint">
                       {findAiPreset(c.preset)?.name ?? c.preset} · {c.model} · {c.baseUrl}
                     </div>
+                    {c.keyProblem && <div className="error">{t("settings.ai.keyProblem", { message: c.keyProblem })}</div>}
                     {testResult?.id === c.id &&
                       (testResult.ok ? (
                         <div className="settings-hint settings-hint--success">
@@ -305,6 +306,9 @@ function AgentSection({
           ))}
         </select>
       </div>
+      {connection?.keyProblem && (
+        <div className="error">{t("settings.ai.keyProblem", { message: connection.keyProblem })}</div>
+      )}
       {cloud && <p className="settings-hint">{t("settings.agent.cloudWarning")}</p>}
       <label className="agent-instructions">
         <span>{t("settings.agent.instructions")}</span>

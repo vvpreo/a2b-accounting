@@ -20,11 +20,11 @@ interface Props {
 
 /// Always-visible "Actions ▾" dropdown for the transactions section. Mirrors
 /// the outside-click / Escape behaviour of the filter dropdowns. Bulk actions
-/// on the selection, in pipeline order — match documents (slips), find cash
-/// withdrawals, find transfers between own accounts, suggest categories (the
-/// agent), assign a category, mark / unmark examples for the agent, export a
-/// reference set — then "Import transactions", which needs no
-/// selection.
+/// on the selection in two columns: automated — anything with a probabilistic
+/// outcome that ends up as suggestions (match documents / slips, find cash
+/// withdrawals, find transfers, suggest categories) — and manual — done as
+/// told (assign a category, mark / unmark examples, export a reference set).
+/// Below both, "Import transactions", which needs no selection.
 export function BulkActionsMenu({
   selectedCount,
   onImportTransactions,
@@ -78,32 +78,53 @@ export function BulkActionsMenu({
       </button>
       {open && (
         <div className="bulk-actions-popover" role="menu">
-          {[
-            { label: t("transactions.bulk.analyzeDocuments"), run: onAnalyzeDocuments },
-            { label: t("transactions.bulk.detectCashWithdrawals"), run: onDetectCashWithdrawals },
-            { label: t("transactions.bulk.detectTransfers"), run: onDetectTransfers },
-            { label: t("transactions.bulk.suggestCategories"), run: onSuggestCategories },
-            { label: t("transactions.bulk.assignCategory"), run: onAssignCategory },
-            { label: t("transactions.bulk.markExamples"), run: () => onMarkExamples(true) },
-            { label: t("transactions.bulk.unmarkExamples"), run: () => onMarkExamples(false) },
-            { label: t("transactions.bulk.exportReferenceSet"), run: onExportReferenceSet },
-          ].map((item) => (
-            <button
-              key={item.label}
-              type="button"
-              role="menuitem"
-              className="bulk-actions-item"
-              disabled={!hasSelection}
-              title={hasSelection ? undefined : t("transactions.bulk.selectFirstHint")}
-              onClick={() => {
-                if (!hasSelection) return;
-                setOpen(false);
-                item.run();
-              }}
-            >
-              {item.label}
-            </button>
-          ))}
+          <div className="bulk-actions-columns">
+            {[
+              {
+                title: t("transactions.bulk.groupAutomated"),
+                hint: t("transactions.bulk.groupAutomatedHint"),
+                items: [
+                  { label: t("transactions.bulk.analyzeDocuments"), run: onAnalyzeDocuments },
+                  { label: t("transactions.bulk.detectCashWithdrawals"), run: onDetectCashWithdrawals },
+                  { label: t("transactions.bulk.detectTransfers"), run: onDetectTransfers },
+                  { label: t("transactions.bulk.suggestCategories"), run: onSuggestCategories },
+                ],
+              },
+              {
+                title: t("transactions.bulk.groupManual"),
+                hint: t("transactions.bulk.groupManualHint"),
+                items: [
+                  { label: t("transactions.bulk.assignCategory"), run: onAssignCategory },
+                  { label: t("transactions.bulk.markExamples"), run: () => onMarkExamples(true) },
+                  { label: t("transactions.bulk.unmarkExamples"), run: () => onMarkExamples(false) },
+                  { label: t("transactions.bulk.exportReferenceSet"), run: onExportReferenceSet },
+                ],
+              },
+            ].map((group) => (
+              <div key={group.title} className="bulk-actions-group" role="group" aria-label={group.title}>
+                <div className="bulk-actions-group-title" title={group.hint}>
+                  {group.title}
+                </div>
+                {group.items.map((item) => (
+                  <button
+                    key={item.label}
+                    type="button"
+                    role="menuitem"
+                    className="bulk-actions-item"
+                    disabled={!hasSelection}
+                    title={hasSelection ? undefined : t("transactions.bulk.selectFirstHint")}
+                    onClick={() => {
+                      if (!hasSelection) return;
+                      setOpen(false);
+                      item.run();
+                    }}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
           {!hasSelection && (
             <p className="bulk-actions-hint">
               {t("transactions.bulk.selectFirstHint")}

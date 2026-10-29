@@ -1,6 +1,6 @@
 {
   "tabs": {
-    "context": "Context",
+    "context": "Life context",
     "documents": "Documents",
     "categories": "Categories",
     "accounts": "Accounts",
@@ -239,7 +239,8 @@
       "category": "Category",
       "delta": "Δ (FX difference on transfers)",
       "peer": "Counterparty",
-      "bank_description": "Bank description"
+      "bank_description": "Bank description",
+      "example": "✨ Examples for the agent"
     },
     "categories": {
       "pickerSearchPlaceholder": "Find a category",
@@ -288,8 +289,12 @@
       "detectTransfers": "Find transfers between accounts",
       "exportReferenceSet": "Export reference set",
       "suggestCategories": "Suggest categories",
-      "markExamples": "Mark as examples for the agent ★",
-      "unmarkExamples": "Unmark examples"
+      "markExamples": "Mark as examples for the agent ✨",
+      "unmarkExamples": "Unmark examples",
+      "groupAutomated": "Automated",
+      "groupAutomatedHint": "Algorithms and models: the outcome is probabilistic and worth checking",
+      "groupManual": "Manual",
+      "groupManualHint": "Done exactly as you say"
     },
     "openDocument": "Open document",
     "filterPeriod": "Period",
@@ -332,7 +337,8 @@
     "tableSuggestion": "Suggestion",
     "tableSuggestionTitle": "What to do with the transaction: withdrawal to cash, transfer between own accounts or a category; click for the rationale and to apply",
     "tableContext": "Context",
-    "tableContextTitle": "What was going on in life on the transaction day (the Context screen)"
+    "tableContextTitle": "What was going on in life on the transaction day (the Context screen)",
+    "tableExampleTitle": "Examples for the agent: ✨ — the agent sees this transaction as an example of how you categorise. Click ✨ on a categorised transaction to mark or unmark it."
   },
   "import": {
     "title": "Import transactions",
@@ -430,8 +436,8 @@
     "deleteConfirm": "Delete category “{name}”? All its subcategories will be removed permanently.",
     "deleteConfirmYes": "Yes, delete",
     "examples": {
-      "hint": "The agent categorises transactions after your own. For each category it sees every example you marked ★ (however many), and when there are fewer than {n} it tops up to {n} with recent categorised ones; plus up to 5 earlier transactions of the same counterparty. This shows where examples may not be enough. Mark examples here or on the Transactions screen: ☆ in the category cell, Actions ▾ for a selection.",
-      "autoOff": "Automatic examples are off (Settings → AI): the agent sees only the ones marked ★.",
+      "hint": "The agent categorises transactions after your own. For each category it sees every example you marked ✨ (however many), and when there are fewer than {n} it tops up to {n} with recent categorised ones; plus up to 5 earlier transactions of the same counterparty. This shows where examples may not be enough. Mark examples here or on the Transactions screen: the ✨ column, Actions ▾ for a selection.",
+      "autoOff": "Automatic examples are off (Settings → AI): the agent sees only the ones marked ✨.",
       "summary": "Need attention: {count} of {total} categories",
       "onlyIssues": "Only those that need attention",
       "empty": "No categories yet.",
@@ -447,7 +453,7 @@
         "one": "{count} counterparty",
         "other": "{count} counterparties"
       },
-      "examplesValue": "{shown} · ★ {marked}",
+      "examplesValue": "{shown} · ✨ {marked}",
       "agentValue": "{hits} / {misses}",
       "issue": {
         "no_examples": "nothing categorised",
@@ -458,8 +464,8 @@
       "help": {
         "no_examples": "No categorised transactions: the agent knows this category only by its name and description.",
         "few_examples": "Fewer categorised transactions than the agent can show ({n}). Categorise a few more.",
-        "agent_misses": "The agent suggested another category for these. Mark ★ the ones typical for this category — the agent will see them as examples.",
-        "conflicts": "These counterparties' transactions are in different categories, and the model cannot tell them apart by the counterparty. Mark ★ a typical one here — ideally one whose note explains the difference."
+        "agent_misses": "The agent suggested another category for these. Mark ✨ the ones typical for this category — the agent will see them as examples.",
+        "conflicts": "These counterparties' transactions are in different categories, and the model cannot tell them apart by the counterparty. Mark ✨ a typical one here — ideally one whose note explains the difference."
       },
       "seen": "The agent sees ({count})",
       "misses": "The agent was wrong ({count})",
@@ -593,7 +599,8 @@
         "bad_protocol": "Unknown protocol",
         "no_base_url": "Enter the base URL",
         "no_model": "Enter the model"
-      }
+      },
+      "keyProblem": "The key is not available: {message}. Open “Edit” and paste the key."
     },
     "currencies": {
       "empty": "No exchange rates downloaded yet. Create an account in any currency — rates will be downloaded automatically.",
@@ -619,12 +626,12 @@
       "hint": "Suggests one category per transaction via “Actions ▾ → Suggest categories”. It learns from your examples: per category, the transactions you starred, topped up with recent categorised ones when there are fewer than the set number.",
       "connection": "Connection",
       "noConnection": "— none —",
-      "cloudWarning": "This is a cloud provider: transaction descriptions, your notes and slip notes will be sent to it. The balance is never sent.",
+      "cloudWarning": "This is a cloud provider: transaction descriptions, your notes, slip notes and your “Life context → Context” text go to it. The balance is never sent.",
       "instructions": "Instructions for the agent (system prompt)",
       "instructionsHint": "In your own words — how you categorise. The app adds the category list, the examples and the answer format itself.",
       "examplesPerCategory": "Minimum examples per category",
       "minConfidence": "Suggest only with confidence of at least (0–10)",
-      "minConfidenceHint": "The agent suggests a category only for obvious cases and leaves the rest to you without a suggestion. Below the threshold nothing is shown, but the answer still goes to the agent log. It is not asked again until the examples or the transaction's notes change; “Ask again” in the run dialog asks those too.",
+      "minConfidenceHint": "The agent suggests a category only for obvious cases. Where it is not sure (or below the threshold), the Suggestion column shows an “agent not sure” mark with the reason — no category, the decision is yours. It is not asked again until the examples or the transaction's notes change; “Ask again” in the run dialog asks those too.",
       "autoExamples": "When fewer are starred, top up to this number with recent categorised transactions (all starred ones always go in)",
       "resetInstructions": "Restore default instructions",
       "usageTitle": "Token usage",
@@ -743,7 +750,8 @@
     "window": {
       "5": "±5 min",
       "30": "±30 min",
-      "1440": "±1 day"
+      "1440": "±1 day",
+      "2880": "±2 days"
     },
     "noCandidates": "No documents in this window.",
     "linkedElsewhere": "linked to another transaction",
@@ -753,7 +761,9 @@
     "documentAndComment": "Document & comment",
     "commentHint": "What this is — for you and for categorisation",
     "commentSaved": "saved",
-    "commentSaveFailed": "not saved"
+    "commentSaveFailed": "not saved",
+    "showLinkedElsewhere": "Also show documents linked to other transactions",
+    "hiddenLinkedElsewhere": "Hidden, linked to other transactions: {count}"
   },
   "errors": {
     "missingOccurredAt": "Row {row}: missing occurred_at",
@@ -894,7 +904,8 @@
     "direction": {
       "debit": "Debit",
       "credit": "Credit"
-    }
+    },
+    "linkHereHint": "Not linked. “Link” below links it to this transaction."
   },
   "suggestions": {
     "title": "Suggestions",
@@ -946,7 +957,8 @@
         "errors": "Errors: {count}",
         "spent": "Tokens spent: {tokens}, model time: {seconds} s",
         "stop": "Stop",
-        "redo": "Ask again also where there is a suggestion already ({count}) or the agent was not sure"
+        "redo": "Ask again also where there is a suggestion already ({count}) or the agent was not sure",
+        "keyProblem": "The agent's connection cannot work — {message}. Settings → AI: paste the key or pick another connection for the agent."
       }
     },
     "skip": {
@@ -962,13 +974,15 @@
       "no_candidate": "no other side found",
       "already_categorized": "already has a category",
       "link_pending": "has a link suggestion",
-      "not_confident": "the agent is not sure — left to you"
-    }
+      "not_confident": "the agent is not sure — marked in the Suggestion column"
+    },
+    "unsure": "agent not sure",
+    "unsureRationale": "Why not sure",
+    "unsureHint": "The agent suggests no category — it is yours to decide. “Dismiss” removes the mark."
   },
   "context": {
-    "title": "Context",
     "add": "Add",
-    "hint": "What was going on in life: trips, illnesses, guests… Intervals may overlap. The context of the day is shown next to transactions and helps the model suggest a category.",
+    "hint": "What was going on in life: trips, illnesses, guests… Intervals may overlap. A day's events are shown next to transactions and help the agent suggest a category.",
     "empty": "Nothing added yet.",
     "period": "Period",
     "days": "Days",
@@ -988,6 +1002,16 @@
       "bad_date": "Invalid date",
       "ends_before_starts": "The interval ends before it starts",
       "not_found": "Context not found — reload the page"
+    },
+    "tabs": {
+      "description": "Context",
+      "events": "Events"
+    },
+    "description": {
+      "hint": "Describe your life now in your own words: where you live, what you do, who is in the family and their names, hobbies, what names and abbreviations in your notes mean. The category agent gets this text with every transaction, so it knows who is who in notes like “Masha swimming”. If the agent's connection is a cloud one, the text goes to that provider.",
+      "placeholder": "For example:\nWe have lived in Lisbon since 2023; I work remotely.\nFamily: wife Olya; kids Masha (10) and Petya (6).\nMasha goes swimming, Petya plays football. Olya and I play tennis.\nGrandma sometimes pays for holidays — that is her gift.\nJOAO SILVA is Masha's tutor.",
+      "saved": "Saved",
+      "unsaved": "Unsaved changes"
     }
   }
 }

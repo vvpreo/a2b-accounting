@@ -584,6 +584,9 @@ export interface AiConnection {
   model: string;
   apiKey: string;
   temperature: number | null;
+  /** Why the key cannot be used right now (e.g. an unset `env:` variable);
+   *  computed by the server, ignored when saving. */
+  keyProblem?: string | null;
 }
 
 export function listAiConnections(): Promise<AiConnection[]> {

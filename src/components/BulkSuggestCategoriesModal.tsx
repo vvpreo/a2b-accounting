@@ -87,7 +87,8 @@ export function BulkSuggestCategoriesModal({ transactions, suggestions, onClose,
             : acc.skipped,
       };
       setTally(acc);
-      if (outcome.status === "suggested") onProgress();
+      // A "not sure" answer also shows up in the Suggestion column.
+      if (outcome.status === "suggested" || outcome.reason === "not_confident") onProgress();
       // No connection: every next one would fail the same way.
       if (outcome.error === "agent.no_connection") break;
     }
@@ -127,6 +128,9 @@ export function BulkSuggestCategoriesModal({ transactions, suggestions, onClose,
                     {t("suggestions.run.category.via", { name: connection.name, model: connection.model })}
                   </p>
                 )
+              )}
+              {connection?.keyProblem && (
+                <div className="error">{t("suggestions.run.category.keyProblem", { message: connection.keyProblem })}</div>
               )}
               {cloud && <p className="hint">{t("settings.agent.cloudWarning")}</p>}
               <p className="hint">{t("suggestions.run.nothingApplied")}</p>
@@ -180,7 +184,7 @@ export function BulkSuggestCategoriesModal({ transactions, suggestions, onClose,
                 type="button"
                 className="btn-primary"
                 onClick={run}
-                disabled={transactions.length === 0 || !connection}
+                disabled={transactions.length === 0 || !connection || !!connection.keyProblem}
               >
                 {t("transactions.bulkDocs.start")}
               </button>
