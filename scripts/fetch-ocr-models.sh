@@ -9,14 +9,27 @@ DEST="${1:-ocr-models}"
 BASE="https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv5"
 mkdir -p "$DEST"
 
+# sha256sum on Linux, shasum on macOS (desktop CI build).
+sha256_ok() {
+  local file="$1" sha="$2"
+  if command -v sha256sum > /dev/null; then
+    echo "$sha  $file" | sha256sum -c --status - 2>/dev/null
+  else
+    echo "$sha  $file" | shasum -a 256 -c --status - 2>/dev/null
+  fi
+}
+
 fetch() {
   local path="$1" sha="$2" file
   file="$DEST/$(basename "$path")"
-  if [ -f "$file" ] && echo "$sha  $file" | sha256sum -c --quiet - 2>/dev/null; then
+  if [ -f "$file" ] && sha256_ok "$file" "$sha"; then
     return
   fi
   curl -fsSL --retry 3 -o "$file.part" "$BASE/$path"
-  echo "$sha  $file.part" | sha256sum -c --quiet -
+  if ! sha256_ok "$file.part" "$sha"; then
+    echo "[fetch-ocr-models] checksum mismatch for $path" >&2
+    exit 1
+  fi
   mv "$file.part" "$file"
 }
 

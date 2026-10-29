@@ -1,0 +1,234 @@
+name: desktop-macos
+
+# macOS desktop app (Tauri shell around the same server + frontend as the
+# Docker image), Apple Silicon only, ad-hoc signed. Two update channels:
+#   - push to main  -> rolling prerelease `desktop-dev`, version
+#                      X.Y.(Z+1)-dev.<run> after the last stable tag vX.Y.Z;
+#   - tag vX.Y.Z    -> release vX.Y.Z (GitHub's "latest release" = stable).
+# Each release carries the DMG, the signed updater archive and `latest.json`,
+# which installed apps poll (desktop/src/updater.rs).
+#
+# Repo secrets:
+#   TAURI_SIGNING_PRIVATE_KEY          — updater signing key (`tauri signer generate`),
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD — its password;
+#   TG_CICD_BOT, TG_ACCOUNTS           — optional Telegram build notifications.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # The dev version is derived from the last stable tag.
+          fetch-depth: 0
+
+      - name: Version and channel
+        id: version
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            channel=stable
+            tag="$GITHUB_REF_NAME"
+          else
+            # Sorts after the last stable release and before the next one, so
+            # the updater (newer-only) never moves a user backwards.
+            last="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1)"
+            base="${last#v}"
+            [ -n "$base" ] || base="$(node -p 'require("./package.json").version')"
+            IFS=. read -r major minor patch <<< "$base"
+            version="$major.$minor.$((patch + 1))-dev.$GITHUB_RUN_NUMBER"
+            channel=dev
+            tag=desktop-dev
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "$channel build $version -> release $tag"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop -> target
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      # APP_ENV=prod: release builds carry no stand marker (same as the
+      # Docker Hub images); public/favicon.svg is also the app icon source.
+      - name: Frontend build
+        run: APP_ENV=prod npm run build
+
+      - name: Cache OCR models
+        uses: actions/cache@v4
+        with:
+          path: ocr-models
+          key: ocr-models-${{ hashFiles('scripts/fetch-ocr-models.sh') }}
+
+      - name: Fetch OCR models
+        run: scripts/fetch-ocr-models.sh ocr-models
+
+      - name: App icons
+        run: npx --yes @tauri-apps/cli@2 icon public/favicon.svg -o desktop/icons
+
+      - name: Build app
+        working-directory: desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          A2B_CHANNEL: ${{ steps.version.outputs.channel }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          npx --yes @tauri-apps/cli@2 build --target aarch64-apple-darwin \
+            --config "{\"version\": \"$VERSION\"}"
+
+      - name: Stage release files
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          CHANNEL: ${{ steps.version.outputs.channel }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          bundle=desktop/target/aarch64-apple-darwin/release/bundle
+          dmgs=("$bundle"/dmg/*.dmg)
+          archives=("$bundle"/macos/*.app.tar.gz)
+          if [ ${#dmgs[@]} -ne 1 ] || [ ${#archives[@]} -ne 1 ]; then
+            echo "Unexpected bundle output" >&2
+            ls -laR "$bundle" >&2 || true
+            exit 1
+          fi
+          mkdir release
+          if [ "$CHANNEL" = dev ]; then
+            dmg_name="A2B-Accounting-dev-arm64.dmg"
+          else
+            dmg_name="A2B-Accounting-$VERSION-arm64.dmg"
+          fi
+          # Versioned name: a client mid-download keeps its file while the
+          # next dev build uploads a new one.
+          archive_name="A2B-Accounting-$VERSION-arm64.app.tar.gz"
+          cp "${dmgs[0]}" "release/$dmg_name"
+          cp "${archives[0]}" "release/$archive_name"
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "Built from ${GITHUB_SHA::7}" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg signature "$(cat "${archives[0]}.sig")" \
+            --arg url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$TAG/$archive_name" \
+            '{version: $version, notes: $notes, pub_date: $date,
+              platforms: {"darwin-aarch64": {signature: $signature, url: $url}}}' \
+            > release/latest.json
+          ls -la release
+          cat release/latest.json
+
+      - name: Publish dev prerelease
+        if: steps.version.outputs.channel == 'dev'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git tag -f desktop-dev "$GITHUB_SHA"
+          git push -f origin refs/tags/desktop-dev
+          notes="Rolling macOS build of main @ ${GITHUB_SHA}. Installed apps on the dev channel update from here. Install: see README → «Desktop app (macOS)»."
+          if gh release view desktop-dev > /dev/null 2>&1; then
+            gh release edit desktop-dev --title "Desktop dev $VERSION" --notes "$notes" --prerelease
+          else
+            gh release create desktop-dev --title "Desktop dev $VERSION" --notes "$notes" --prerelease --latest=false --verify-tag
+          fi
+          cd release
+          gh release upload desktop-dev ./*.dmg ./*.app.tar.gz --clobber
+          # The manifest goes last: clients see the new build only once its
+          # archive is in place.
+          gh release upload desktop-dev latest.json --clobber
+          current="$(ls ./*.app.tar.gz | xargs -n1 basename)"
+          gh release view desktop-dev --json assets -q '.assets[].name' \
+            | grep '\.app\.tar\.gz$' | grep -vxF "$current" \
+            | while read -r old; do gh release delete-asset desktop-dev "$old" --yes; done
+
+      - name: Publish stable release
+        if: steps.version.outputs.channel == 'stable'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd release
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" ./*.dmg ./*.app.tar.gz --clobber
+            gh release upload "$TAG" latest.json --clobber
+          else
+            gh release create "$TAG" ./*.dmg ./*.app.tar.gz latest.json \
+              --title "A2B Accounting $VERSION" --generate-notes --latest --verify-tag
+          fi
+
+  # Build outcome to Telegram, from a cheaper Linux runner; skipped quietly
+  # when the secrets are not configured.
+  notify:
+    runs-on: ubuntu-latest
+    needs: build
+    if: always()
+    timeout-minutes: 3
+    steps:
+      - name: Send Telegram notification
+        env:
+          TG_CICD_BOT: ${{ secrets.TG_CICD_BOT }}
+          TG_ACCOUNTS: ${{ secrets.TG_ACCOUNTS }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          VERSION: ${{ needs.build.outputs.version }}
+          TAG: ${{ needs.build.outputs.tag }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TG_CICD_BOT:-}" ] || [ -z "${TG_ACCOUNTS:-}" ]; then
+            echo "TG_CICD_BOT or TG_ACCOUNTS not set — skipping Telegram notification" >&2
+            exit 0
+          fi
+          short_sha="${GITHUB_SHA:0:7}"
+          case "$BUILD_RESULT" in
+            success)
+              text="$(printf '✅ A2B Accounting (macOS): сборка %s готова (%s)\nРелиз: %s/releases/tag/%s' "$VERSION" "$short_sha" "$REPO_URL" "$TAG")" ;;
+            cancelled)
+              text="$(printf '🟡 A2B Accounting (macOS): сборка отменена (%s) — обычно из-за нового коммита поверх\nЛоги: %s' "$short_sha" "$RUN_URL")" ;;
+            *)
+              text="$(printf '❌ A2B Accounting (macOS): сборка упала (%s, result=%s)\nЛоги: %s' "$short_sha" "$BUILD_RESULT" "$RUN_URL")" ;;
+          esac
+          IFS=',' read -ra accounts <<< "$TG_ACCOUNTS"
+          for raw in "${accounts[@]}"; do
+            chat="$(echo -n "$raw" | tr -d '[:space:]')"
+            [ -z "$chat" ] && continue
+            curl -sS --fail -X POST "https://api.telegram.org/bot${TG_CICD_BOT}/sendMessage" \
+              -d "chat_id=${chat}" --data-urlencode "text=${text}" > /dev/null \
+              || echo "::warning::Telegram delivery failed for chat ${chat}"
+          done

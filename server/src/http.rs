@@ -5,8 +5,9 @@
 
 use std::convert::Infallible;
 
-use axum::extract::{DefaultBodyLimit, Path as UrlPath, Query, State};
-use axum::http::{header, StatusCode};
+use axum::extract::{DefaultBodyLimit, Path as UrlPath, Query, Request, State};
+use axum::http::{header, HeaderMap, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -28,7 +29,7 @@ pub async fn serve(app: AppHandle) {
         std::env::var(crate::ENV_STATIC_DIR).unwrap_or_else(|_| "./static".to_string());
     let index = std::path::Path::new(&static_dir).join("index.html");
 
-    let router = Router::new()
+    let mut router = Router::new()
         .route("/api/rpc/{cmd}", post(rpc))
         .route("/api/events", get(events))
         .route("/api/backup", get(backup))
@@ -39,12 +40,64 @@ pub async fn serve(app: AppHandle) {
         .fallback_service(ServeDir::new(&static_dir).fallback(ServeFile::new(index)))
         .layer(DefaultBodyLimit::max(BODY_LIMIT_BYTES))
         .with_state(app);
+    if let Some(token) = std::env::var(crate::ENV_ACCESS_TOKEN).ok().filter(|t| !t.is_empty()) {
+        let token = std::sync::Arc::new(token);
+        router = router.layer(middleware::from_fn(move |req: Request, next: Next| {
+            let token = token.clone();
+            async move { require_token(&token, req, next).await }
+        }));
+    }
 
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
         .unwrap_or_else(|e| panic!("failed to bind {bind}: {e}"));
     eprintln!("a2b-accounting-server listening on http://{bind}");
     axum::serve(listener, router).await.expect("server error");
+}
+
+const ACCESS_COOKIE: &str = "a2b_access";
+
+/// Desktop mode only: the embedded server listens on a fixed loopback port,
+/// reachable by any local process and by any web page the user opens. The
+/// shell opens its window at `/?access_token=<t>`; that request is answered
+/// with an HttpOnly SameSite=Strict cookie and a redirect, and every other
+/// request without the cookie is refused.
+async fn require_token(token: &str, req: Request, next: Next) -> Response {
+    if let Some(given) = req.uri().query().and_then(query_token) {
+        if given != token {
+            return (StatusCode::FORBIDDEN, "forbidden").into_response();
+        }
+        return (
+            StatusCode::SEE_OTHER,
+            [
+                (header::LOCATION, req.uri().path().to_string()),
+                (
+                    header::SET_COOKIE,
+                    format!("{ACCESS_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict"),
+                ),
+            ],
+        )
+            .into_response();
+    }
+    if cookie_has_token(req.headers(), token) {
+        next.run(req).await
+    } else {
+        (StatusCode::FORBIDDEN, "forbidden").into_response()
+    }
+}
+
+fn query_token(query: &str) -> Option<&str> {
+    query.split('&').find_map(|pair| pair.strip_prefix("access_token="))
+}
+
+fn cookie_has_token(headers: &HeaderMap, token: &str) -> bool {
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(';'))
+        .filter_map(|pair| pair.trim().split_once('='))
+        .any(|(name, value)| name == ACCESS_COOKIE && value == token)
 }
 
 fn ok<T: serde::Serialize>(value: T) -> Response {
@@ -425,5 +478,30 @@ async fn rpc(
         "clear_all_data" => run!(state crate::seed::clear_all_data),
 
         _ => (StatusCode::NOT_FOUND, format!("unknown command: {cmd}")).into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn query_token_finds_the_parameter() {
+        assert_eq!(query_token("access_token=abc"), Some("abc"));
+        assert_eq!(query_token("x=1&access_token=abc"), Some("abc"));
+        assert_eq!(query_token("x=1"), None);
+    }
+
+    #[test]
+    fn cookie_must_match_name_and_value() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::COOKIE, "theme=dark; a2b_access=abc".parse().unwrap());
+        assert!(cookie_has_token(&headers, "abc"));
+        assert!(!cookie_has_token(&headers, "abd"));
+
+        let mut other = HeaderMap::new();
+        other.insert(header::COOKIE, "not_a2b_access=abc".parse().unwrap());
+        assert!(!cookie_has_token(&other, "abc"));
+        assert!(!cookie_has_token(&HeaderMap::new(), "abc"));
     }
 }

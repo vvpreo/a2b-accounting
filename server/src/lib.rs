@@ -39,6 +39,9 @@ use crate::host::AppHandle;
 const ENV_DATA_DIR: &str = "FINANCES_DATA_DIR";
 const ENV_BIND: &str = "FINANCES_BIND";
 const ENV_STATIC_DIR: &str = "FINANCES_STATIC_DIR";
+/// Set only by the desktop shell (`desktop/`): every request must then carry
+/// this token (see `http::require_token`). Unset in Docker and dev.
+const ENV_ACCESS_TOKEN: &str = "FINANCES_ACCESS_TOKEN";
 /// Loopback by default: in dev the Vite server proxies to us, in Docker the
 /// image overrides this with `0.0.0.0:8080` and the compose file decides
 /// which host interface (if any) the port is published on.

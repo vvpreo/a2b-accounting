@@ -40,6 +40,35 @@ The port is published on loopback only (`127.0.0.1:${FINANCES_PORT:-3700}`) — 
 
 **Where the data lives:** `$FINANCES_DATA_DIR/finances.db` (plus WAL files) on the host. Migrations are applied automatically on startup (see `db.rs` and the idempotent `schema_migrations` table), so upgrading is just `docker compose up -d` (with `pull_policy: always` it fetches the newest image by itself). To migrate data from the old desktop build, simply copy `~/Library/Application Support/net.vvpreo.finances/finances.db` into `$FINANCES_DATA_DIR/`.
 
+## Desktop app (macOS)
+
+The same server and frontend also ship as a standalone macOS app (Apple Silicon), built by [.github/workflows/desktop-macos.yml](.github/workflows/desktop-macos.yml). It is a thin Tauri shell ([desktop/](desktop/)) that runs the axum server in-process on `127.0.0.1:47390` and shows it in a native window — no Docker, no browser. The DEV stand and development stay on the DevBox as before.
+
+**Install:** download the DMG from GitHub Releases — the [`desktop-dev`](https://github.com/vvpreo/a2b-accounting/releases/tag/desktop-dev) prerelease (dev channel) or the latest `vX.Y.Z` release (stable) — and drag the app to Applications. The build is ad-hoc signed (no Apple Developer ID), so macOS blocks the first launch of a downloaded copy; clear the quarantine flag once:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/A2B Accounting.app"
+```
+
+Later updates install from inside the app and need no such step.
+
+**Updates.** App menu → *Check for Updates…* and *Update Channel ▸ Stable / Development (dev)*; the app also checks quietly shortly after launch and every 6 hours, and asks before installing. Channels:
+
+| Channel | Built on | Version | Release |
+|---|---|---|---|
+| dev | every push to `main` | `X.Y.(Z+1)-dev.<run>` after the last stable tag `vX.Y.Z` | rolling prerelease `desktop-dev` |
+| stable | push of a tag `vX.Y.Z` | `X.Y.Z` | release `vX.Y.Z` (GitHub "latest") |
+
+Only newer versions are offered, so switching channels never installs an older app over a DB that a newer one has already migrated (a dev user switching to stable waits for the next stable tag above their version). To cut a stable release: `git tag v0.2.0 && git push origin v0.2.0`.
+
+**Data** lives in `~/Library/Application Support/net.vvpreo.a2b-accounting/` (`finances.db`, documents, `desktop-settings.json` with the chosen channel). Before a new version first opens the DB (migrations run on start), the shell copies it to `finances.db.pre-update-<old version>-<unix time>` next to it; the last 10 copies are kept. To move data from the Docker setup: *Settings → Backup* in the Docker app, then *Restore* in the desktop app.
+
+**Notes:**
+- The server is reachable only with a per-launch token: the window opens `/?access_token=…`, which is exchanged for an HttpOnly cookie; other local programs and web pages get `403` (`FINANCES_ACCESS_TOKEN`, desktop mode only).
+- An app started from the Dock does not see shell environment variables, so `env:VAR` API-key references do not resolve — store the key itself in the AI settings.
+- The updater signing key is kept outside the repo (`~/.tauri/a2b-accounting-updater.key` on the DevBox + its password); CI reads it from the `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secrets. Losing it means installed apps can no longer verify updates and must be reinstalled from a DMG once.
+- Local compile check of the shell on Linux (no Mac needed, no host packages): build a throwaway image `FROM rust:1-trixie` with `libwebkit2gtk-4.1-dev libgtk-3-dev libxdo-dev libssl-dev librsvg2-dev`, generate icons (`npx @tauri-apps/cli@2 icon public/favicon.svg -o desktop/icons`), create an empty `ocr-models/` if missing, and run `cargo build` in `desktop/` inside it.
+
 ## Quick Start (development)
 
 ```bash
@@ -256,6 +285,10 @@ a2b-accounting/
 │       ├── category_agent.rs         category agent: examples balanced by category (✨ + automatic), prompt, answer parsing, suggestions, agent_log (calls, decisions, tokens), log export
 │       ├── recognition_queue.rs      background recognition queue: OCR right after upload, link a batch once it is fully recognised, status via the `recognition-status` event
 │       └── backup.rs                 backup_zip_bytes / restore_from_zip_bytes / data_dir_info + tests
+├── desktop/                          macOS app: Tauri shell running server/ in-process (see "Desktop app")
+│   ├── src/main.rs                   paths/env for the server, access token, pre-update DB copy, window
+│   ├── src/updater.rs                update channels (stable/dev), app-menu items, check & install
+│   └── tauri.conf.json               bundle (resources: dist/, OCR models + dicts), updater public key
 ├── Dockerfile                        multi-arch image: frontend (Vite) + cross-compiled Rust + slim runtime
 ├── docker-compose.yml                local run of the Docker Hub image (loopback port, data volume)
 ├── scripts/
@@ -360,6 +393,7 @@ occurred_at,credit,debit,balance,peer,bank_description,comment
 - **`FINANCES_DATA_DIR`** — absolute path to the data directory (`finances.db` + WAL). Set to `/data` in the Docker image (where the volume mounts); set via `.envrc` in dev. When unset — falls back to `~/.local/share/net.vvpreo.finances/`. The path is created if missing.
 - **`FINANCES_BIND`** — address:port for the HTTP server. Default `127.0.0.1:3701` (dev); in the image — `0.0.0.0:8080` (Docker decides what to publish, loopback-only on the host by default).
 - **`FINANCES_STATIC_DIR`** — directory with the built frontend. `/app/static` in the image; not needed in dev (Vite serves the frontend).
+- **`FINANCES_ACCESS_TOKEN`** — set only by the desktop shell: every request must carry it (exchanged for the `a2b_access` cookie at `/?access_token=…`), otherwise `403`. Unset in Docker and dev.
 
 ### Build-time: stand marker (`APP_ENV`)
 - **`APP_ENV`** — `prod` (default) | `dev` | `test` | `uat`. Before every Vite dev/build run, [scripts/badge-icons.mjs](scripts/badge-icons.mjs) derives `public/favicon.svg` (git-ignored) from the production icon [src/assets/app-icon.svg](src/assets/app-icon.svg): prod gets the icon unchanged, other stands get a thick frame (dev — red `#E53935`, test — blue `#1E88E5`, uat — green `#43A047`). `scripts/dev.sh` defaults to `dev`; the Dockerfile takes `--build-arg APP_ENV=…` and defaults to `prod`, so CI images on Docker Hub carry no marker. The DEV stand on the DevBox is built with `APP_ENV=dev` (see CLAUDE.md).

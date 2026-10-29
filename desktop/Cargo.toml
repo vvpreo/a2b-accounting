@@ -1,0 +1,23 @@
+[package]
+name = "a2b-accounting-desktop"
+version = "0.1.0"
+description = "A2B Accounting — desktop shell around the embedded web server"
+authors = ["V3P"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# The whole backend, unchanged: the shell runs its HTTP server in-process.
+a2b-accounting = { path = "../server" }
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-window-state = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6"
+uuid = { version = "1", features = ["v4"] }
+sys-locale = "0.3"
+url = "2"

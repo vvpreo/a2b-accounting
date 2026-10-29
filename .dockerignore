@@ -9,6 +9,9 @@ node_modules
 dist
 data
 server/target
+# macOS desktop shell — not part of the image
+desktop
+ocr-models
 docs
 samples
 scripts
