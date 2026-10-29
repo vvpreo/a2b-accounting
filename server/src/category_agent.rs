@@ -451,6 +451,15 @@ fn marked_examples(conn: &Connection) -> Result<HashSet<i64>, String> {
     Ok(ids)
 }
 
+/// The categories the agent works with: all but the system transfer ones
+/// (`<<--->>`) — those belong to linked transactions, which the agent skips,
+/// and must never be suggested for an ordinary one. Their transactions drop
+/// out of the examples too: an example needs all its categories here.
+fn agent_category_paths(conn: &Connection) -> Result<Vec<(i64, String, String, Option<String>, Option<i64>)>, String> {
+    let system = crate::transfer_categories::system_category_ids(conn).map_err(|e| e.to_string())?;
+    Ok(sg::category_paths(conn)?.into_iter().filter(|p| !system.contains(&p.0)).collect())
+}
+
 /// `transaction → [(category, share)]` in position order.
 fn categories_by_txn(conn: &Connection) -> Result<HashMap<i64, Vec<(i64, i64)>>, String> {
     let mut stmt = conn
@@ -722,7 +731,7 @@ pub(crate) fn build_prompt(
     target: &Facts,
 ) -> Result<Prompt, String> {
     let kind = if target.credit > 0 { "income" } else { "expense" };
-    let paths = sg::category_paths(conn)?;
+    let paths = agent_category_paths(conn)?;
     let path_of: HashMap<i64, String> = paths.iter().map(|(id, p, ..)| (*id, p.clone())).collect();
     let category_kinds: HashMap<i64, String> = paths.iter().map(|(id, _, k, ..)| (*id, k.clone())).collect();
     let order: Vec<i64> = paths.iter().map(|(id, ..)| *id).collect();
@@ -938,28 +947,33 @@ fn prepare(conn: &Connection, transaction_id: i64, redo: bool) -> Result<Result<
     if link_pending {
         return Ok(Err(AgentOutcome::skipped("link_pending")));
     }
-    let existing: Option<(String, String, Option<i64>)> = conn
+    let existing: Option<(String, String, Option<i64>, i64)> = conn
         .query_row(
-            "SELECT status, input_hash, category_id FROM transaction_suggestions
+            "SELECT status, input_hash, category_id, confidence FROM transaction_suggestions
              WHERE transaction_id = ?1 AND kind = 'category'",
             [transaction_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    // A pending "not sure" mark (no category) does not block asking again:
-    // the check below decides by the input and the current threshold.
-    if !redo && existing.as_ref().is_some_and(|(s, _, c)| s == "pending" && c.is_some()) {
+    let settings = load_settings(conn)?;
+    // A pending "not sure" one (no category, or a guess below the current
+    // threshold) does not block asking again: the check below decides by the
+    // input and the threshold.
+    if !redo
+        && existing
+            .as_ref()
+            .is_some_and(|(s, _, c, conf)| s == "pending" && c.is_some() && *conf >= settings.min_confidence)
+    {
         return Ok(Err(AgentOutcome::skipped("already_suggested")));
     }
 
-    let settings = load_settings(conn)?;
     let connection_id = settings.connection_id.ok_or(ERR_NO_CONNECTION)?;
     let connection = ai::load_connection(conn, connection_id).map_err(|_| ERR_NO_CONNECTION.to_string())?;
     let api_key = ai::resolve_api_key(&connection.api_key).map_err(|e| format!("{}: {e}", connection.name))?;
     let prompt = build_prompt(conn, &settings, &all, target)?;
     let input_hash = sha256_hex(&[&connection.base_url, &connection.model, &prompt.system, &prompt.user]);
-    if !redo && existing.as_ref().is_some_and(|(s, h, _)| s == "dismissed" && *h == input_hash) {
+    if !redo && existing.as_ref().is_some_and(|(s, h, ..)| s == "dismissed" && *h == input_hash) {
         return Ok(Err(AgentOutcome::skipped("dismissed")));
     }
     // Already asked with exactly this input and the model was not sure: it
@@ -1094,9 +1108,11 @@ async fn run_suggest_category(app: AppHandle, transaction_id: i64, redo: bool) -
                 duration_ms += reply.duration_ms;
                 total_tokens += reply.usage.total_tokens.unwrap_or(0);
                 let parsed = parse_answer(&reply.content, &prompt.allowed);
-                // Only a sure answer carries a category; an unsure one becomes
-                // the "not sure" mark with its reason (the guess, if any, is
-                // only logged, for evals).
+                // The suggestion keeps the model's category even below the
+                // threshold: whether it shows as a suggestion or as the
+                // "agent not sure" mark is decided by the current threshold
+                // (lowering it reveals these without asking again). With no
+                // category at all it is just the mark.
                 let offered = parsed
                     .as_ref()
                     .ok()
@@ -1111,7 +1127,7 @@ async fn run_suggest_category(app: AppHandle, transaction_id: i64, redo: bool) -
                         Some(upsert_llm_suggestion(
                             &conn,
                             transaction_id,
-                            offered,
+                            answer.category_id,
                             answer,
                             reply.reasoning.as_deref(),
                             &prompt_text,
@@ -1283,7 +1299,7 @@ fn examples_report(conn: &Connection) -> Result<ExamplesReport, String> {
     let n = settings.examples_per_category;
     let mut all = sg::load_all_facts(conn)?;
     all.sort_by(|a, b| b.at.cmp(&a.at).then(b.id.cmp(&a.id)));
-    let paths = sg::category_paths(conn)?;
+    let paths = agent_category_paths(conn)?;
     let category_kinds: HashMap<i64, String> = paths.iter().map(|(id, _, k, ..)| (*id, k.clone())).collect();
     let parents: HashSet<i64> = paths.iter().filter_map(|p| p.4).collect();
     let order: Vec<i64> = paths.iter().map(|(id, ..)| *id).collect();
@@ -1381,14 +1397,17 @@ fn examples_report(conn: &Connection) -> Result<ExamplesReport, String> {
 
     // The agent's record: its current suggestion against the category the
     // transaction is in now.
+    // Only what the agent actually suggested under the current threshold;
+    // guesses below it are "not sure" marks, not suggestions.
     let mut stmt = conn
         .prepare(
             "SELECT transaction_id, category_id, status FROM transaction_suggestions
-             WHERE kind = 'category' AND source = 'llm' AND category_id IS NOT NULL",
+             WHERE kind = 'category' AND source = 'llm' AND category_id IS NOT NULL
+               AND confidence >= ?1",
         )
         .map_err(|e| e.to_string())?;
     let suggested: Vec<(i64, i64, String)> = stmt
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .query_map([settings.min_confidence], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
         .map_err(|e| e.to_string())?
         .collect::<rusqlite::Result<_>>()
         .map_err(|e| e.to_string())?;
@@ -1603,6 +1622,14 @@ mod tests {
         // A parent used through its subcategories is fine.
         assert!(of(food).issues.is_empty());
 
+        // Raising the threshold above the agent's confidence turns its
+        // answers into "not sure" marks: they no longer count.
+        put_setting(&fx.state.lock().unwrap(), MIN_CONFIDENCE_KEY, "9").unwrap();
+        let strict = examples_report(&fx.state.lock().unwrap()).unwrap();
+        let c = strict.categories.iter().find(|r| r.category_id == cafe).unwrap();
+        assert_eq!((c.agent_hits, c.agent_false), (0, 0));
+        put_setting(&fx.state.lock().unwrap(), MIN_CONFIDENCE_KEY, "8").unwrap();
+
         // Marking the corrected transaction addresses the miss.
         set_category_examples(&fx.state, vec![txns[3]], true).unwrap();
         let report = examples_report(&fx.state.lock().unwrap()).unwrap();
@@ -1783,5 +1810,18 @@ mod tests {
         assert!(prepare(&conn, target, false).unwrap().is_err());
         put_setting(&conn, MIN_CONFIDENCE_KEY, "5").unwrap();
         assert!(prepare(&conn, target, false).unwrap().is_ok());
+
+        // A guess below the threshold is kept with its category: it is a
+        // "not sure" mark at 8 (asked again is fine), a suggestion at 5.
+        let category: i64 = conn.query_row("SELECT id FROM categories LIMIT 1", [], |r| r.get(0)).unwrap();
+        let guess = Answer { category_id: Some(category), confidence: 6, rationale: "maybe".into() };
+        upsert_llm_suggestion(&conn, target, Some(category), &guess, None, "p", "m", &first.input_hash).unwrap();
+        put_setting(&conn, MIN_CONFIDENCE_KEY, "8").unwrap();
+        assert_ne!(prepare(&conn, target, false).unwrap().err().and_then(|o| o.reason).as_deref(), Some("already_suggested"));
+        put_setting(&conn, MIN_CONFIDENCE_KEY, "5").unwrap();
+        assert_eq!(
+            prepare(&conn, target, false).unwrap().err().and_then(|o| o.reason).as_deref(),
+            Some("already_suggested")
+        );
     }
 }

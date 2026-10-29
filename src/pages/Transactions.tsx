@@ -29,6 +29,7 @@ import {
   convertAmount,
   createCashWithdrawal,
   exportReferenceSet,
+  getAgentSettings,
   getSetting,
   linkTransactions,
   listAccounts,
@@ -53,6 +54,7 @@ import { BulkCategorizeModal } from "../components/BulkCategorizeModal";
 import { BulkAnalyzeDocumentsModal } from "../components/BulkAnalyzeDocumentsModal";
 import { BulkDetectSuggestionsModal, DetectKind } from "../components/BulkDetectSuggestionsModal";
 import { BulkSuggestCategoriesModal } from "../components/BulkSuggestCategoriesModal";
+import { BulkAcceptSuggestionsModal } from "../components/BulkAcceptSuggestionsModal";
 import { CategoriesCell } from "./transactions/CategoriesCell";
 import { NoteCell } from "./transactions/NoteCell";
 import { SuggestionCell } from "./transactions/SuggestionCell";
@@ -137,6 +139,17 @@ const DEFAULT_VISIBLE_COLUMNS: ColumnKey[] = COLUMN_KEYS.filter((k) => k !== "de
 /// existed when the choice was saved, so a column added in a later version
 /// shows up per its default instead of silently staying hidden.
 const VISIBLE_COLUMNS_SETTING_KEY = "transactions.visible_columns";
+
+/// Suggestion | Category share one fixed width; the user drags the border
+/// between their headers to give more of it to one or the other. The
+/// Suggestion width (px) is persisted in `app_settings`.
+const SPLIT_WIDTH_SETTING_KEY = "transactions.suggestion_width";
+const SPLIT_TOTAL = 560;
+const SPLIT_DEFAULT = 224;
+const SPLIT_MIN_SUGGESTION = 110;
+const SPLIT_MIN_CATEGORY = 150;
+const clampSplit = (w: number) =>
+  Math.round(Math.min(SPLIT_TOTAL - SPLIT_MIN_CATEGORY, Math.max(SPLIT_MIN_SUGGESTION, w)));
 
 function restoreVisibleColumns(raw: string | null): ColumnKey[] | null {
   if (!raw) return null;
@@ -256,6 +269,7 @@ export function TransactionsPage({
   const [bulkDocsOpen, setBulkDocsOpen] = useState(false);
   const [bulkDetect, setBulkDetect] = useState<DetectKind | null>(null);
   const [bulkSuggestOpen, setBulkSuggestOpen] = useState(false);
+  const [bulkAcceptOpen, setBulkAcceptOpen] = useState(false);
   // Transactions marked as examples for the category agent (the ✨ column).
   const [exampleIds, setExampleIds] = useState<Set<number>>(() => new Set());
   // Pending suggestions (cash withdrawal / transfer / category) for the
@@ -491,6 +505,54 @@ export function TransactionsPage({
       cancelled = true;
     };
   }, []);
+
+  // The agent's confidence threshold: its category answers below it show as
+  // "agent not sure" marks, at or above it as suggestions (Settings → AI).
+  const [agentMinConfidence, setAgentMinConfidence] = useState(8);
+  useEffect(() => {
+    getAgentSettings()
+      .then((s) => setAgentMinConfidence(s.minConfidence))
+      .catch(() => {});
+  }, []);
+
+  const [suggestionWidth, setSuggestionWidth] = useState(SPLIT_DEFAULT);
+  useEffect(() => {
+    getSetting(SPLIT_WIDTH_SETTING_KEY)
+      .then((v) => {
+        const n = Number(v);
+        if (v !== null && Number.isFinite(n)) setSuggestionWidth(clampSplit(n));
+      })
+      .catch(() => {});
+  }, []);
+
+  // Drag on the Suggestion | Category border: pointer capture on the handle,
+  // the new width persisted when the drag ends. Double-click resets.
+  function startSplitDrag(e: React.PointerEvent<HTMLSpanElement>) {
+    e.preventDefault();
+    const handle = e.currentTarget;
+    handle.setPointerCapture(e.pointerId);
+    const startX = e.clientX;
+    const startWidth = suggestionWidth;
+    let last = startWidth;
+    const move = (ev: PointerEvent) => {
+      last = clampSplit(startWidth + ev.clientX - startX);
+      setSuggestionWidth(last);
+    };
+    const up = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      handle.removeEventListener("pointercancel", up);
+      void setSetting(SPLIT_WIDTH_SETTING_KEY, String(last)).catch(() => {});
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+    handle.addEventListener("pointercancel", up);
+  }
+
+  function resetSplit() {
+    setSuggestionWidth(SPLIT_DEFAULT);
+    void setSetting(SPLIT_WIDTH_SETTING_KEY, String(SPLIT_DEFAULT)).catch(() => {});
+  }
 
   function changeVisibleColumns(next: ColumnKey[]) {
     // Canonical table order, independent of click order.
@@ -1083,6 +1145,7 @@ export function TransactionsPage({
                 onDetectCashWithdrawals={() => setBulkDetect("cash_withdrawal")}
                 onDetectTransfers={() => setBulkDetect("transfer")}
                 onSuggestCategories={() => setBulkSuggestOpen(true)}
+                onAcceptSuggestions={() => setBulkAcceptOpen(true)}
                 onAssignCategory={() => setBulkOpen(true)}
                 onMarkExamples={(example) => void markExamples(bulkTargets.map((x) => x.id), example)}
                 onExportReferenceSet={() => void downloadReferenceSet()}
@@ -1103,7 +1166,17 @@ export function TransactionsPage({
             : undefined
         }
       >
-        <table>
+        <table
+          className={showSuggestion && showCategory ? "has-col-split" : undefined}
+          style={
+            showSuggestion && showCategory
+              ? ({
+                  "--split-suggestion": `${suggestionWidth}px`,
+                  "--split-category": `${SPLIT_TOTAL - suggestionWidth}px`,
+                } as CSSProperties)
+              : undefined
+          }
+        >
           <thead ref={theadRef}>
             <tr>
               {showContext && (
@@ -1146,6 +1219,16 @@ export function TransactionsPage({
               {showSuggestion && (
                 <th className="col-suggestion" title={t("transactions.tableSuggestionTitle")}>
                   {t("transactions.tableSuggestion")}
+                  {showCategory && (
+                    <span
+                      className="col-split-handle"
+                      role="separator"
+                      aria-orientation="vertical"
+                      title={t("transactions.splitHandle")}
+                      onPointerDown={startSplitDrag}
+                      onDoubleClick={resetSplit}
+                    />
+                  )}
                 </th>
               )}
               {showCategory && (
@@ -1447,6 +1530,7 @@ export function TransactionsPage({
                         categoryById={categoryById}
                         formatDate={formatInstantLocal}
                         localizeError={localizedSuggestionError}
+                        agentMinConfidence={agentMinConfidence}
                         onChanged={onSuggestionApplied}
                       />
                     )}
@@ -1724,6 +1808,15 @@ export function TransactionsPage({
           suggestions={suggestions}
           onClose={() => setBulkDetect(null)}
           onDone={() => setSuggestionsVersion((v) => v + 1)}
+        />
+      )}
+      {bulkAcceptOpen && (
+        <BulkAcceptSuggestionsModal
+          transactions={bulkTargets}
+          suggestions={suggestions}
+          agentMinConfidence={agentMinConfidence}
+          onClose={() => setBulkAcceptOpen(false)}
+          onApplied={onSuggestionApplied}
         />
       )}
       {bulkSuggestOpen && (

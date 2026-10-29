@@ -12,6 +12,7 @@ import {
   dismissSuggestion,
 } from "../../lib/api";
 import { formatMoney } from "../../lib/money";
+import { isUnsure } from "../../lib/suggestion-state";
 import { useT } from "../../i18n";
 
 /** Lookups the cell and its dialog need to describe a suggestion's target. */
@@ -23,6 +24,9 @@ export interface SuggestionLookups {
   formatDate: (iso: string) => string;
   /** Backend error code → localised message. */
   localizeError: (code: string) => string;
+  /** The agent's threshold (Settings → AI): its category answers below it are
+   *  "agent not sure" marks. */
+  agentMinConfidence: number;
 }
 
 interface Props extends SuggestionLookups {
@@ -51,11 +55,6 @@ function accountLabel(acc: Account | undefined): string {
   return acc ? acc.name || acc.accountNumber || acc.bank : "—";
 }
 
-/** The category agent looked and was not sure: a mark with its reason, no
- *  category, nothing to apply — only to dismiss. */
-function isUnsure(s: Suggestion): boolean {
-  return s.kind === "category" && s.categoryId === null;
-}
 
 function confidenceClass(c: number): string {
   if (c >= 8) return "is-high";
@@ -80,15 +79,25 @@ function useTargetLabel(l: SuggestionLookups) {
         });
       }
       case "category":
-        return s.categoryId !== null ? categoryPath(s.categoryId, l.categoryById) : t("suggestions.unsure");
+        return s.categoryId !== null && !isUnsure(s, l.agentMinConfidence)
+          ? categoryPath(s.categoryId, l.categoryById)
+          : t("suggestions.unsure");
     }
   };
 }
 
-function KindIcon({ s, categoryById }: { s: Suggestion; categoryById: Map<number, Category> }) {
+function KindIcon({
+  s,
+  categoryById,
+  minConfidence,
+}: {
+  s: Suggestion;
+  categoryById: Map<number, Category>;
+  minConfidence: number;
+}) {
   if (s.kind === "cash_withdrawal") return <span aria-hidden="true">💵</span>;
   if (s.kind === "transfer") return <span aria-hidden="true">🔗</span>;
-  if (isUnsure(s)) return <span className="suggestion-unsure-icon" aria-hidden="true">?</span>;
+  if (isUnsure(s, minConfidence)) return <span className="suggestion-unsure-icon" aria-hidden="true">?</span>;
   const color = s.categoryId !== null ? categoryById.get(s.categoryId)?.color : undefined;
   return <span className="suggestion-dot" style={{ background: color ?? "#a1a1aa" }} aria-hidden="true" />;
 }
@@ -111,13 +120,13 @@ export function SuggestionCell({ txn, suggestions, note, onChanged, ...lookups }
       {main && (
         <button
           type="button"
-          className={`suggestion-cell suggestion-cell--${main.kind}${isUnsure(main) ? " suggestion-cell--unsure" : ""}`}
-          title={isUnsure(main) ? `${label(main)}\n${main.rationale}` : `${label(main)} · ${main.confidence}/10\n${main.rationale}`}
+          className={`suggestion-cell suggestion-cell--${main.kind}${isUnsure(main, lookups.agentMinConfidence) ? " suggestion-cell--unsure" : ""}`}
+          title={isUnsure(main, lookups.agentMinConfidence) ? `${label(main)}\n${main.rationale}` : `${label(main)} · ${main.confidence}/10\n${main.rationale}`}
           onClick={() => setOpen(true)}
         >
-          <KindIcon s={main} categoryById={lookups.categoryById} />
+          <KindIcon s={main} categoryById={lookups.categoryById} minConfidence={lookups.agentMinConfidence} />
           <span className="suggestion-cell-text">{label(main)}</span>
-          {!isUnsure(main) && (
+          {!isUnsure(main, lookups.agentMinConfidence) && (
             <span className={`suggestion-confidence ${confidenceClass(main.confidence)}`}>
               {main.confidence}
             </span>
@@ -229,10 +238,10 @@ function SuggestionsModal({
             return (
               <section key={s.id} className="suggestion-card">
                 <div className="suggestion-card-head">
-                  <KindIcon s={s} categoryById={lookups.categoryById} />
+                  <KindIcon s={s} categoryById={lookups.categoryById} minConfidence={lookups.agentMinConfidence} />
                   <span className="suggestion-card-kind">{t(`suggestions.kind.${s.kind}`)}</span>
                   <span className="suggestion-card-target">{label(s)}</span>
-                  {!isUnsure(s) && (
+                  {!isUnsure(s, lookups.agentMinConfidence) && (
                     <span className={`suggestion-confidence ${confidenceClass(s.confidence)}`}>
                       {t("suggestions.confidence", { value: s.confidence })}
                     </span>
@@ -240,11 +249,11 @@ function SuggestionsModal({
                 </div>
                 <p className="suggestion-rationale">
                   <span className="txn-field-label">
-                    {isUnsure(s) ? t("suggestions.unsureRationale") : t("suggestions.rationale")}
+                    {isUnsure(s, lookups.agentMinConfidence) ? t("suggestions.unsureRationale") : t("suggestions.rationale")}
                   </span>
                   {s.rationale}
                 </p>
-                {isUnsure(s) && <p className="hint">{t("suggestions.unsureHint")}</p>}
+                {isUnsure(s, lookups.agentMinConfidence) && <p className="hint">{t("suggestions.unsureHint")}</p>}
                 {partner && (
                   <div className="suggestion-partner">
                     <span className="txn-field-label">{t("suggestions.partner")}</span>
@@ -297,7 +306,7 @@ function SuggestionsModal({
                   >
                     {t("suggestions.dismiss")}
                   </button>
-                  {!isUnsure(s) && (
+                  {!isUnsure(s, lookups.agentMinConfidence) && (
                     <button
                       type="button"
                       className="btn-primary"

@@ -14,7 +14,15 @@ pub struct Category {
     pub parent_id: Option<i64>,
     pub description: Option<String>,
     pub created_at: String,
+    /// Set for the app's own categories (`transfer_income` /
+    /// `transfer_expense`, see `transfer_categories.rs`): they cannot be
+    /// deleted or moved.
+    #[serde(default)]
+    pub system_key: Option<String>,
 }
+
+/// A system category cannot be deleted or moved under another one.
+pub(crate) const ERR_SYSTEM: &str = "category.system";
 
 fn from_row(row: &Row) -> rusqlite::Result<Category> {
     Ok(Category {
@@ -25,10 +33,11 @@ fn from_row(row: &Row) -> rusqlite::Result<Category> {
         parent_id: row.get(4)?,
         description: row.get(5)?,
         created_at: row.get(6)?,
+        system_key: row.get(7)?,
     })
 }
 
-const SELECT_COLUMNS: &str = "id, name, color, kind, parent_id, description, created_at";
+const SELECT_COLUMNS: &str = "id, name, color, kind, parent_id, description, created_at, system_key";
 
 fn normalize_description(value: Option<String>) -> Option<String> {
     value.and_then(|s| {
@@ -163,16 +172,20 @@ pub fn update_category(
 
     // Load the current row so we can validate the requested parent change
     // against the category's kind and existing ancestry.
-    let (current_kind, _current_parent): (String, Option<i64>) = conn
+    let (current_kind, _current_parent, system_key): (String, Option<i64>, Option<String>) = conn
         .query_row(
-            "SELECT kind, parent_id FROM categories WHERE id = ?1",
+            "SELECT kind, parent_id, system_key FROM categories WHERE id = ?1",
             [id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .map_err(|e| match e {
             rusqlite::Error::QueryReturnedNoRows => format!("category {id} does not exist"),
             _ => e.to_string(),
         })?;
+    // A system category stays at the top level (it may be renamed).
+    if system_key.is_some() && parent_id.is_some() {
+        return Err(ERR_SYSTEM.to_string());
+    }
 
     if let Some(new_parent_id) = parent_id {
         if new_parent_id == id {
@@ -272,6 +285,16 @@ fn is_descendant_of(
 
 pub fn delete_category(state: State<'_, DbState>, id: i64) -> Result<(), String> {
     let conn = state.lock().map_err(|e| e.to_string())?;
+    let system: bool = conn
+        .query_row(
+            "SELECT system_key IS NOT NULL FROM categories WHERE id = ?1",
+            [id],
+            |r| r.get(0),
+        )
+        .unwrap_or(false);
+    if system {
+        return Err(ERR_SYSTEM.to_string());
+    }
     let deleted = conn
         .execute("DELETE FROM categories WHERE id = ?1", [id])
         .map_err(|e| e.to_string())?;

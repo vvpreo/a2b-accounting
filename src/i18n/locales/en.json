@@ -294,7 +294,8 @@
       "groupAutomated": "Automated",
       "groupAutomatedHint": "Algorithms and models: the outcome is probabilistic and worth checking",
       "groupManual": "Manual",
-      "groupManualHint": "Done exactly as you say"
+      "groupManualHint": "Done exactly as you say",
+      "acceptSuggestions": "Accept suggestions…"
     },
     "openDocument": "Open document",
     "filterPeriod": "Period",
@@ -338,7 +339,8 @@
     "tableSuggestionTitle": "What to do with the transaction: withdrawal to cash, transfer between own accounts or a category; click for the rationale and to apply",
     "tableContext": "Context",
     "tableContextTitle": "What was going on in life on the transaction day (the Context screen)",
-    "tableExampleTitle": "Examples for the agent: ✨ — the agent sees this transaction as an example of how you categorise. Click ✨ on a categorised transaction to mark or unmark it."
+    "tableExampleTitle": "Examples for the agent: ✨ — the agent sees this transaction as an example of how you categorise. Click ✨ on a categorised transaction to mark or unmark it.",
+    "splitHandle": "Drag to give the width to Suggestion or Category. Double-click resets."
   },
   "import": {
     "title": "Import transactions",
@@ -482,7 +484,8 @@
     "tabs": {
       "tree": "Categories",
       "examples": "Examples for the agent"
-    }
+    },
+    "systemHint": "A system category: the app marks transfers between own accounts and cash withdrawals with it. Name, colour and description can be changed; it cannot be deleted or moved under another category."
   },
   "settings": {
     "title": "Settings",
@@ -631,7 +634,7 @@
       "instructionsHint": "In your own words — how you categorise. The app adds the category list, the examples and the answer format itself.",
       "examplesPerCategory": "Minimum examples per category",
       "minConfidence": "Suggest only with confidence of at least (0–10)",
-      "minConfidenceHint": "The agent suggests a category only for obvious cases. Where it is not sure (or below the threshold), the Suggestion column shows an “agent not sure” mark with the reason — no category, the decision is yours. It is not asked again until the examples or the transaction's notes change; “Ask again” in the run dialog asks those too.",
+      "minConfidenceHint": "The agent suggests a category only for obvious cases. Where it is not sure (confidence below the threshold, or no category named), the Suggestion column shows an “agent not sure” mark with the reason. Its guess is kept: lower the threshold and the guesses that reach it become suggestions at once, without asking the model again. It is not asked again until the examples or the transaction's notes change; “Ask again” in the run dialog asks those too.",
       "autoExamples": "When fewer are starred, top up to this number with recent categorised transactions (all starred ones always go in)",
       "resetInstructions": "Restore default instructions",
       "usageTitle": "Token usage",
@@ -978,7 +981,25 @@
     },
     "unsure": "agent not sure",
     "unsureRationale": "Why not sure",
-    "unsureHint": "The agent suggests no category — it is yours to decide. “Dismiss” removes the mark."
+    "unsureHint": "The agent suggests no category — it is yours to decide. “Dismiss” removes the mark.",
+    "accept": {
+      "title": "Accept suggestions",
+      "none": "The selected transactions have no suggestions to accept.",
+      "intro": "Suggestions on the selected transactions: {count}. Choose the confidence to accept from.",
+      "colConfidence": "Confidence",
+      "colTotal": "Total",
+      "colAtLeast": "At least",
+      "pickLevel": "Accept with confidence of at least {level}",
+      "hint": "Suggestions are applied exactly like the “Apply” button: a category is set, a transfer is linked, a cash withdrawal creates the cash transaction. A transfer counts once per pair. “Agent not sure” marks are never applied.",
+      "apply": "Accept {count} (confidence ≥ {level})",
+      "progress": "Processed {done} of {total} · accepted: {applied}",
+      "errors": "Errors: {count}",
+      "kindShort": {
+        "category": "Categories",
+        "transfer": "Transfers",
+        "cash_withdrawal": "Cash"
+      }
+    }
   },
   "context": {
     "add": "Add",

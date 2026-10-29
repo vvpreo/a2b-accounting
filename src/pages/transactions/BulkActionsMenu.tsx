@@ -13,6 +13,7 @@ interface Props {
   onDetectCashWithdrawals: () => void;
   onDetectTransfers: () => void;
   onSuggestCategories: () => void;
+  onAcceptSuggestions: () => void;
   onAssignCategory: () => void;
   onMarkExamples: (example: boolean) => void;
   onExportReferenceSet: () => void;
@@ -22,7 +23,8 @@ interface Props {
 /// the outside-click / Escape behaviour of the filter dropdowns. Bulk actions
 /// on the selection in two columns: automated — anything with a probabilistic
 /// outcome that ends up as suggestions (match documents / slips, find cash
-/// withdrawals, find transfers, suggest categories) — and manual — done as
+/// withdrawals, find transfers, suggest categories, accept suggestions by
+/// confidence) — and manual — done as
 /// told (assign a category, mark / unmark examples, export a reference set).
 /// Below both, "Import transactions", which needs no selection.
 export function BulkActionsMenu({
@@ -32,6 +34,7 @@ export function BulkActionsMenu({
   onDetectCashWithdrawals,
   onDetectTransfers,
   onSuggestCategories,
+  onAcceptSuggestions,
   onAssignCategory,
   onMarkExamples,
   onExportReferenceSet,
@@ -88,6 +91,7 @@ export function BulkActionsMenu({
                   { label: t("transactions.bulk.detectCashWithdrawals"), run: onDetectCashWithdrawals },
                   { label: t("transactions.bulk.detectTransfers"), run: onDetectTransfers },
                   { label: t("transactions.bulk.suggestCategories"), run: onSuggestCategories },
+                  { label: t("transactions.bulk.acceptSuggestions"), run: onAcceptSuggestions },
                 ],
               },
               {

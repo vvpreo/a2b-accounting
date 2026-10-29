@@ -13,10 +13,11 @@
 //!     transfer should still be markable.
 //!   - Neither side may already participate in another link.
 //!
-//! Categories on the underlying transactions are *not* touched. The two
-//! semantics coexist: the link tells the report "this is an internal
-//! transfer", the categories carry whatever the user assigned. Report-side
-//! exclusion logic lives in [`crate::reports`].
+//! A new link gives each side that has no category the system transfer
+//! category of its direction (`<<--->>`); unlinking takes it off again where
+//! it is still the only category — see [`crate::transfer_categories`]. The
+//! link tells the report "this is an internal transfer" (exclusion logic in
+//! [`crate::reports`]); the categories carry whatever the user assigned.
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -90,6 +91,7 @@ pub(crate) fn insert_link_unchecked(
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
+    crate::transfer_categories::assign_on_link(tx, lo, hi).map_err(|e| e.to_string())?;
     Ok(TxnLink {
         id,
         txn_a_id: lo,
@@ -144,12 +146,25 @@ pub fn link_transactions(
 /// link exists — callers treat the post-condition (no link on this txn) as
 /// the success criterion.
 pub fn unlink_transaction(state: State<'_, DbState>, transaction_id: i64) -> Result<(), String> {
-    let conn = state.lock().map_err(|e| e.to_string())?;
-    conn.execute(
+    let mut guard = state.lock().map_err(|e| e.to_string())?;
+    let tx = guard.transaction().map_err(|e| e.to_string())?;
+    let pair: Option<(i64, i64)> = tx
+        .query_row(
+            "SELECT txn_a_id, txn_b_id FROM transaction_links WHERE txn_a_id = ?1 OR txn_b_id = ?1",
+            [transaction_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    tx.execute(
         "DELETE FROM transaction_links WHERE txn_a_id = ?1 OR txn_b_id = ?1",
         [transaction_id],
-        )
-        .map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
+    if let Some((a, b)) = pair {
+        crate::transfer_categories::clear_on_unlink(&tx, &[a, b]).map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
 

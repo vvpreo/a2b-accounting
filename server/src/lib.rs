@@ -28,6 +28,7 @@ mod suggestions;
 mod transaction_categories;
 mod transaction_links;
 mod transactions;
+mod transfer_categories;
 mod transfer_deltas;
 
 use std::fs;
@@ -108,6 +109,8 @@ pub fn data_dir() -> String {
 /// start and after a backup restore replaces the DB file.
 pub fn open_and_init(dir: &Path) -> Result<rusqlite::Connection, String> {
     let conn = db::open(dir).map_err(|e| format!("failed to open database: {e}"))?;
+    transfer_categories::ensure_system_categories(&conn)
+        .map_err(|e| format!("failed to create system categories: {e}"))?;
     seed::seed_if_first_launch(&conn).map_err(|e| format!("failed to seed demo data: {e}"))?;
     seed::ensure_default_report_view(&conn)
         .map_err(|e| format!("failed to ensure accounting report: {e}"))?;

@@ -2211,7 +2211,9 @@ fn has_user_data(conn: &Connection) -> rusqlite::Result<bool> {
     if n_accounts > 0 {
         return Ok(true);
     }
-    let n_categories: i64 = conn.query_row("SELECT COUNT(*) FROM categories", [], |r| r.get(0))?;
+    // The app's own (system) categories exist on every install.
+    let n_categories: i64 =
+        conn.query_row("SELECT COUNT(*) FROM categories WHERE system_key IS NULL", [], |r| r.get(0))?;
     if n_categories > 0 {
         return Ok(true);
     }
@@ -2260,8 +2262,10 @@ pub fn seed_if_first_launch(conn: &Connection) -> rusqlite::Result<()> {
         return Ok(());
     }
     let locale = resolve_locale(&tx)?;
-    seed_full(&tx, today_local(), locale)?;
     persist_locale_if_unset(&tx, locale)?;
+    // Demo transfers get the system transfer categories, so they must exist.
+    crate::transfer_categories::ensure_system_categories(&tx)?;
+    seed_full(&tx, today_local(), locale)?;
     set_flag(&tx)?;
     tx.commit()?;
     Ok(())
@@ -2287,6 +2291,8 @@ fn wipe(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM report_views", [])?;
     conn.execute("DELETE FROM life_contexts", [])?;
     conn.execute("DELETE FROM exchange_rates", [])?;
+    // The app's own categories are part of every install, not user data.
+    crate::transfer_categories::ensure_system_categories(conn)?;
     Ok(())
 }
 
@@ -2340,6 +2346,7 @@ fn insert_transfer_links(
             "INSERT INTO transaction_links (txn_a_id, txn_b_id) VALUES (?1, ?2)",
             params![lo, hi],
         )?;
+        crate::transfer_categories::assign_on_link(conn, lo, hi)?;
     }
     Ok(())
 }
@@ -2691,7 +2698,6 @@ mod tests {
             "import_batches",
             "transaction_categories",
             "transaction_links",
-            "categories",
             "report_views",
             "exchange_rates",
         ] {
@@ -2700,6 +2706,11 @@ mod tests {
                 .unwrap();
             assert_eq!(n, 0, "{table} should be empty after wipe");
         }
+        // Only the system categories survive (they are recreated).
+        let left: i64 = conn
+            .query_row("SELECT COUNT(*) FROM categories WHERE system_key IS NULL", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 0);
         // app_settings must still hold the flag and the locale.
         let n_settings: i64 = conn
             .query_row("SELECT COUNT(*) FROM app_settings", [], |r| r.get(0))

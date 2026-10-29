@@ -17,8 +17,9 @@ export function buildTree(
     if (!byParent.has(key)) byParent.set(key, []);
     byParent.get(key)!.push(c);
   }
+  // System categories (the `<<--->>` transfer ones) always come first.
   for (const arr of byParent.values()) {
-    arr.sort((a, b) => a.name.localeCompare(b.name));
+    arr.sort((a, b) => Number(!!b.systemKey) - Number(!!a.systemKey) || a.name.localeCompare(b.name));
   }
 
   function build(parentId: number | null, depth: number): CategoryNode[] {

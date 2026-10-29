@@ -61,6 +61,9 @@ export interface Category {
   parentId: number | null;
   description: string | null;
   createdAt: string;
+  /** Set for the app's own categories (the `<<--->>` transfer ones): they
+   *  cannot be deleted or moved and are listed first. */
+  systemKey?: string | null;
 }
 
 export interface ImportBatch {

@@ -473,7 +473,11 @@ function CategoryFormModal(props: ModalProps) {
                 />
               </label>
 
-              {isEdit && (
+              {isEdit && props.category.systemKey && (
+                <p className="hint">{t("categories.systemHint")}</p>
+              )}
+
+              {isEdit && !props.category.systemKey && (
                 <label>
                   {t("categories.fieldParent")}
                   <select
@@ -583,7 +587,7 @@ function CategoryFormModal(props: ModalProps) {
             {error && <div className="error">{error}</div>}
           </div>
           <footer className="modal-footer">
-            {isEdit && (
+            {isEdit && !props.category.systemKey && (
               <button
                 type="button"
                 className="btn-danger-ghost modal-footer-left"
