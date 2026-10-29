@@ -416,7 +416,7 @@ async fn rpc(
             connection_id: Option<i64>, instructions: String, examples_per_category: usize,
             auto_examples: bool, min_confidence: i64]),
         "suggest_category" => run!(app_async crate::category_agent::suggest_category, [
-            transaction_id: i64, redo: bool]),
+            transaction_id: i64, redo: bool, include_dismissed: bool]),
         "set_category_examples" => run!(state crate::category_agent::set_category_examples, [
             transaction_ids: Vec<i64>, example: bool]),
         "list_category_examples" => run!(state crate::category_agent::list_category_examples),
@@ -429,9 +429,11 @@ async fn rpc(
         "export_agent_log" => run!(state crate::category_agent::export_agent_log),
 
         "detect_cash_withdrawals" => run!(state crate::suggestions::detect_cash_withdrawals, [
-            transaction_ids: Vec<i64>, redo: bool]),
+            transaction_ids: Vec<i64>, redo: bool, include_dismissed: bool]),
         "detect_transfers" => run!(state crate::suggestions::detect_transfers, [
-            transaction_ids: Vec<i64>, redo: bool]),
+            transaction_ids: Vec<i64>, redo: bool, include_dismissed: bool]),
+        "dismissed_suggestion_counts" => run!(state crate::suggestions::dismissed_suggestion_counts, [
+            transaction_ids: Vec<i64>]),
         "list_transaction_suggestions" => {
             run!(state crate::suggestions::list_transaction_suggestions)
         }

@@ -648,8 +648,14 @@ export interface AgentOutcome {
   durationMs: number | null;
 }
 
-export function suggestCategory(transactionId: number, redo: boolean): Promise<AgentOutcome> {
-  return invoke<AgentOutcome>("suggest_category", { transactionId, redo });
+/** `redo` asks again where a suggestion is pending or the agent was not
+ *  sure; `includeDismissed` asks again what the user dismissed. */
+export function suggestCategory(
+  transactionId: number,
+  redo: boolean,
+  includeDismissed = false,
+): Promise<AgentOutcome> {
+  return invoke<AgentOutcome>("suggest_category", { transactionId, redo, includeDismissed });
 }
 
 /** Mark / unmark transactions as examples for the agent; only categorised
@@ -803,18 +809,29 @@ export interface SuggestionRunSummary {
   skipped: Record<string, number>;
 }
 
+/** `redo` recomputes pending suggestions; `includeDismissed` also offers
+ *  again what the user dismissed. */
 export function detectCashWithdrawals(
   transactionIds: number[],
   redo: boolean,
+  includeDismissed = false,
 ): Promise<SuggestionRunSummary> {
-  return invoke<SuggestionRunSummary>("detect_cash_withdrawals", { transactionIds, redo });
+  return invoke<SuggestionRunSummary>("detect_cash_withdrawals", { transactionIds, redo, includeDismissed });
 }
 
 export function detectTransfers(
   transactionIds: number[],
   redo: boolean,
+  includeDismissed = false,
 ): Promise<SuggestionRunSummary> {
-  return invoke<SuggestionRunSummary>("detect_transfers", { transactionIds, redo });
+  return invoke<SuggestionRunSummary>("detect_transfers", { transactionIds, redo, includeDismissed });
+}
+
+/** Per kind, how many of these transactions have a dismissed suggestion. */
+export function dismissedSuggestionCounts(
+  transactionIds: number[],
+): Promise<Partial<Record<SuggestionKind, number>>> {
+  return invoke<Partial<Record<SuggestionKind, number>>>("dismissed_suggestion_counts", { transactionIds });
 }
 
 export function listTransactionSuggestions(): Promise<Suggestion[]> {

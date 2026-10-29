@@ -917,7 +917,14 @@ struct Prepared {
     min_confidence: i64,
 }
 
-fn prepare(conn: &Connection, transaction_id: i64, redo: bool) -> Result<Result<Prepared, AgentOutcome>, String> {
+/// `redo` asks again where a suggestion is pending or the agent was not sure;
+/// `include_dismissed` asks again what the user dismissed.
+fn prepare(
+    conn: &Connection,
+    transaction_id: i64,
+    redo: bool,
+    include_dismissed: bool,
+) -> Result<Result<Prepared, AgentOutcome>, String> {
     let all = sg::load_all_facts(conn)?;
     let Some(target) = all.iter().find(|f| f.id == transaction_id) else {
         return Ok(Err(AgentOutcome::skipped("not_found")));
@@ -973,12 +980,13 @@ fn prepare(conn: &Connection, transaction_id: i64, redo: bool) -> Result<Result<
     let api_key = ai::resolve_api_key(&connection.api_key).map_err(|e| format!("{}: {e}", connection.name))?;
     let prompt = build_prompt(conn, &settings, &all, target)?;
     let input_hash = sha256_hex(&[&connection.base_url, &connection.model, &prompt.system, &prompt.user]);
-    if !redo && existing.as_ref().is_some_and(|(s, h, ..)| s == "dismissed" && *h == input_hash) {
+    let dismissed = existing.as_ref().is_some_and(|(s, ..)| s == "dismissed");
+    if !include_dismissed && dismissed && existing.as_ref().is_some_and(|(_, h, ..)| *h == input_hash) {
         return Ok(Err(AgentOutcome::skipped("dismissed")));
     }
     // Already asked with exactly this input and the model was not sure: it
     // would say the same again. New examples or notes change the input.
-    if !redo {
+    if !redo && !(include_dismissed && dismissed) {
         let last: Option<String> = conn
             .query_row(
                 "SELECT result FROM agent_log
@@ -1045,19 +1053,29 @@ fn upsert_llm_suggestion(
 
 /// Suggest a category for one transaction. The UI calls it transaction by
 /// transaction (progress, stop button); a run never applies anything.
-pub async fn suggest_category(app: AppHandle, transaction_id: i64, redo: bool) -> Result<AgentOutcome, String> {
+pub async fn suggest_category(
+    app: AppHandle,
+    transaction_id: i64,
+    redo: bool,
+    include_dismissed: bool,
+) -> Result<AgentOutcome, String> {
     // Runs as its own task: if the page goes away mid-call, the model still
     // answers, the suggestion is stored and the call is logged.
-    tokio::spawn(run_suggest_category(app, transaction_id, redo))
+    tokio::spawn(run_suggest_category(app, transaction_id, redo, include_dismissed))
         .await
         .map_err(|e| format!("agent task failed: {e}"))?
 }
 
-async fn run_suggest_category(app: AppHandle, transaction_id: i64, redo: bool) -> Result<AgentOutcome, String> {
+async fn run_suggest_category(
+    app: AppHandle,
+    transaction_id: i64,
+    redo: bool,
+    include_dismissed: bool,
+) -> Result<AgentOutcome, String> {
     let prepared = {
         let state = app.db();
         let conn = state.lock().map_err(|e| e.to_string())?;
-        match prepare(&conn, transaction_id, redo)? {
+        match prepare(&conn, transaction_id, redo, include_dismissed)? {
             Ok(p) => p,
             Err(outcome) => return Ok(outcome),
         }
@@ -1753,14 +1771,14 @@ mod tests {
     fn categorised_and_linked_transactions_are_skipped() {
         let (fx, _, _, _, txns) = fixture();
         let conn = fx.state.lock().unwrap();
-        let outcome = prepare(&conn, txns[0], false).unwrap().err().unwrap();
+        let outcome = prepare(&conn, txns[0], false, false).unwrap().err().unwrap();
         assert_eq!(outcome.reason.as_deref(), Some("already_categorized"));
         // No connection configured → an error, not a silent skip.
         drop(conn);
         let account: i64 = fx.exec("SELECT account_id FROM transactions WHERE id = ?1", [txns[0]]);
         let fresh = fx.txn(account, "2026-05-20T03:00:00.000Z", 1_000, "X");
         let conn = fx.state.lock().unwrap();
-        assert_eq!(prepare(&conn, fresh, false).err().as_deref(), Some(ERR_NO_CONNECTION));
+        assert_eq!(prepare(&conn, fresh, false, false).err().as_deref(), Some(ERR_NO_CONNECTION));
     }
 
     #[test]
@@ -1774,7 +1792,7 @@ mod tests {
         )
         .unwrap();
         put_setting(&conn, ai::AGENT_CONNECTION_KEY, &conn.last_insert_rowid().to_string()).unwrap();
-        let first = prepare(&conn, target, false).unwrap().ok().unwrap();
+        let first = prepare(&conn, target, false, false).unwrap().ok().unwrap();
         assert_eq!(first.min_confidence, DEFAULT_MIN_CONFIDENCE);
         assert!(first.prompt.system.contains("\"categoryId\": null"));
 
@@ -1797,19 +1815,19 @@ mod tests {
         let mark = upsert_llm_suggestion(&conn, target, None, &unsure, None, "p", "m", &first.input_hash).unwrap();
         let listed = sg::list_pending_for_tests(&conn);
         assert!(listed.iter().any(|x| x.id == mark && x.category_id.is_none() && x.rationale == "new counterparty"));
-        let outcome = prepare(&conn, target, false).unwrap().err().unwrap();
+        let outcome = prepare(&conn, target, false, false).unwrap().err().unwrap();
         assert_eq!(outcome.reason.as_deref(), Some(SKIP_NOT_CONFIDENT));
         // "Ask again" does ask.
-        assert!(prepare(&conn, target, true).unwrap().is_ok());
+        assert!(prepare(&conn, target, true, false).unwrap().is_ok());
         // A pending mark does not block asking again once the input or the
         // threshold says so.
         answered(json!({ "categoryId": 1, "confidence": 9 }));
-        assert!(prepare(&conn, target, false).unwrap().is_ok());
+        assert!(prepare(&conn, target, false, false).unwrap().is_ok());
         // Below the threshold counts as unsure; lowering the threshold asks again.
         answered(json!({ "categoryId": 1, "confidence": 6 }));
-        assert!(prepare(&conn, target, false).unwrap().is_err());
+        assert!(prepare(&conn, target, false, false).unwrap().is_err());
         put_setting(&conn, MIN_CONFIDENCE_KEY, "5").unwrap();
-        assert!(prepare(&conn, target, false).unwrap().is_ok());
+        assert!(prepare(&conn, target, false, false).unwrap().is_ok());
 
         // A guess below the threshold is kept with its category: it is a
         // "not sure" mark at 8 (asked again is fine), a suggestion at 5.
@@ -1817,11 +1835,25 @@ mod tests {
         let guess = Answer { category_id: Some(category), confidence: 6, rationale: "maybe".into() };
         upsert_llm_suggestion(&conn, target, Some(category), &guess, None, "p", "m", &first.input_hash).unwrap();
         put_setting(&conn, MIN_CONFIDENCE_KEY, "8").unwrap();
-        assert_ne!(prepare(&conn, target, false).unwrap().err().and_then(|o| o.reason).as_deref(), Some("already_suggested"));
+        assert_ne!(prepare(&conn, target, false, false).unwrap().err().and_then(|o| o.reason).as_deref(), Some("already_suggested"));
         put_setting(&conn, MIN_CONFIDENCE_KEY, "5").unwrap();
         assert_eq!(
-            prepare(&conn, target, false).unwrap().err().and_then(|o| o.reason).as_deref(),
+            prepare(&conn, target, false, false).unwrap().err().and_then(|o| o.reason).as_deref(),
             Some("already_suggested")
         );
+
+        // Dismissed with this very input: skipped, unless the dismissed ones
+        // are asked again on purpose.
+        conn.execute(
+            "UPDATE transaction_suggestions SET status = 'dismissed', input_hash = ?2
+             WHERE transaction_id = ?1 AND kind = 'category'",
+            params![target, first.input_hash],
+        )
+        .unwrap();
+        assert_eq!(
+            prepare(&conn, target, false, false).unwrap().err().and_then(|o| o.reason).as_deref(),
+            Some("dismissed")
+        );
+        assert!(prepare(&conn, target, false, true).unwrap().is_ok());
     }
 }

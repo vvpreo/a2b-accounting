@@ -965,7 +965,8 @@
         "stop": "Stop",
         "redo": "Ask again also where there is a suggestion already ({count}) or the agent was not sure",
         "keyProblem": "The agent's connection cannot work — {message}. Settings → AI: paste the key or pick another connection for the agent."
-      }
+      },
+      "includeDismissed": "Also run the ones dismissed earlier ({count})"
     },
     "skip": {
       "not_found": "not found",

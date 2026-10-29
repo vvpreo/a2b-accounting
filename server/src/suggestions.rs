@@ -430,7 +430,15 @@ fn cash_rationale(lang: Lang, matched: &str, cash: &CashAccountPick, currency: &
     sentence(vec![signal, account])
 }
 
-fn run_cash_withdrawals(conn: &mut Connection, transaction_ids: &[i64], redo: bool) -> Result<RunSummary, String> {
+/// `redo` recomputes pending suggestions; `include_dismissed` also offers again
+/// what the user dismissed (otherwise a dismissed one stays dismissed until
+/// its input changes).
+fn run_cash_withdrawals(
+    conn: &mut Connection,
+    transaction_ids: &[i64],
+    redo: bool,
+    include_dismissed: bool,
+) -> Result<RunSummary, String> {
     let lang = Lang::of(conn);
     let facts: HashMap<i64, Facts> = load_all_facts(conn)?.into_iter().map(|f| (f.id, f)).collect();
     let linked = linked_ids(conn)?;
@@ -464,7 +472,7 @@ fn run_cash_withdrawals(conn: &mut Connection, transaction_ids: &[i64], redo: bo
             continue;
         };
         let input_hash = format!("cash:{}:{}", f.id, cash.id);
-        if current.is_some_and(|e| e.status == "dismissed" && e.input_hash == input_hash) {
+        if !include_dismissed && current.is_some_and(|e| e.status == "dismissed" && e.input_hash == input_hash) {
             summary.skip("dismissed");
             continue;
         }
@@ -495,9 +503,10 @@ pub fn detect_cash_withdrawals(
     state: State<'_, DbState>,
     transaction_ids: Vec<i64>,
     redo: bool,
+    include_dismissed: bool,
 ) -> Result<RunSummary, String> {
     let mut conn = state.lock().map_err(|e| e.to_string())?;
-    run_cash_withdrawals(&mut conn, &transaction_ids, redo)
+    run_cash_withdrawals(&mut conn, &transaction_ids, redo, include_dismissed)
 }
 
 // ---------------------------------------------------------------------------
@@ -613,7 +622,12 @@ fn score_pair(lang: Lang, x: &Facts, y: &Facts) -> Pair {
     Pair { lo, hi, score, gap_secs, rationale_parts: parts }
 }
 
-fn run_transfers(conn: &mut Connection, transaction_ids: &[i64], redo: bool) -> Result<RunSummary, String> {
+fn run_transfers(
+    conn: &mut Connection,
+    transaction_ids: &[i64],
+    redo: bool,
+    include_dismissed: bool,
+) -> Result<RunSummary, String> {
     let lang = Lang::of(conn);
     let all = load_all_facts(conn)?;
     let by_id: HashMap<i64, &Facts> = all.iter().map(|f| (f.id, f)).collect();
@@ -673,7 +687,7 @@ fn run_transfers(conn: &mut Connection, transaction_ids: &[i64], redo: bool) -> 
                 && pending(y.id, KIND_TRANSFER).is_none_or(|e| {
                     e.partner_txn_id == Some(x.id) || (redo && selection.contains(&y.id))
                 })
-                && !dismissed_pair(x.id, y.id);
+                && (include_dismissed || !dismissed_pair(x.id, y.id));
             if candidate {
                 let pair = score_pair(lang, x, y);
                 pairs.entry((pair.lo, pair.hi)).or_insert(pair);
@@ -763,9 +777,34 @@ pub fn detect_transfers(
     state: State<'_, DbState>,
     transaction_ids: Vec<i64>,
     redo: bool,
+    include_dismissed: bool,
 ) -> Result<RunSummary, String> {
     let mut conn = state.lock().map_err(|e| e.to_string())?;
-    run_transfers(&mut conn, &transaction_ids, redo)
+    run_transfers(&mut conn, &transaction_ids, redo, include_dismissed)
+}
+
+/// How many of these transactions have a dismissed suggestion, per kind —
+/// for the "run the dismissed ones again" option of the run dialogs.
+pub fn dismissed_suggestion_counts(
+    state: State<'_, DbState>,
+    transaction_ids: Vec<i64>,
+) -> Result<HashMap<String, i64>, String> {
+    let conn = state.lock().map_err(|e| e.to_string())?;
+    let selected: HashSet<i64> = transaction_ids.into_iter().collect();
+    let mut stmt = conn
+        .prepare("SELECT transaction_id, kind FROM transaction_suggestions WHERE status = 'dismissed'")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| e.to_string())?;
+    let mut out: HashMap<String, i64> = HashMap::new();
+    for row in rows {
+        let (txn, kind) = row.map_err(|e| e.to_string())?;
+        if selected.contains(&txn) {
+            *out.entry(kind).or_default() += 1;
+        }
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -1254,7 +1293,7 @@ mod tests {
         let atm = fx.txn(bank, "2026-05-01T03:00:00.000Z", 0, 200_000, "Cash Withdrawal · ATM · Ref Code ATM4001");
         let other = fx.txn(bank, "2026-05-01T04:00:00.000Z", 0, 5_000, "Payment · K PLUS");
 
-        let summary = detect_cash_withdrawals(&fx.state, vec![atm, other], false).unwrap();
+        let summary = detect_cash_withdrawals(&fx.state, vec![atm, other], false, false).unwrap();
         assert_eq!(summary.suggested, 1);
         assert_eq!(summary.skipped.get("no_signal"), Some(&1));
         let s = fx.pending();
@@ -1274,7 +1313,7 @@ mod tests {
         assert!(fx.pending().is_empty());
 
         // Linked now — a second run skips it.
-        let again = detect_cash_withdrawals(&fx.state, vec![atm], true).unwrap();
+        let again = detect_cash_withdrawals(&fx.state, vec![atm], true, false).unwrap();
         assert_eq!(again.skipped.get("linked"), Some(&1));
     }
 
@@ -1285,7 +1324,7 @@ mod tests {
         fx.account("Wallet", "cash", "THB", None);
         let fee = fx.txn(bank, "2026-05-01T03:00:00.000Z", 0, 2_000, "Fee · ATM · Ref Code ATM40014");
         let transfer = fx.txn(bank, "2026-05-01T03:10:00.000Z", 0, 9_000, "Transfer Withdrawal · ATM · To X1234");
-        let summary = detect_cash_withdrawals(&fx.state, vec![fee, transfer], false).unwrap();
+        let summary = detect_cash_withdrawals(&fx.state, vec![fee, transfer], false, false).unwrap();
         assert_eq!(summary.suggested, 0);
         assert_eq!(summary.skipped.get("no_signal"), Some(&2));
     }
@@ -1296,7 +1335,7 @@ mod tests {
         let bank = fx.account("KBank", "bank", "THB", None);
         fx.account("Wallet", "cash", "USD", None);
         let atm = fx.txn(bank, "2026-05-01T03:00:00.000Z", 0, 100, "ATM withdrawal");
-        let summary = detect_cash_withdrawals(&fx.state, vec![atm], false).unwrap();
+        let summary = detect_cash_withdrawals(&fx.state, vec![atm], false, false).unwrap();
         assert_eq!(summary.suggested, 0);
         assert_eq!(summary.skipped.get("no_cash_account"), Some(&1));
     }
@@ -1307,11 +1346,16 @@ mod tests {
         let bank = fx.account("KBank", "bank", "THB", None);
         fx.account("Wallet", "cash", "THB", None);
         let atm = fx.txn(bank, "2026-05-01T03:00:00.000Z", 0, 100, "Cash Withdrawal · ATM");
-        detect_cash_withdrawals(&fx.state, vec![atm], false).unwrap();
+        detect_cash_withdrawals(&fx.state, vec![atm], false, false).unwrap();
         dismiss_suggestion(&fx.state, fx.pending()[0].id).unwrap();
         assert!(fx.pending().is_empty());
-        let again = detect_cash_withdrawals(&fx.state, vec![atm], true).unwrap();
+        let again = detect_cash_withdrawals(&fx.state, vec![atm], true, false).unwrap();
         assert_eq!(again.skipped.get("dismissed"), Some(&1));
+        // …unless asked to run the dismissed ones again.
+        let counts = dismissed_suggestion_counts(&fx.state, vec![atm]).unwrap();
+        assert_eq!(counts.get(KIND_CASH), Some(&1));
+        let forced = detect_cash_withdrawals(&fx.state, vec![atm], false, true).unwrap();
+        assert_eq!(forced.suggested, 1);
     }
 
     #[test]
@@ -1324,7 +1368,7 @@ mod tests {
         // Same amount and direction, but half an hour later — never a candidate.
         fx.txn(bbl, "2026-05-01T03:30:00.000Z", 100_000, 0, "Transfer Deposit");
 
-        let summary = detect_transfers(&fx.state, vec![out], false).unwrap();
+        let summary = detect_transfers(&fx.state, vec![out], false, false).unwrap();
         assert_eq!(summary.suggested, 1);
         let s = fx.pending();
         assert_eq!(s.len(), 2, "stored on both sides");
@@ -1348,7 +1392,7 @@ mod tests {
         let b = fx.account("B", "bank", "THB", None);
         let out = fx.txn(a, "2026-05-01T03:00:00.000Z", 0, 500, "Transfer");
         fx.txn(b, "2026-05-01T03:05:01.000Z", 500, 0, "Transfer");
-        let summary = detect_transfers(&fx.state, vec![out], false).unwrap();
+        let summary = detect_transfers(&fx.state, vec![out], false, false).unwrap();
         assert_eq!(summary.suggested, 0);
         assert_eq!(summary.skipped.get("no_candidate"), Some(&1));
     }
@@ -1364,7 +1408,7 @@ mod tests {
         let in2 = fx.txn(b, "2026-05-01T03:03:30.000Z", 1000, 0, "");
         // Selection order puts out2 first; a row-by-row greedy pass would
         // happily take in1 (2.5 min away) for it.
-        let summary = detect_transfers(&fx.state, vec![out2, out1], false).unwrap();
+        let summary = detect_transfers(&fx.state, vec![out2, out1], false, false).unwrap();
         assert_eq!(summary.suggested, 2);
         let partner = |id: i64| fx.pending().into_iter().find(|s| s.transaction_id == id).unwrap();
         assert_eq!(partner(out1).partner_txn_id, Some(in1));
@@ -1381,8 +1425,8 @@ mod tests {
         fx.account("Wallet", "cash", "THB", None);
         let atm = fx.txn(a, "2026-05-01T03:00:00.000Z", 0, 1000, "Cash Withdrawal · ATM");
         fx.txn(b, "2026-05-01T03:00:10.000Z", 1000, 0, "");
-        detect_cash_withdrawals(&fx.state, vec![atm], false).unwrap();
-        let summary = detect_transfers(&fx.state, vec![atm], false).unwrap();
+        detect_cash_withdrawals(&fx.state, vec![atm], false, false).unwrap();
+        let summary = detect_transfers(&fx.state, vec![atm], false, false).unwrap();
         assert_eq!(summary.skipped.get("cash_pending"), Some(&1));
     }
 

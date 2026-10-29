@@ -9,6 +9,7 @@ import {
   detectCashWithdrawals,
   detectTransfers,
 } from "../lib/api";
+import { useDismissedCount } from "../lib/use-dismissed-count";
 
 export type DetectKind = "cash_withdrawal" | "transfer";
 
@@ -33,6 +34,7 @@ export function BulkDetectSuggestionsModal({ kind, transactions, suggestions, on
   const t = useT();
   const [phase, setPhase] = useState<Phase>("confirm");
   const [redo, setRedo] = useState(false);
+  const [includeDismissed, setIncludeDismissed] = useState(false);
   const [summary, setSummary] = useState<SuggestionRunSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -40,13 +42,21 @@ export function BulkDetectSuggestionsModal({ kind, transactions, suggestions, on
   const alreadySuggested = new Set(
     suggestions.filter((s) => s.kind === kind && selected.has(s.transactionId)).map((s) => s.transactionId),
   ).size;
+  const dismissedCount = useDismissedCount(
+    transactions.map((x) => x.id),
+    kind,
+  );
 
   async function run() {
     setPhase("running");
     setError(null);
     try {
       const ids = transactions.map((x) => x.id);
-      setSummary(kind === "transfer" ? await detectTransfers(ids, redo) : await detectCashWithdrawals(ids, redo));
+      setSummary(
+        kind === "transfer"
+          ? await detectTransfers(ids, redo, includeDismissed)
+          : await detectCashWithdrawals(ids, redo, includeDismissed),
+      );
     } catch (e) {
       setError(String(e));
     }
@@ -81,6 +91,16 @@ export function BulkDetectSuggestionsModal({ kind, transactions, suggestions, on
                 <label className="checkbox-row">
                   <input type="checkbox" checked={redo} onChange={(e) => setRedo(e.target.checked)} />
                   <span>{t("suggestions.run.redo", { count: alreadySuggested })}</span>
+                </label>
+              )}
+              {dismissedCount > 0 && (
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={includeDismissed}
+                    onChange={(e) => setIncludeDismissed(e.target.checked)}
+                  />
+                  <span>{t("suggestions.run.includeDismissed", { count: dismissedCount })}</span>
                 </label>
               )}
             </>

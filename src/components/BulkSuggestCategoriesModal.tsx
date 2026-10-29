@@ -12,6 +12,7 @@ import {
   suggestCategory,
 } from "../lib/api";
 import { findAiPreset } from "../lib/ai-presets";
+import { useDismissedCount } from "../lib/use-dismissed-count";
 
 interface Props {
   /// The selected, currently-visible transactions.
@@ -45,6 +46,7 @@ export function BulkSuggestCategoriesModal({ transactions, suggestions, onClose,
   const { locale } = useI18n();
   const [phase, setPhase] = useState<Phase>("confirm");
   const [redo, setRedo] = useState(false);
+  const [includeDismissed, setIncludeDismissed] = useState(false);
   const [tally, setTally] = useState<Tally>(EMPTY);
   const [connection, setConnection] = useState<AiConnection | null | undefined>(undefined);
   const stopRef = useRef(false);
@@ -60,6 +62,10 @@ export function BulkSuggestCategoriesModal({ transactions, suggestions, onClose,
   const alreadySuggested = new Set(
     suggestions.filter((s) => s.kind === "category" && selected.has(s.transactionId)).map((s) => s.transactionId),
   ).size;
+  const dismissedCount = useDismissedCount(
+    transactions.map((x) => x.id),
+    "category",
+  );
 
   async function run() {
     setPhase("running");
@@ -69,7 +75,7 @@ export function BulkSuggestCategoriesModal({ transactions, suggestions, onClose,
       if (stopRef.current) break;
       let outcome: AgentOutcome;
       try {
-        outcome = await suggestCategory(x.id, redo);
+        outcome = await suggestCategory(x.id, redo, includeDismissed);
       } catch (e) {
         outcome = { status: "error", reason: null, error: String(e), categoryId: null, confidence: null, totalTokens: null, durationMs: null };
       }
@@ -138,6 +144,16 @@ export function BulkSuggestCategoriesModal({ transactions, suggestions, onClose,
                 <input type="checkbox" checked={redo} onChange={(e) => setRedo(e.target.checked)} />
                 <span>{t("suggestions.run.category.redo", { count: alreadySuggested })}</span>
               </label>
+              {dismissedCount > 0 && (
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={includeDismissed}
+                    onChange={(e) => setIncludeDismissed(e.target.checked)}
+                  />
+                  <span>{t("suggestions.run.includeDismissed", { count: dismissedCount })}</span>
+                </label>
+              )}
             </>
           )}
           {phase !== "confirm" && (
