@@ -299,7 +299,8 @@
       "groupAutomatedHint": "Algorithms and models: the outcome is probabilistic and worth checking",
       "groupManual": "Manual",
       "groupManualHint": "Done exactly as you say",
-      "acceptSuggestions": "Accept suggestions…"
+      "acceptSuggestions": "Accept suggestions…",
+      "deleteCash": "Delete cash transactions…"
     },
     "openDocument": "Open document",
     "filterPeriod": "Period",
@@ -350,7 +351,28 @@
     "filterCategories": "Categories",
     "filterCategoriesAll": "All categories",
     "filterCategoriesNone": "None",
-    "filterCategoriesMany": "Selected: {count}"
+    "filterCategoriesMany": "Selected: {count}",
+    "bulkDeleteCash": {
+      "title": "Delete cash transactions",
+      "intro": "Cash-account transactions to delete: {count}. This cannot be undone.",
+      "hint": "The cash balance is recomputed. If a transaction is the other side of a cash withdrawal or transfer, the bank side stays but loses the link and the “<<--->>” category.",
+      "none": "No cash-account transactions among the selected ones. Only those can be deleted — bank rows come from statements.",
+      "skipped": "Bank transactions among the selected ones: {count} — they are not deleted.",
+      "confirm": "Delete {count}"
+    },
+    "amountOp": {
+      "gt": ">",
+      "ge": "≥",
+      "lt": "<",
+      "le": "≤",
+      "eq": "=",
+      "ne": "≠",
+      "between": "from–to"
+    },
+    "filterAmount": "Amount",
+    "amountFrom": "from",
+    "amountTo": "to",
+    "amountClear": "Clear the amount"
   },
   "import": {
     "title": "Import transactions",

@@ -479,6 +479,13 @@ export function deleteCashTransaction(id: number): Promise<void> {
   return invoke<void>("delete_cash_transaction", { id });
 }
 
+/** Bulk delete: only rows of cash accounts are deleted, the rest skipped. */
+export function deleteCashTransactions(
+  transactionIds: number[],
+): Promise<{ deleted: number; skippedNotCash: number }> {
+  return invoke<{ deleted: number; skippedNotCash: number }>("delete_cash_transactions", { transactionIds });
+}
+
 // Stable error codes from `create_cash_withdrawal` and friends. The
 // `link.*` codes reuse the existing pairing errors when a withdrawal
 // hits the same invariants (already linked, same account).

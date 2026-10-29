@@ -356,6 +356,8 @@ async fn rpc(
             peer: Option<String>, comment: Option<String>]),
         "delete_cash_transaction" => run!(state crate::cash_transactions::delete_cash_transaction, [
             id: i64]),
+        "delete_cash_transactions" => run!(state crate::cash_transactions::delete_cash_transactions, [
+            transaction_ids: Vec<i64>]),
         "create_cash_withdrawal" => run!(state crate::cash_withdrawals::create_cash_withdrawal, [
             source_txn_id: i64, cash_account_id: i64, amount: String]),
 

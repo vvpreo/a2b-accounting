@@ -57,6 +57,7 @@ import { BulkAnalyzeDocumentsModal } from "../components/BulkAnalyzeDocumentsMod
 import { BulkDetectSuggestionsModal, DetectKind } from "../components/BulkDetectSuggestionsModal";
 import { BulkSuggestCategoriesModal } from "../components/BulkSuggestCategoriesModal";
 import { BulkAcceptSuggestionsModal } from "../components/BulkAcceptSuggestionsModal";
+import { BulkDeleteCashModal } from "../components/BulkDeleteCashModal";
 import { CategoriesCell } from "./transactions/CategoriesCell";
 import { NoteCell } from "./transactions/NoteCell";
 import { SuggestionCell } from "./transactions/SuggestionCell";
@@ -110,6 +111,47 @@ const ROW_KINDS: RowKind[] = [
   ...SUGGESTION_KINDS,
   ...CATEGORY_KINDS,
 ];
+
+/// Amount filter: the transaction's amount (credit or debit, in its own
+/// currency) against one value — or two for "between", both inclusive. Empty
+/// value = no filtering. Combines with the rest (e.g. Outgoing + "> 1000").
+type AmountOp = "eq" | "ne" | "gt" | "ge" | "lt" | "le" | "between";
+const AMOUNT_OPS: AmountOp[] = ["gt", "ge", "lt", "le", "eq", "ne", "between"];
+interface AmountFilter {
+  op: AmountOp;
+  value: string;
+  value2: string;
+}
+
+/// User input ("1 234,5" / "1234.50") → minor units, or null when empty / not a number.
+function amountInputToMinor(raw: string): number | null {
+  const v = Number(raw.replace(/\s/g, "").replace(",", "."));
+  return raw.trim() === "" || !Number.isFinite(v) ? null : Math.round(Math.abs(v) * 100);
+}
+
+function amountMatches(minor: number, f: AmountFilter): boolean {
+  const a = amountInputToMinor(f.value);
+  if (f.op === "between") {
+    const b = amountInputToMinor(f.value2);
+    if (a === null && b === null) return true;
+    return (a === null || minor >= Math.min(a, b ?? a)) && (b === null || minor <= Math.max(b, a ?? b));
+  }
+  if (a === null) return true;
+  switch (f.op) {
+    case "eq":
+      return minor === a;
+    case "ne":
+      return minor !== a;
+    case "gt":
+      return minor > a;
+    case "ge":
+      return minor >= a;
+    case "lt":
+      return minor < a;
+    case "le":
+      return minor <= a;
+  }
+}
 
 /// Two display modes for the Δ column. "percent" is the default:
 ///   - Only the credit (incoming) row of each linked pair shows a value, as
@@ -290,6 +332,7 @@ export function TransactionsPage({
   const [bulkDetect, setBulkDetect] = useState<DetectKind | null>(null);
   const [bulkSuggestOpen, setBulkSuggestOpen] = useState(false);
   const [bulkAcceptOpen, setBulkAcceptOpen] = useState(false);
+  const [bulkDeleteCashOpen, setBulkDeleteCashOpen] = useState(false);
   // Transactions marked as examples for the category agent (the ✨ column).
   const [exampleIds, setExampleIds] = useState<Set<number>>(() => new Set());
   // Pending suggestions (cash withdrawal / transfer / category) for the
@@ -680,6 +723,12 @@ export function TransactionsPage({
     return map;
   }, [txnCategories]);
 
+  const [amountFilter, setAmountFilter] = useViewState<AmountFilter>("transactions.amount", {
+    op: "gt",
+    value: "",
+    value2: "",
+  });
+
   // Categories filter: `null` = all (no filtering). Picking a category also
   // takes its subcategories, so the set holds every matching id.
   const [categoryFilter, setCategoryFilter] = useViewState<number[] | null>("transactions.categories", null);
@@ -829,6 +878,8 @@ export function TransactionsPage({
       const txnCats = categoriesByTxn.get(x.id) ?? [];
       if (!categoryKinds.some((k) => (k === "with_category") === txnCats.length > 0)) return false;
       if (categoryFilterIds !== null && !txnCats.some((c) => categoryFilterIds.has(c.categoryId))) return false;
+      const amount = (parseMoneyToMinor(x.credit) ?? 0) + (parseMoneyToMinor(x.debit) ?? 0);
+      if (!amountMatches(amount, amountFilter)) return false;
       return rowKinds.some((k) => rowMatchesKind(x, k));
     });
   }, [
@@ -843,6 +894,7 @@ export function TransactionsPage({
     agentMinConfidence,
     categoriesByTxn,
     categoryFilterIds,
+    amountFilter,
   ]);
 
   // The "same account" hover tint only tells something when the visible rows
@@ -1203,6 +1255,49 @@ export function TransactionsPage({
                 applyLabel={t("transactions.applyButton")}
               />
             </label>
+            <div className="filter-field filter-field--amount">
+              <span>{t("transactions.filterAmount")}</span>
+              <div className="amount-filter">
+                <select
+                  aria-label={t("transactions.filterAmount")}
+                  value={amountFilter.op}
+                  onChange={(e) => setAmountFilter({ ...amountFilter, op: e.target.value as AmountOp })}
+                >
+                  {AMOUNT_OPS.map((op) => (
+                    <option key={op} value={op}>
+                      {t(`transactions.amountOp.${op}`)}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder={amountFilter.op === "between" ? t("transactions.amountFrom") : "0.00"}
+                  value={amountFilter.value}
+                  onChange={(e) => setAmountFilter({ ...amountFilter, value: e.target.value })}
+                />
+                {amountFilter.op === "between" && (
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    placeholder={t("transactions.amountTo")}
+                    value={amountFilter.value2}
+                    onChange={(e) => setAmountFilter({ ...amountFilter, value2: e.target.value })}
+                  />
+                )}
+                {(amountFilter.value || amountFilter.value2) && (
+                  <button
+                    type="button"
+                    className="icon-btn amount-filter-clear"
+                    aria-label={t("transactions.amountClear")}
+                    title={t("transactions.amountClear")}
+                    onClick={() => setAmountFilter({ ...amountFilter, value: "", value2: "" })}
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+            </div>
             <label className="filter-field">
               <span>{t("transactions.filterColumns")}</span>
               <MultiSelectDropdown<ColumnKey>
@@ -1232,6 +1327,7 @@ export function TransactionsPage({
                 onDetectTransfers={() => setBulkDetect("transfer")}
                 onSuggestCategories={() => setBulkSuggestOpen(true)}
                 onAcceptSuggestions={() => setBulkAcceptOpen(true)}
+                onDeleteCash={() => setBulkDeleteCashOpen(true)}
                 onAssignCategory={() => setBulkOpen(true)}
                 onMarkExamples={(example) => void markExamples(bulkTargets.map((x) => x.id), example)}
                 onExportReferenceSet={() => void downloadReferenceSet()}
@@ -1894,6 +1990,17 @@ export function TransactionsPage({
           suggestions={suggestions}
           onClose={() => setBulkDetect(null)}
           onDone={() => setSuggestionsVersion((v) => v + 1)}
+        />
+      )}
+      {bulkDeleteCashOpen && (
+        <BulkDeleteCashModal
+          transactions={bulkTargets}
+          accountById={accountById}
+          onClose={() => setBulkDeleteCashOpen(false)}
+          onDeleted={() => {
+            setSelectedTxnIds(new Set());
+            onSuggestionApplied();
+          }}
         />
       )}
       {bulkAcceptOpen && (

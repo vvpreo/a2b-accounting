@@ -8,7 +8,7 @@
 
 use chrono::{DateTime, SecondsFormat};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use crate::host::State;
 
 use crate::db::DbState;
@@ -285,11 +285,72 @@ pub fn delete_cash_transaction(state: State<'_, DbState>, id: i64) -> Result<(),
     let (account_id, occurred_at) = ensure_cash_transaction(conn, id)?;
 
     let tx = conn.transaction().map_err(|e| e.to_string())?;
-    tx.execute("DELETE FROM transactions WHERE id = ?1", [id])
-        .map_err(|e| e.to_string())?;
+    delete_row(&tx, id)?;
     recompute_cash_balances(&tx, account_id, &occurred_at).map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Delete one cash transaction row. Its link (a cash withdrawal or a transfer)
+/// goes with it by cascade; the partner on the other account is then no
+/// longer linked, so it loses the `<<--->>` transfer category the same way an
+/// unlink takes it off (`transfer_categories::clear_on_unlink`).
+fn delete_row(tx: &Connection, id: i64) -> Result<(), String> {
+    let partner: Option<i64> = tx
+        .query_row(
+            "SELECT CASE WHEN txn_a_id = ?1 THEN txn_b_id ELSE txn_a_id END
+             FROM transaction_links WHERE txn_a_id = ?1 OR txn_b_id = ?1",
+            [id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM transactions WHERE id = ?1", [id])
+        .map_err(|e| e.to_string())?;
+    if let Some(partner) = partner {
+        crate::transfer_categories::clear_on_unlink(tx, &[partner]).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteCashSummary {
+    pub deleted: usize,
+    /// Selected rows that are not on a cash account — never deleted here.
+    pub skipped_not_cash: usize,
+}
+
+/// Bulk delete for the Transactions screen (Actions ▾ → Manual): only rows of
+/// cash accounts go; bank rows in the selection are skipped. One SQL
+/// transaction; each touched cash account gets its running balance
+/// recomputed once, from its earliest deleted row.
+pub fn delete_cash_transactions(
+    state: State<'_, DbState>,
+    transaction_ids: Vec<i64>,
+) -> Result<DeleteCashSummary, String> {
+    let mut guard = state.lock().map_err(|e| e.to_string())?;
+    let conn: &mut Connection = &mut guard;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let mut summary = DeleteCashSummary::default();
+    let mut from_by_account: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
+    for id in transaction_ids {
+        let Ok((account_id, occurred_at)) = ensure_cash_transaction(&tx, id) else {
+            summary.skipped_not_cash += 1;
+            continue;
+        };
+        delete_row(&tx, id)?;
+        summary.deleted += 1;
+        let from = from_by_account.entry(account_id).or_insert_with(|| occurred_at.clone());
+        if occurred_at < *from {
+            *from = occurred_at;
+        }
+    }
+    for (account_id, from) in &from_by_account {
+        recompute_cash_balances(&tx, *account_id, from).map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(summary)
 }
 
 #[cfg(test)]
@@ -336,6 +397,57 @@ mod tests {
         .unwrap()
         .map(|r| r.unwrap())
         .collect()
+    }
+
+    #[test]
+    fn bulk_delete_takes_only_cash_rows_and_unlinks_the_partner() {
+        let dir = TempDir::new().unwrap();
+        let conn = db::open(dir.path()).unwrap();
+        crate::transfer_categories::ensure_system_categories(&conn).unwrap();
+        let cash = make_cash_account(&conn);
+        let bank: i64 = conn
+            .query_row(
+                "INSERT INTO accounts (name, kind, bank, currency) VALUES ('Main', 'bank', 'KBank', 'THB') RETURNING id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let state: DbState = std::sync::Mutex::new(conn);
+        let atm: i64 = state
+            .lock()
+            .unwrap()
+            .query_row(
+                "INSERT INTO transactions (account_id, occurred_at_utc, credit, debit, balance)
+                 VALUES (?1, '2026-01-01T10:00:00.000Z', 0, 200000, 0) RETURNING id",
+                [bank],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let withdrawal = crate::cash_withdrawals::create_cash_withdrawal(&state, atm, cash, "2000.00".into()).unwrap();
+        let spent = {
+            let conn = state.lock().unwrap();
+            let id = insert_cash_txn(&conn, cash, "2026-01-02T00:00:00.000Z", 0, 500_00);
+            recompute_cash_balances(&conn, cash, "2026-01-01T00:00:00.000Z").unwrap();
+            id
+        };
+        assert_eq!(balances(&state.lock().unwrap(), cash), vec![2000_00, 1500_00]);
+
+        let summary = delete_cash_transactions(&state, vec![atm, withdrawal.new_transaction.id]).unwrap();
+        assert_eq!((summary.deleted, summary.skipped_not_cash), (1, 1));
+        let conn = state.lock().unwrap();
+        // The bank side stays, unlinked and without the transfer category.
+        let (links, cats): (i64, i64) = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM transaction_links),
+                        (SELECT COUNT(*) FROM transaction_categories WHERE transaction_id = ?1)",
+                [atm],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((links, cats), (0, 0));
+        // The cash balance after the deleted inflow is recomputed.
+        assert_eq!(balances(&conn, cash), vec![-500_00]);
+        assert!(conn.query_row("SELECT 1 FROM transactions WHERE id = ?1", [spent], |_| Ok(())).is_ok());
     }
 
     #[test]

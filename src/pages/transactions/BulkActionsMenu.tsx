@@ -16,6 +16,7 @@ interface Props {
   onAcceptSuggestions: () => void;
   onAssignCategory: () => void;
   onMarkExamples: (example: boolean) => void;
+  onDeleteCash: () => void;
   onExportReferenceSet: () => void;
 }
 
@@ -25,7 +26,8 @@ interface Props {
 /// outcome that ends up as suggestions (match documents / slips, find cash
 /// withdrawals, find transfers, suggest categories, accept suggestions by
 /// confidence) — and manual — done as
-/// told (assign a category, mark / unmark examples, export a reference set).
+/// told (assign a category, mark / unmark examples, export a reference set,
+/// delete cash-account rows).
 /// Below both, "Import transactions", which needs no selection.
 export function BulkActionsMenu({
   selectedCount,
@@ -37,6 +39,7 @@ export function BulkActionsMenu({
   onAcceptSuggestions,
   onAssignCategory,
   onMarkExamples,
+  onDeleteCash,
   onExportReferenceSet,
 }: Props) {
   const t = useT();
@@ -102,6 +105,7 @@ export function BulkActionsMenu({
                   { label: t("transactions.bulk.markExamples"), run: () => onMarkExamples(true) },
                   { label: t("transactions.bulk.unmarkExamples"), run: () => onMarkExamples(false) },
                   { label: t("transactions.bulk.exportReferenceSet"), run: onExportReferenceSet },
+                  { label: t("transactions.bulk.deleteCash"), run: onDeleteCash },
                 ],
               },
             ].map((group) => (

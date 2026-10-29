@@ -2294,6 +2294,48 @@ code {
     border-color: #3f3f46;
   }
 
+.amount-filter {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.filter-field .amount-filter select {
+  min-width: 0;
+  width: 86px;
+  padding-right: 22px;
+  background-position: right 8px center;
+}
+
+.amount-filter input {
+  height: 32px;
+  width: 92px;
+  padding: 0 8px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background: #ffffff;
+  font: inherit;
+  font-size: 13px;
+  color: inherit;
+  box-sizing: border-box;
+  font-variant-numeric: tabular-nums;
+}
+
+.amount-filter input:focus {
+  outline: none;
+  border-color: #6366f1;
+}
+
+.amount-filter-clear {
+  height: 28px;
+}
+
+:root[data-theme="dark"] .amount-filter input {
+  background: #18181b;
+  border-color: #3f3f46;
+  color: #f4f4f5;
+}
+
 :root[data-theme="dark"] .filter-field {
     color: #a1a1aa;
   }
