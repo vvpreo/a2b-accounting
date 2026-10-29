@@ -6,6 +6,7 @@ mod backup;
 mod cash_transactions;
 mod cash_withdrawals;
 mod categories;
+mod category_agent;
 mod currencies;
 mod db;
 mod document_analysis;
@@ -100,15 +101,15 @@ pub fn data_dir() -> String {
 }
 
 /// Open the DB in `dir` and run every idempotent startup fixup (first-launch
-/// demo seed, default report view, AI provider config). Used both at process
+/// demo seed, default report view, legacy AI config → connection). Used both at process
 /// start and after a backup restore replaces the DB file.
 pub fn open_and_init(dir: &Path) -> Result<rusqlite::Connection, String> {
     let conn = db::open(dir).map_err(|e| format!("failed to open database: {e}"))?;
     seed::seed_if_first_launch(&conn).map_err(|e| format!("failed to seed demo data: {e}"))?;
     seed::ensure_default_report_view(&conn)
         .map_err(|e| format!("failed to ensure accounting report: {e}"))?;
-    seed::ensure_ai_provider_config(&conn)
-        .map_err(|e| format!("failed to ensure ai provider config: {e}"))?;
+    ai::migrate_legacy_config(&conn)
+        .map_err(|e| format!("failed to migrate ai provider config: {e}"))?;
     attachments::backfill_filename_times(&conn)
         .map_err(|e| format!("failed to backfill document times: {e}"))?;
     Ok(conn)

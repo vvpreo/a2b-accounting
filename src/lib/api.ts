@@ -567,39 +567,160 @@ export function setSetting(key: string, value: string): Promise<void> {
   return invoke<void>("set_setting", { key, value });
 }
 
-// ---- AI provider ----
+// ---- AI connections and the category agent (server/src/ai.rs, category_agent.rs) ----
 
-/** Provider configuration, stored as JSON under the `ai_provider_config`
- *  setting key. `apiKey` may be a literal key or an `env:VAR_NAME` reference
- *  resolved by the backend from the process environment. */
-export interface AiProviderConfig {
-  presetId: string;
+export type AiProtocol = "openai" | "anthropic";
+
+/** One LLM connection, created from a preset (`src/lib/ai-presets.ts`).
+ *  `apiKey` may be a literal key or an `env:VAR_NAME` reference resolved by
+ *  the backend from the process environment. */
+export interface AiConnection {
+  /** 0 for a connection not saved yet. */
+  id: number;
+  name: string;
+  preset: string;
+  protocol: AiProtocol;
   baseUrl: string;
   model: string;
   apiKey: string;
-  temperature?: number;
+  temperature: number | null;
 }
 
-export const AI_CONFIG_KEY = "ai_provider_config";
-
-export async function loadAiConfig(): Promise<AiProviderConfig | null> {
-  const raw = await getSetting(AI_CONFIG_KEY);
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as AiProviderConfig;
-  } catch {
-    return null;
-  }
+export function listAiConnections(): Promise<AiConnection[]> {
+  return invoke<AiConnection[]>("list_ai_connections");
 }
 
-export function saveAiConfig(config: AiProviderConfig): Promise<void> {
-  return setSetting(AI_CONFIG_KEY, JSON.stringify(config));
+/** Create (`id === 0`) or update; returns the id. */
+export function saveAiConnection(connection: AiConnection): Promise<number> {
+  return invoke<number>("save_ai_connection", { connection });
 }
 
-/** Send a tiny prompt to the configured provider to validate it. Returns a
- *  short human-readable summary (model + reply snippet). */
-export function aiTestConnection(): Promise<string> {
-  return invoke<string>("ai_test_connection");
+export function deleteAiConnection(id: number): Promise<void> {
+  return invoke<void>("delete_ai_connection", { id });
+}
+
+/** Send a tiny prompt through a saved connection. Returns a short summary
+ *  (model + reply snippet). */
+export function aiTestConnection(id: number): Promise<string> {
+  return invoke<string>("ai_test_connection", { id });
+}
+
+export interface AgentSettings {
+  connectionId: number | null;
+  /** The user's instructions in the system prompt. */
+  instructions: string;
+  defaultInstructions: string;
+  examplesPerCategory: number;
+  autoExamples: boolean;
+  /** Answers below this confidence (0–10) are not offered. */
+  minConfidence: number;
+}
+
+export function getAgentSettings(): Promise<AgentSettings> {
+  return invoke<AgentSettings>("get_agent_settings");
+}
+
+export function saveAgentSettings(s: Omit<AgentSettings, "defaultInstructions">): Promise<void> {
+  return invoke<void>("save_agent_settings", {
+    connectionId: s.connectionId,
+    instructions: s.instructions,
+    examplesPerCategory: s.examplesPerCategory,
+    autoExamples: s.autoExamples,
+    minConfidence: s.minConfidence,
+  });
+}
+
+/** One transaction through the category agent. */
+export interface AgentOutcome {
+  status: "suggested" | "skipped" | "error";
+  /** Skip reason code (`suggestions.skip.*`). */
+  reason: string | null;
+  error: string | null;
+  categoryId: number | null;
+  confidence: number | null;
+  totalTokens: number | null;
+  durationMs: number | null;
+}
+
+export function suggestCategory(transactionId: number, redo: boolean): Promise<AgentOutcome> {
+  return invoke<AgentOutcome>("suggest_category", { transactionId, redo });
+}
+
+/** Mark / unmark transactions as examples for the agent; only categorised
+ *  ones can be examples. Returns how many changed. */
+export function setCategoryExamples(transactionIds: number[], example: boolean): Promise<number> {
+  return invoke<number>("set_category_examples", { transactionIds, example });
+}
+
+export function listCategoryExamples(): Promise<number[]> {
+  return invoke<number[]>("list_category_examples");
+}
+
+/** What says a category's examples may not be enough (see
+ *  `category_agent.rs::examples_report`). */
+export type ExamplesIssue = "no_examples" | "few_examples" | "agent_misses" | "conflicts";
+
+/** A counterparty of the category that is also in other categories. */
+export interface PeerConflict {
+  peer: string;
+  /** Its transactions in this category, newest first. */
+  here: number[];
+  elsewhere: { categoryId: number; transactions: number[] }[];
+  /** One of `here` is marked as an example. */
+  resolved: boolean;
+}
+
+export interface CategoryExamplesReport {
+  categoryId: number;
+  /** Categorised transactions, newest first. */
+  labeled: number[];
+  /** Distinct counterparties among them. */
+  peers: number;
+  /** Marked by the user, newest first; the agent shows them all. */
+  marked: number[];
+  /** Picked automatically to fill up to N. */
+  auto: number[];
+  conflicts: PeerConflict[];
+  /** The agent suggested this category and it was right. */
+  agentHits: number;
+  /** Transactions of this category for which the agent suggested another one. */
+  agentMisses: { transactionId: number; suggestedCategoryId: number }[];
+  /** The agent suggested this category, but it was another one / dismissed. */
+  agentFalse: number;
+  issues: ExamplesIssue[];
+}
+
+export interface ExamplesReport {
+  examplesPerCategory: number;
+  autoExamples: boolean;
+  categories: CategoryExamplesReport[];
+}
+
+export function categoryExamplesReport(): Promise<ExamplesReport> {
+  return invoke<ExamplesReport>("category_examples_report");
+}
+
+export interface TokenUsageRow {
+  connectionName: string | null;
+  model: string | null;
+  calls: number;
+  errors: number;
+  promptTokens: number;
+  completionTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+  durationMs: number;
+  lastAt: string;
+}
+
+export function agentTokenUsage(): Promise<TokenUsageRow[]> {
+  return invoke<TokenUsageRow[]>("agent_token_usage");
+}
+
+/** The agent log (every model call with the full exchange, every user
+ *  decision) as JSON — for building evals. */
+export function exportAgentLog(): Promise<unknown> {
+  return invoke<unknown>("export_agent_log");
 }
 
 // ---- Life context (server/src/life_contexts.rs) ----

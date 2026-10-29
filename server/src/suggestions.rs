@@ -80,27 +80,27 @@ impl RunSummary {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
-struct Facts {
-    id: i64,
-    account_id: i64,
-    account_kind: String,
-    account_name: String,
-    bank: String,
-    account_number: Option<String>,
-    owner_name: Option<String>,
-    currency: String,
-    occurred_at_utc: String,
-    at: DateTime<Utc>,
-    credit: i64,
-    debit: i64,
-    peer: Option<String>,
-    bank_description: Option<String>,
-    comment: Option<String>,
-    timezone_offset: Option<String>,
+pub(crate) struct Facts {
+    pub(crate) id: i64,
+    pub(crate) account_id: i64,
+    pub(crate) account_kind: String,
+    pub(crate) account_name: String,
+    pub(crate) bank: String,
+    pub(crate) account_number: Option<String>,
+    pub(crate) owner_name: Option<String>,
+    pub(crate) currency: String,
+    pub(crate) occurred_at_utc: String,
+    pub(crate) at: DateTime<Utc>,
+    pub(crate) credit: i64,
+    pub(crate) debit: i64,
+    pub(crate) peer: Option<String>,
+    pub(crate) bank_description: Option<String>,
+    pub(crate) comment: Option<String>,
+    pub(crate) timezone_offset: Option<String>,
 }
 
 impl Facts {
-    fn amount(&self) -> i64 {
+    pub(crate) fn amount(&self) -> i64 {
         self.credit + self.debit
     }
 
@@ -122,7 +122,7 @@ impl Facts {
 
 /// Every transaction with its account. `t.balance` is deliberately not
 /// selected: nothing in this module may see it.
-fn load_all_facts(conn: &Connection) -> Result<Vec<Facts>, String> {
+pub(crate) fn load_all_facts(conn: &Connection) -> Result<Vec<Facts>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT t.id, t.account_id, a.kind, a.name, a.bank, a.account_number, a.owner_name,
@@ -171,7 +171,7 @@ fn load_all_facts(conn: &Connection) -> Result<Vec<Facts>, String> {
         .collect())
 }
 
-fn linked_ids(conn: &Connection) -> Result<HashMap<i64, i64>, String> {
+pub(crate) fn linked_ids(conn: &Connection) -> Result<HashMap<i64, i64>, String> {
     let mut stmt = conn
         .prepare("SELECT txn_a_id, txn_b_id FROM transaction_links")
         .map_err(|e| e.to_string())?;
@@ -274,13 +274,13 @@ fn upsert(conn: &Connection, s: &NewSuggestion) -> Result<(), String> {
 
 /// Rationales are written in the UI language (`app_settings.locale`).
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Lang {
+pub(crate) enum Lang {
     Ru,
     En,
 }
 
 impl Lang {
-    fn of(conn: &Connection) -> Lang {
+    pub(crate) fn of(conn: &Connection) -> Lang {
         let locale: Option<String> = conn
             .query_row("SELECT value FROM app_settings WHERE key = 'locale'", [], |r| r.get(0))
             .optional()
@@ -292,7 +292,7 @@ impl Lang {
         }
     }
 
-    fn pick<'a>(self, ru: &'a str, en: &'a str) -> &'a str {
+    pub(crate) fn pick<'a>(self, ru: &'a str, en: &'a str) -> &'a str {
         match self {
             Lang::Ru => ru,
             Lang::En => en,
@@ -933,13 +933,21 @@ pub fn apply_suggestion(state: State<'_, DbState>, id: i64) -> Result<(), String
     }
 
     let conn = state.lock().map_err(|e| e.to_string())?;
-    set_status(&conn, id, &target, "accepted")
+    set_status(&conn, id, &target, "accepted")?;
+    if target.kind == KIND_CATEGORY {
+        crate::category_agent::log_decision(&conn, true, id, target.transaction_id, target.category_id)?;
+    }
+    Ok(())
 }
 
 pub fn dismiss_suggestion(state: State<'_, DbState>, id: i64) -> Result<(), String> {
     let conn = state.lock().map_err(|e| e.to_string())?;
     let target = load_target(&conn, id)?;
-    set_status(&conn, id, &target, "dismissed")
+    set_status(&conn, id, &target, "dismissed")?;
+    if target.kind == KIND_CATEGORY {
+        crate::category_agent::log_decision(&conn, false, id, target.transaction_id, target.category_id)?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1012,7 +1020,7 @@ fn non_empty(s: &Option<String>) -> Option<String> {
     s.as_deref().map(str::trim).filter(|v| !v.is_empty()).map(str::to_string)
 }
 
-fn context_of(conn: &Connection, f: &Facts) -> Result<SuggestionContext, String> {
+pub(crate) fn context_of(conn: &Connection, f: &Facts) -> Result<SuggestionContext, String> {
     Ok(SuggestionContext {
         transaction_id: f.id,
         account_id: f.account_id,
@@ -1033,7 +1041,7 @@ fn context_of(conn: &Connection, f: &Facts) -> Result<SuggestionContext, String>
 }
 
 /// `id → "Parent / Child"` for every category.
-fn category_paths(conn: &Connection) -> Result<Vec<(i64, String, String, Option<String>, Option<i64>)>, String> {
+pub(crate) fn category_paths(conn: &Connection) -> Result<Vec<(i64, String, String, Option<String>, Option<i64>)>, String> {
     let mut stmt = conn
         .prepare("SELECT id, name, kind, description, parent_id FROM categories ORDER BY kind, id")
         .map_err(|e| e.to_string())?;

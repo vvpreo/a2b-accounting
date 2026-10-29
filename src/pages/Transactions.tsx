@@ -36,6 +36,8 @@ import {
   listCategories,
   listLifeContexts,
   listTransactionSuggestions,
+  listCategoryExamples,
+  setCategoryExamples,
   listTransactionLinks,
   listTransactions,
   listTransactionsCategories,
@@ -50,6 +52,7 @@ import { TransactionModal } from "../components/TransactionModal";
 import { BulkCategorizeModal } from "../components/BulkCategorizeModal";
 import { BulkAnalyzeDocumentsModal } from "../components/BulkAnalyzeDocumentsModal";
 import { BulkDetectSuggestionsModal, DetectKind } from "../components/BulkDetectSuggestionsModal";
+import { BulkSuggestCategoriesModal } from "../components/BulkSuggestCategoriesModal";
 import { CategoriesCell } from "./transactions/CategoriesCell";
 import { NoteCell } from "./transactions/NoteCell";
 import { SuggestionCell } from "./transactions/SuggestionCell";
@@ -249,6 +252,10 @@ export function TransactionsPage({
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkDocsOpen, setBulkDocsOpen] = useState(false);
   const [bulkDetect, setBulkDetect] = useState<DetectKind | null>(null);
+  const [bulkSuggestOpen, setBulkSuggestOpen] = useState(false);
+  // Transactions marked as examples for the category agent (★ in the
+  // category cell).
+  const [exampleIds, setExampleIds] = useState<Set<number>>(() => new Set());
   // Pending suggestions (cash withdrawal / transfer / category) for the
   // Suggestion column, and the categories to describe category suggestions.
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
@@ -370,6 +377,29 @@ export function TransactionsPage({
       cancelled = true;
     };
   }, [version, localRefresh, docLinksVersion]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listCategoryExamples()
+      .then((ids) => {
+        if (!cancelled) setExampleIds(new Set(ids));
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [version, localRefresh, categoriesVersion]);
+
+  async function markExamples(ids: number[], example: boolean) {
+    try {
+      await setCategoryExamples(ids, example);
+      setExampleIds(new Set(await listCategoryExamples()));
+    } catch (e) {
+      setError(String(e));
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -1049,7 +1079,9 @@ export function TransactionsPage({
                 onAnalyzeDocuments={() => setBulkDocsOpen(true)}
                 onDetectCashWithdrawals={() => setBulkDetect("cash_withdrawal")}
                 onDetectTransfers={() => setBulkDetect("transfer")}
+                onSuggestCategories={() => setBulkSuggestOpen(true)}
                 onAssignCategory={() => setBulkOpen(true)}
+                onMarkExamples={(example) => void markExamples(bulkTargets.map((x) => x.id), example)}
                 onExportReferenceSet={() => void downloadReferenceSet()}
               />
             </div>
@@ -1404,6 +1436,8 @@ export function TransactionsPage({
                           kind={kind}
                           entries={entries}
                           onChanged={() => setCategoriesVersion((v) => v + 1)}
+                          isExample={exampleIds.has(x.id)}
+                          onToggleExample={() => void markExamples([x.id], !exampleIds.has(x.id))}
                         />
                       );
                     })()}
@@ -1665,6 +1699,14 @@ export function TransactionsPage({
           suggestions={suggestions}
           onClose={() => setBulkDetect(null)}
           onDone={() => setSuggestionsVersion((v) => v + 1)}
+        />
+      )}
+      {bulkSuggestOpen && (
+        <BulkSuggestCategoriesModal
+          transactions={bulkTargets}
+          suggestions={suggestions}
+          onClose={() => setBulkSuggestOpen(false)}
+          onProgress={() => setSuggestionsVersion((v) => v + 1)}
         />
       )}
       {bulkDocsOpen && (

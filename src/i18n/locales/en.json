@@ -258,7 +258,9 @@
       "modalMoveUp": "Move up",
       "modalMoveDown": "Move down",
       "modalDistribution": "Distribution",
-      "modalUncategorized": "Uncategorized"
+      "modalUncategorized": "Uncategorized",
+      "exampleOn": "Example for the agent — unmark",
+      "exampleOff": "Mark as an example for the agent"
     },
     "bulk": {
       "actions": "Actions",
@@ -284,7 +286,10 @@
       "analyzeDocuments": "Match documents",
       "detectCashWithdrawals": "Find cash withdrawals",
       "detectTransfers": "Find transfers between accounts",
-      "exportReferenceSet": "Export reference set"
+      "exportReferenceSet": "Export reference set",
+      "suggestCategories": "Suggest categories",
+      "markExamples": "Mark as examples for the agent ★",
+      "unmarkExamples": "Unmark examples"
     },
     "openDocument": "Open document",
     "filterPeriod": "Period",
@@ -423,7 +428,55 @@
     "colorTabPalette": "Palette",
     "colorTabShades": "Parent shades",
     "deleteConfirm": "Delete category “{name}”? All its subcategories will be removed permanently.",
-    "deleteConfirmYes": "Yes, delete"
+    "deleteConfirmYes": "Yes, delete",
+    "examples": {
+      "hint": "The agent categorises transactions after your own. For each category it sees every example you marked ★ (however many), and when there are fewer than {n} it tops up to {n} with recent categorised ones; plus up to 5 earlier transactions of the same counterparty. This shows where examples may not be enough. Mark examples here or on the Transactions screen: ☆ in the category cell, Actions ▾ for a selection.",
+      "autoOff": "Automatic examples are off (Settings → AI): the agent sees only the ones marked ★.",
+      "summary": "Need attention: {count} of {total} categories",
+      "onlyIssues": "Only those that need attention",
+      "empty": "No categories yet.",
+      "col": {
+        "category": "Category",
+        "labeled": "Categorised",
+        "examples": "Agent sees",
+        "agent": "Agent: right / wrong",
+        "issues": "Notes"
+      },
+      "labeledValue": "{count} · {peers}",
+      "peers": {
+        "one": "{count} counterparty",
+        "other": "{count} counterparties"
+      },
+      "examplesValue": "{shown} · ★ {marked}",
+      "agentValue": "{hits} / {misses}",
+      "issue": {
+        "no_examples": "nothing categorised",
+        "few_examples": "few: {count} of {n}",
+        "agent_misses": "agent mistakes: {count}",
+        "conflicts": "mixed counterparties: {count}"
+      },
+      "help": {
+        "no_examples": "No categorised transactions: the agent knows this category only by its name and description.",
+        "few_examples": "Fewer categorised transactions than the agent can show ({n}). Categorise a few more.",
+        "agent_misses": "The agent suggested another category for these. Mark ★ the ones typical for this category — the agent will see them as examples.",
+        "conflicts": "These counterparties' transactions are in different categories, and the model cannot tell them apart by the counterparty. Mark ★ a typical one here — ideally one whose note explains the difference."
+      },
+      "seen": "The agent sees ({count})",
+      "misses": "The agent was wrong ({count})",
+      "missNote": "agent: {path}",
+      "agentFalse": "{count} more times the agent suggested this category where it was another one or the suggestion was dismissed.",
+      "conflicts": "Mixed counterparties ({count})",
+      "conflictHere": "here {count}",
+      "allLabeled": "All categorised ({count})",
+      "showAll": "Show all",
+      "mark": "Mark as an example",
+      "unmark": "Remove from examples",
+      "auto": "auto"
+    },
+    "tabs": {
+      "tree": "Categories",
+      "examples": "Examples for the agent"
+    }
   },
   "settings": {
     "title": "Settings",
@@ -504,8 +557,8 @@
       "recognition": "Recognition"
     },
     "ai": {
-      "title": "AI provider",
-      "hint": "Configure an OpenAI-compatible provider for category suggestions — a local one (Ollama) keeps slip notes on your machines.",
+      "title": "LLM connections",
+      "hint": "Connections are created from presets: OpenAI, Anthropic, OpenRouter or any endpoint of your own (e.g. Ollama on your own box — then slip notes never leave your machines).",
       "presetLabel": "Preset",
       "baseUrlLabel": "Base URL",
       "modelLabel": "Model",
@@ -517,7 +570,30 @@
       "testSuccess": "OK — {message}",
       "testError": "Failed: {message}",
       "saveButton": "Save",
-      "saved": "Saved"
+      "saved": "Saved",
+      "empty": "No connections yet — add one from a preset below.",
+      "usedByAgent": "category agent",
+      "edit": "Edit",
+      "delete": "Delete",
+      "deleteConfirm": "Delete connection “{name}”?",
+      "addFrom": "Add a connection:",
+      "editTitle": "Connection",
+      "newTitle": "New connection — {preset}",
+      "nameLabel": "Name",
+      "protocolLabel": "Protocol",
+      "protocol": {
+        "openai": "OpenAI-compatible (chat completions)",
+        "anthropic": "Anthropic Messages API"
+      },
+      "apiKeyOptional": "not needed for a local server",
+      "temperatureDefault": "model default",
+      "error": {
+        "connection_not_found": "Connection not found",
+        "empty_name": "Enter a name",
+        "bad_protocol": "Unknown protocol",
+        "no_base_url": "Enter the base URL",
+        "no_model": "Enter the model"
+      }
     },
     "currencies": {
       "empty": "No exchange rates downloaded yet. Create an account in any currency — rates will be downloaded automatically.",
@@ -537,6 +613,32 @@
       "llmWarning": "Document images will be sent to this address. If it is a cloud service, your slips (names, account numbers, notes) leave the computer. For fully local use, run Ollama on your own machine.",
       "modelHint": "The model must understand images (vision), e.g. Qwen2.5-VL.",
       "rerunHint": "Switching the method does not re-read documents already processed — use “Recognise” on a document for that."
+    },
+    "agent": {
+      "title": "Category agent",
+      "hint": "Suggests one category per transaction via “Actions ▾ → Suggest categories”. It learns from your examples: per category, the transactions you starred, topped up with recent categorised ones when there are fewer than the set number.",
+      "connection": "Connection",
+      "noConnection": "— none —",
+      "cloudWarning": "This is a cloud provider: transaction descriptions, your notes and slip notes will be sent to it. The balance is never sent.",
+      "instructions": "Instructions for the agent (system prompt)",
+      "instructionsHint": "In your own words — how you categorise. The app adds the category list, the examples and the answer format itself.",
+      "examplesPerCategory": "Minimum examples per category",
+      "minConfidence": "Suggest only with confidence of at least (0–10)",
+      "minConfidenceHint": "The agent suggests a category only for obvious cases and leaves the rest to you without a suggestion. Below the threshold nothing is shown, but the answer still goes to the agent log. It is not asked again until the examples or the transaction's notes change; “Ask again” in the run dialog asks those too.",
+      "autoExamples": "When fewer are starred, top up to this number with recent categorised transactions (all starred ones always go in)",
+      "resetInstructions": "Restore default instructions",
+      "usageTitle": "Token usage",
+      "usageEmpty": "The agent has not been called yet.",
+      "usageModel": "Connection · model",
+      "usageCalls": "Calls",
+      "usagePrompt": "Prompt",
+      "usageCompletion": "Completion",
+      "usageTotal": "Total",
+      "usageAvgTime": "Avg time",
+      "usageErrors": "errors: {count}",
+      "usageReasoning": "reasoning {count}",
+      "exportLog": "Export agent log",
+      "exportLogHint": "Every model call (what was sent and received, tokens) and every decision of yours about suggestions — for evals."
     }
   },
   "builder": {
@@ -833,6 +935,18 @@
         "title": "Find transfers between accounts",
         "intro": "For the selected transactions ({count}) find the other side on another own bank account: same amount and currency, opposite direction, at most 5 minutes apart.",
         "result": "Pairs found: {count}."
+      },
+      "category": {
+        "title": "Suggest categories",
+        "intro": "For the selected transactions ({count}) the model suggests a category only when it is sure; the rest is left to you without a suggestion. Categorised and linked ones are skipped.",
+        "noConnection": "No connection selected for the agent — Settings → AI.",
+        "via": "Model: {name} · {model}",
+        "progress": "Processed {done} of {total}",
+        "result": "suggested: {count}",
+        "errors": "Errors: {count}",
+        "spent": "Tokens spent: {tokens}, model time: {seconds} s",
+        "stop": "Stop",
+        "redo": "Ask again also where there is a suggestion already ({count}) or the agent was not sure"
       }
     },
     "skip": {
@@ -845,7 +959,10 @@
       "no_cash_account": "no cash account in this currency",
       "dismissed": "dismissed earlier",
       "cash_pending": "has a cash-withdrawal suggestion",
-      "no_candidate": "no other side found"
+      "no_candidate": "no other side found",
+      "already_categorized": "already has a category",
+      "link_pending": "has a link suggestion",
+      "not_confident": "the agent is not sure — left to you"
     }
   },
   "context": {

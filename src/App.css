@@ -3231,6 +3231,38 @@ code {
   opacity: 1;
 }
 
+/* ★ — an example for the category agent: always visible when set, on hover
+   otherwise (like ✎). */
+.txn-categories-example-btn {
+  position: absolute;
+  top: 2px;
+  right: 24px;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.8);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  color: #1f2937;
+  opacity: 0;
+  transition: opacity 0.1s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.txn-categories-cell:hover .txn-categories-example-btn,
+.txn-categories-example-btn.is-example {
+  opacity: 1;
+}
+
+.txn-categories-example-btn.is-example {
+  color: #d97706;
+}
+
 .txn-categories-tooltip {
   position: absolute;
   top: calc(100% + 4px);
@@ -3593,9 +3625,14 @@ code {
       );
   }
 
-:root[data-theme="dark"] .txn-categories-edit-btn {
+:root[data-theme="dark"] .txn-categories-edit-btn,
+:root[data-theme="dark"] .txn-categories-example-btn {
     background: rgba(24, 24, 27, 0.85);
     color: #e4e4e7;
+  }
+
+:root[data-theme="dark"] .txn-categories-example-btn.is-example {
+    color: #fbbf24;
   }
 
 :root[data-theme="dark"] .txn-categories-tooltip {
@@ -3967,6 +4004,23 @@ code {
   color: #18181b;
   font-weight: 500;
   border-bottom-color: #1f2937;
+}
+
+:root[data-theme="dark"] .settings-tabs {
+  border-bottom-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .settings-tab-button {
+  color: #a1a1aa;
+}
+
+:root[data-theme="dark"] .settings-tab-button:hover,
+:root[data-theme="dark"] .settings-tab-button.active {
+  color: #f4f4f5;
+}
+
+:root[data-theme="dark"] .settings-tab-button.active {
+  border-bottom-color: #f4f4f5;
 }
 
 /* ===== Settings → Currencies ===== */
@@ -6537,5 +6591,323 @@ tr.account-strip-row.drop-after td {
 }
 
 :root[data-theme="dark"] .documents-filter-label {
+  color: #a1a1aa;
+}
+
+/* ---- Category agent: settings, examples ---- */
+
+.ai-connections {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0 12px;
+}
+
+.ai-connections td {
+  padding: 8px 4px;
+  border-bottom: 1px solid #e4e4e7;
+  vertical-align: top;
+}
+
+.ai-connection-actions {
+  white-space: nowrap;
+  text-align: right;
+}
+
+.ai-connection-actions button + button {
+  margin-left: 6px;
+}
+
+.ai-agent-badge {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: #e0e7ff;
+  color: #3730a3;
+  font-size: 11px;
+}
+
+.ai-connection-form {
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+  padding: 8px 12px 4px;
+  margin: 8px 0;
+}
+
+.ai-connection-form h4 {
+  margin: 4px 0 8px;
+}
+
+.agent-instructions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.agent-instructions textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  padding: 6px 8px;
+  resize: vertical;
+}
+
+.agent-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.ai-usage {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.ai-usage th,
+.ai-usage td {
+  padding: 4px 6px;
+  border-bottom: 1px solid #e4e4e7;
+  text-align: left;
+}
+
+.ai-usage .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-progress {
+  width: 100%;
+}
+
+.agent-examples .link-btn {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.agent-examples-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 20px;
+  margin: 12px 0;
+  font-size: 13px;
+}
+
+.agent-examples-head,
+.agent-examples-row {
+  display: grid;
+  grid-template-columns: minmax(200px, 2fr) 150px 140px 110px minmax(160px, 2fr);
+  gap: 12px;
+  align-items: baseline;
+  padding: 6px 4px;
+  font-size: 13px;
+}
+
+.agent-examples-head {
+  color: #71717a;
+  border-bottom: 1px solid #e4e4e7;
+}
+
+.agent-examples-row {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid #f4f4f5;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-examples-row:hover {
+  background: #fafafa;
+}
+
+.agent-examples-row > span {
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-examples-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.agent-examples-caret {
+  width: 12px;
+  color: #a1a1aa;
+}
+
+.agent-examples-issues {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.agent-issue {
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.agent-issue.is-no_examples,
+.agent-issue.is-agent_misses {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.agent-issue.is-ok {
+  background: none;
+  color: #16a34a;
+}
+
+.agent-examples-details {
+  padding: 4px 4px 14px 22px;
+  max-width: 960px;
+  border-bottom: 1px solid #e4e4e7;
+}
+
+.agent-examples-details h4 {
+  margin: 10px 0 4px;
+  font-size: 13px;
+}
+
+.agent-examples-details ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.agent-issue-help {
+  margin: 6px 0;
+}
+
+.agent-conflict {
+  margin: 6px 0 10px;
+}
+
+.agent-conflict-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.agent-conflict.is-resolved {
+  opacity: 0.7;
+}
+
+.agent-example-note {
+  margin-left: auto;
+  padding-left: 8px;
+  color: #71717a;
+  white-space: nowrap;
+}
+
+.agent-example {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0;
+  padding: 1px 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.agent-example-star {
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: 14px;
+  color: #a1a1aa;
+}
+
+.agent-example.is-marked .agent-example-star {
+  color: #d97706;
+}
+
+.agent-example-date,
+.agent-example-amount {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.agent-example-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+:root[data-theme="dark"] .ai-connections td,
+:root[data-theme="dark"] .ai-usage th,
+:root[data-theme="dark"] .ai-usage td {
+  border-bottom-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .ai-connection-form {
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .ai-agent-badge {
+  background: #312e81;
+  color: #e0e7ff;
+}
+
+:root[data-theme="dark"] .agent-instructions textarea {
+  background: #18181b;
+  border: 1px solid #3f3f46;
+  color: #f4f4f5;
+}
+
+:root[data-theme="dark"] .agent-example.is-marked .agent-example-star {
+  color: #fbbf24;
+}
+
+:root[data-theme="dark"] .agent-examples-head,
+:root[data-theme="dark"] .agent-examples-details {
+  border-bottom-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .agent-examples-row {
+  border-bottom-color: #27272a;
+}
+
+:root[data-theme="dark"] .agent-examples-row:hover {
+  background: #27272a;
+}
+
+:root[data-theme="dark"] .agent-issue {
+  background: #422006;
+  color: #fcd34d;
+}
+
+:root[data-theme="dark"] .agent-issue.is-no_examples,
+:root[data-theme="dark"] .agent-issue.is-agent_misses {
+  background: #450a0a;
+  color: #fca5a5;
+}
+
+:root[data-theme="dark"] .agent-issue.is-ok {
+  background: none;
+  color: #4ade80;
+}
+
+:root[data-theme="dark"] .agent-example-note {
   color: #a1a1aa;
 }

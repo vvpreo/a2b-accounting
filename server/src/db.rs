@@ -117,6 +117,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "023_add_life_contexts",
         include_str!("../migrations/023_add_life_contexts.sql"),
     ),
+    (
+        24,
+        "024_add_category_agent",
+        include_str!("../migrations/024_add_category_agent.sql"),
+    ),
 ];
 
 pub fn open(data_dir: &Path) -> rusqlite::Result<Connection> {

@@ -11,6 +11,8 @@ import {
   updateCategory,
 } from "../lib/api";
 import { buildTree, CategoryNode } from "../lib/category-tree";
+import { AgentExamplesSection } from "./categories/AgentExamplesSection";
+import { useViewState } from "../lib/view-state";
 import {
   ROOT_PALETTE,
   deriveChildColor,
@@ -31,6 +33,7 @@ export function CategoriesPage() {
     parent: Category | null;
   } | null>(null);
   const [editing, setEditing] = useState<Category | null>(null);
+  const [tab, setTab] = useViewState<"tree" | "examples">("categories.tab", "tree");
 
   useEffect(() => {
     listCategories()
@@ -50,27 +53,50 @@ export function CategoriesPage() {
     <section className="page">
       {error && <div className="error">{error}</div>}
 
-      <CategorySection
-        kind="income"
-        title={t("categories.sectionIncome")}
-        nodes={buildTree(categories, "income")}
-        onCreateRoot={() => setCreating({ kind: "income", parent: null })}
-        onCreateChild={(parent) =>
-          setCreating({ kind: "income", parent })
-        }
-        onEdit={setEditing}
-      />
+      <div className="settings-tabs">
+        <button
+          type="button"
+          className={"settings-tab-button" + (tab === "tree" ? " active" : "")}
+          onClick={() => setTab("tree")}
+        >
+          {t("categories.tabs.tree")}
+        </button>
+        <button
+          type="button"
+          className={"settings-tab-button" + (tab === "examples" ? " active" : "")}
+          onClick={() => setTab("examples")}
+        >
+          {t("categories.tabs.examples")}
+        </button>
+      </div>
 
-      <CategorySection
-        kind="expense"
-        title={t("categories.sectionExpense")}
-        nodes={buildTree(categories, "expense")}
-        onCreateRoot={() => setCreating({ kind: "expense", parent: null })}
-        onCreateChild={(parent) =>
-          setCreating({ kind: "expense", parent })
-        }
-        onEdit={setEditing}
-      />
+      {tab === "examples" && <AgentExamplesSection categories={categories} />}
+
+      {tab === "tree" && (
+        <>
+          <CategorySection
+            kind="income"
+            title={t("categories.sectionIncome")}
+            nodes={buildTree(categories, "income")}
+            onCreateRoot={() => setCreating({ kind: "income", parent: null })}
+            onCreateChild={(parent) =>
+              setCreating({ kind: "income", parent })
+            }
+            onEdit={setEditing}
+          />
+
+          <CategorySection
+            kind="expense"
+            title={t("categories.sectionExpense")}
+            nodes={buildTree(categories, "expense")}
+            onCreateRoot={() => setCreating({ kind: "expense", parent: null })}
+            onCreateChild={(parent) =>
+              setCreating({ kind: "expense", parent })
+            }
+            onEdit={setEditing}
+          />
+        </>
+      )}
 
       {creating && (
         <CategoryFormModal

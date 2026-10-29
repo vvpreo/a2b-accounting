@@ -2204,27 +2204,6 @@ pub fn ensure_default_report_view(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// Seed a default AI provider config (OpenRouter, with the API key read from
-/// the `OPENROUTER_API_KEY` environment variable) so the provider is usable
-/// out of the box without typing credentials in every launch. Idempotent and
-/// non-destructive: `INSERT OR IGNORE` only fills the key when it is absent, so
-/// a config the user has edited is never overwritten. The actual secret lives
-/// in the env var, never in the database.
-pub fn ensure_ai_provider_config(conn: &Connection) -> rusqlite::Result<()> {
-    let config = serde_json::json!({
-        "presetId": "openrouter",
-        "baseUrl": "https://openrouter.ai/api/v1",
-        "model": "qwen/qwen3-30b-a3b",
-        "apiKey": "env:OPENROUTER_API_KEY",
-        "temperature": 0
-    });
-    conn.execute(
-        "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('ai_provider_config', ?1)",
-        params![config.to_string()],
-    )?;
-    Ok(())
-}
-
 // ---- Public seed/wipe pipeline ----
 
 fn has_user_data(conn: &Connection) -> rusqlite::Result<bool> {
@@ -2297,6 +2276,8 @@ fn wipe(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM attachments", [])?;
     conn.execute("DELETE FROM attachment_uploads", [])?;
     conn.execute("DELETE FROM transaction_suggestions", [])?;
+    conn.execute("DELETE FROM category_examples", [])?;
+    conn.execute("DELETE FROM agent_log", [])?;
     conn.execute("DELETE FROM transaction_links", [])?;
     conn.execute("DELETE FROM transaction_categories", [])?;
     conn.execute("DELETE FROM transactions", [])?;
@@ -2415,40 +2396,6 @@ mod tests {
         // Apply migrations the same way db::open does.
         crate::db::apply_migrations_for_tests(&conn).unwrap();
         (dir, conn)
-    }
-
-    #[test]
-    fn ensure_ai_provider_config_inserts_default_and_is_non_destructive() {
-        let (_dir, conn) = open_clean_db();
-
-        // First call inserts the OpenRouter default referencing the env key.
-        ensure_ai_provider_config(&conn).unwrap();
-        let value: String = conn
-            .query_row(
-                "SELECT value FROM app_settings WHERE key = 'ai_provider_config'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert!(value.contains("env:OPENROUTER_API_KEY"));
-        assert!(value.contains("openrouter"));
-
-        // Simulate a user edit, then a second call: must NOT overwrite it.
-        conn.execute(
-            "UPDATE app_settings SET value = '{\"presetId\":\"custom\"}'
-             WHERE key = 'ai_provider_config'",
-            [],
-        )
-        .unwrap();
-        ensure_ai_provider_config(&conn).unwrap();
-        let after: String = conn
-            .query_row(
-                "SELECT value FROM app_settings WHERE key = 'ai_provider_config'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(after, "{\"presetId\":\"custom\"}");
     }
 
     #[test]

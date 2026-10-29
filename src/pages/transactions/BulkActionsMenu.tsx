@@ -12,15 +12,18 @@ interface Props {
   onAnalyzeDocuments: () => void;
   onDetectCashWithdrawals: () => void;
   onDetectTransfers: () => void;
+  onSuggestCategories: () => void;
   onAssignCategory: () => void;
+  onMarkExamples: (example: boolean) => void;
   onExportReferenceSet: () => void;
 }
 
 /// Always-visible "Actions ▾" dropdown for the transactions section. Mirrors
 /// the outside-click / Escape behaviour of the filter dropdowns. Bulk actions
 /// on the selection, in pipeline order — match documents (slips), find cash
-/// withdrawals, find transfers between own accounts, assign a category,
-/// export a reference set — then "Import transactions", which needs no
+/// withdrawals, find transfers between own accounts, suggest categories (the
+/// agent), assign a category, mark / unmark examples for the agent, export a
+/// reference set — then "Import transactions", which needs no
 /// selection.
 export function BulkActionsMenu({
   selectedCount,
@@ -28,7 +31,9 @@ export function BulkActionsMenu({
   onAnalyzeDocuments,
   onDetectCashWithdrawals,
   onDetectTransfers,
+  onSuggestCategories,
   onAssignCategory,
+  onMarkExamples,
   onExportReferenceSet,
 }: Props) {
   const t = useT();
@@ -77,7 +82,10 @@ export function BulkActionsMenu({
             { label: t("transactions.bulk.analyzeDocuments"), run: onAnalyzeDocuments },
             { label: t("transactions.bulk.detectCashWithdrawals"), run: onDetectCashWithdrawals },
             { label: t("transactions.bulk.detectTransfers"), run: onDetectTransfers },
+            { label: t("transactions.bulk.suggestCategories"), run: onSuggestCategories },
             { label: t("transactions.bulk.assignCategory"), run: onAssignCategory },
+            { label: t("transactions.bulk.markExamples"), run: () => onMarkExamples(true) },
+            { label: t("transactions.bulk.unmarkExamples"), run: () => onMarkExamples(false) },
             { label: t("transactions.bulk.exportReferenceSet"), run: onExportReferenceSet },
           ].map((item) => (
             <button

@@ -242,7 +242,7 @@ async fn rpc(
         "list_currencies" => run!(state crate::currencies::list_currencies),
 
         "set_transaction_categories" => {
-            run!(state crate::transaction_categories::set_transaction_categories, [
+            run!(state crate::category_agent::set_transaction_categories_by_user, [
                 transaction_id: i64, items: Vec<crate::transaction_categories::CategoryItem>])
         }
         "list_transactions_categories" => {
@@ -354,7 +354,28 @@ async fn rpc(
         "get_setting" => run!(state crate::settings::get_setting, [key: String]),
         "set_setting" => run!(state crate::settings::set_setting, [key: String, value: String]),
 
-        "ai_test_connection" => run!(app_async crate::ai::ai_test_connection),
+        "list_ai_connections" => run!(state crate::ai::list_ai_connections),
+        "save_ai_connection" => run!(state crate::ai::save_ai_connection, [
+            connection: crate::ai::AiConnection]),
+        "delete_ai_connection" => run!(state crate::ai::delete_ai_connection, [id: i64]),
+        "ai_test_connection" => run!(app_async crate::ai::ai_test_connection, [id: i64]),
+
+        "get_agent_settings" => run!(state crate::category_agent::get_agent_settings),
+        "save_agent_settings" => run!(state crate::category_agent::save_agent_settings, [
+            connection_id: Option<i64>, instructions: String, examples_per_category: usize,
+            auto_examples: bool, min_confidence: i64]),
+        "suggest_category" => run!(app_async crate::category_agent::suggest_category, [
+            transaction_id: i64, redo: bool]),
+        "set_category_examples" => run!(state crate::category_agent::set_category_examples, [
+            transaction_ids: Vec<i64>, example: bool]),
+        "list_category_examples" => run!(state crate::category_agent::list_category_examples),
+        "category_examples_report" => {
+            run!(state crate::category_agent::category_examples_report)
+        }
+        "preview_category_prompt" => run!(state crate::category_agent::preview_category_prompt, [
+            transaction_id: i64]),
+        "agent_token_usage" => run!(state crate::category_agent::agent_token_usage),
+        "export_agent_log" => run!(state crate::category_agent::export_agent_log),
 
         "detect_cash_withdrawals" => run!(state crate::suggestions::detect_cash_withdrawals, [
             transaction_ids: Vec<i64>, redo: bool]),
