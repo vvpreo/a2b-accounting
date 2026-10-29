@@ -376,7 +376,8 @@
     "filterAmount": "Сумма",
     "amountFrom": "от",
     "amountTo": "до",
-    "amountClear": "Сбросить сумму"
+    "amountClear": "Сбросить сумму",
+    "contextAdd": "Нажмите, чтобы добавить событие на этот день"
   },
   "import": {
     "title": "Импорт транзакций",

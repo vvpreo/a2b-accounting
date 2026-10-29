@@ -6697,8 +6697,34 @@ tr:hover .txn-example-btn.is-example {
   padding: 0 6px;
   border: 1px solid;
   border-radius: 8px;
+  background: none;
+  font: inherit;
   font-size: 12px;
   line-height: 18px;
+  color: inherit;
+  cursor: pointer;
+}
+
+.context-chip:hover {
+  filter: brightness(0.95);
+  text-decoration: underline;
+}
+
+/* The Context cell is clickable: an empty spot adds an event on the
+   transaction's day; a chip edits its event. "+" shows on hover. */
+.page--transactions td.col-context--editable {
+  cursor: pointer;
+}
+
+.context-add {
+  display: none;
+  color: #a1a1aa;
+  font-size: 13px;
+  padding: 0 4px;
+}
+
+.page--transactions td.col-context--editable:hover .context-add {
+  display: inline;
 }
 
 .context-chip-dot {

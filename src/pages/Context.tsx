@@ -183,19 +183,24 @@ function EventsTab() {
   );
 }
 
-function ContextFormModal({
+/** Create / edit one event. Also opened from the Transactions screen (the
+ *  Context column), where a new event starts on the transaction's day. */
+export function ContextFormModal({
   context,
   defaultColor,
+  defaultDay,
   onClose,
   onSaved,
 }: {
   context: LifeContext | null;
   defaultColor: string;
+  /** `YYYY-MM-DD` a new event starts and ends on (default: today). */
+  defaultDay?: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const t = useT();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = defaultDay ?? new Date().toISOString().slice(0, 10);
   const [title, setTitle] = useState(context?.title ?? "");
   const [startsOn, setStartsOn] = useState(context?.startsOn ?? today);
   const [endsOn, setEndsOn] = useState(context?.endsOn ?? today);

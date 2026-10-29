@@ -52,6 +52,8 @@ import { useViewState } from "../lib/view-state";
 import { buildTree, flattenTree } from "../lib/category-tree";
 import { isUnsure } from "../lib/suggestion-state";
 import { TransactionModal } from "../components/TransactionModal";
+import { ContextFormModal } from "./Context";
+import { nextRootColor } from "../lib/colors";
 import { BulkCategorizeModal } from "../components/BulkCategorizeModal";
 import { BulkAnalyzeDocumentsModal } from "../components/BulkAnalyzeDocumentsModal";
 import { BulkDetectSuggestionsModal, DetectKind } from "../components/BulkDetectSuggestionsModal";
@@ -342,6 +344,10 @@ export function TransactionsPage({
   const [categories, setCategories] = useState<Category[]>([]);
   // Life-context intervals (the Context screen) for the Context column.
   const [lifeContexts, setLifeContexts] = useState<LifeContext[]>([]);
+  const [lifeContextsVersion, setLifeContextsVersion] = useState(0);
+  // An event being created (on a transaction's day) or edited right from the
+  // Context column.
+  const [eventEditing, setEventEditing] = useState<{ context: LifeContext | null; day: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Filters survive switching tabs (see lib/view-state.ts).
   const [selectedKinds, setSelectedKinds] = useViewState<RowKind[]>("transactions.kinds.v4", () => [
@@ -520,7 +526,7 @@ export function TransactionsPage({
     return () => {
       cancelled = true;
     };
-  }, [version]);
+  }, [version, lifeContextsVersion]);
 
   // Oldest interval first, so overlapping contexts keep a stable order.
   const lifeContextsAsc = useMemo(
@@ -1594,7 +1600,12 @@ export function TransactionsPage({
                         .join("\n\n\n");
                       return (
                         <td
-                          className="col-context"
+                          className="col-context col-context--editable"
+                          title={text ? undefined : t("transactions.contextAdd")}
+                          onClick={() => {
+                            setTooltip(null);
+                            setEventEditing({ context: null, day });
+                          }}
                           onMouseEnter={(e) => {
                             if (!text) return;
                             const r = e.currentTarget.getBoundingClientRect();
@@ -1605,11 +1616,24 @@ export function TransactionsPage({
                           onMouseLeave={() => setTooltip(null)}
                         >
                           {on.map((c) => (
-                            <span key={c.id} className="context-chip" style={{ borderColor: c.color }}>
+                            <button
+                              key={c.id}
+                              type="button"
+                              className="context-chip"
+                              style={{ borderColor: c.color }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setTooltip(null);
+                                setEventEditing({ context: c, day });
+                              }}
+                            >
                               <span className="context-chip-dot" style={{ background: c.color }} />
                               {c.title}
-                            </span>
+                            </button>
                           ))}
+                          <span className="context-add" aria-hidden="true">
+                            +
+                          </span>
                         </td>
                       );
                     })()}
@@ -1973,6 +1997,18 @@ export function TransactionsPage({
         />
       )}
 
+      {eventEditing && (
+        <ContextFormModal
+          context={eventEditing.context}
+          defaultDay={eventEditing.day}
+          defaultColor={nextRootColor(lifeContexts.map((c) => c.color))}
+          onClose={() => setEventEditing(null)}
+          onSaved={() => {
+            setEventEditing(null);
+            setLifeContextsVersion((v) => v + 1);
+          }}
+        />
+      )}
       {detailTxnId !== null && (
         <TransactionModal
           transactionId={detailTxnId}

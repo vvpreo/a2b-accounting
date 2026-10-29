@@ -372,7 +372,8 @@
     "filterAmount": "Amount",
     "amountFrom": "from",
     "amountTo": "to",
-    "amountClear": "Clear the amount"
+    "amountClear": "Clear the amount",
+    "contextAdd": "Click to add an event on this day"
   },
   "import": {
     "title": "Import transactions",
