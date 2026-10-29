@@ -49,6 +49,7 @@ import {
 } from "../lib/api";
 import { formatMoney, parseMoneyToMinor } from "../lib/money";
 import { useViewState } from "../lib/view-state";
+import { isUnsure } from "../lib/suggestion-state";
 import { TransactionModal } from "../components/TransactionModal";
 import { BulkCategorizeModal } from "../components/BulkCategorizeModal";
 import { BulkAnalyzeDocumentsModal } from "../components/BulkAnalyzeDocumentsModal";
@@ -72,10 +73,12 @@ type RowKind =
   | "with_note"
   | "without_note"
   | "linked"
-  | "unlinked";
+  | "unlinked"
+  | "with_suggestion"
+  | "without_suggestion";
 
-/// The Filter dropdown has three groups: row kinds, note presence and
-/// transfer links. Within a group items combine with OR, the groups combine
+/// The Filter dropdown has four groups: row kinds, note presence, transfer
+/// links and pending suggestions. Within a group items combine with OR, the groups combine
 /// with AND — so "Outgoing" + "Without note" means outgoing rows nothing is
 /// known about yet, and unticking "Linked pairs" hides both sides of every
 /// transfer / cash withdrawal.
@@ -83,8 +86,13 @@ type RowKind =
 /// A transaction "has a note" when the user wrote a comment or a document
 /// (slip) is linked — even one with no recognised text: the same rule as the
 /// icon in the Note column.
+///
+/// A transaction "has a suggestion" when the Suggestion column offers
+/// something to apply — a category, a transfer pair or a cash withdrawal, of
+/// any kind; an "agent not sure" mark does not count.
 const NOTE_KINDS: RowKind[] = ["with_note", "without_note"];
 const LINK_KINDS: RowKind[] = ["linked", "unlinked"];
+const SUGGESTION_KINDS: RowKind[] = ["with_suggestion", "without_suggestion"];
 const ROW_KINDS: RowKind[] = [
   "correcting",
   "incoming",
@@ -93,6 +101,7 @@ const ROW_KINDS: RowKind[] = [
   "with_comment",
   ...NOTE_KINDS,
   ...LINK_KINDS,
+  ...SUGGESTION_KINDS,
 ];
 
 /// Two display modes for the Δ column. "percent" is the default:
@@ -182,8 +191,10 @@ function rowMatchesKind(row: { isCorrecting: boolean; credit: string; debit: str
     case "without_note":
     case "linked":
     case "unlinked":
-      // Note and link presence are decided by the caller (they need the
-      // document-link and transfer-link maps).
+    case "with_suggestion":
+    case "without_suggestion":
+      // Note, link and suggestion presence are decided by the caller (they
+      // need the document-link, transfer-link and suggestion maps).
       return false;
   }
 }
@@ -281,7 +292,7 @@ export function TransactionsPage({
   const [lifeContexts, setLifeContexts] = useState<LifeContext[]>([]);
   const [error, setError] = useState<string | null>(null);
   // Filters survive switching tabs (see lib/view-state.ts).
-  const [selectedKinds, setSelectedKinds] = useViewState<RowKind[]>("transactions.kinds.v2", () => [
+  const [selectedKinds, setSelectedKinds] = useViewState<RowKind[]>("transactions.kinds.v3", () => [
     ...ROW_KINDS,
   ]);
   const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(() => [
@@ -765,16 +776,29 @@ export function TransactionsPage({
       if (toMs !== null && ts > toMs) return false;
       const noteKinds = selectedKinds.filter((k) => NOTE_KINDS.includes(k));
       const linkKinds = selectedKinds.filter((k) => LINK_KINDS.includes(k));
+      const suggestionKinds = selectedKinds.filter((k) => SUGGESTION_KINDS.includes(k));
       const rowKinds = selectedKinds.filter(
-        (k) => !NOTE_KINDS.includes(k) && !LINK_KINDS.includes(k),
+        (k) => !NOTE_KINDS.includes(k) && !LINK_KINDS.includes(k) && !SUGGESTION_KINDS.includes(k),
       );
       const hasNote = !!x.comment?.trim() || docLinksByTxn.has(x.id);
       if (!noteKinds.some((k) => (k === "with_note") === hasNote)) return false;
       const isLinked = linkPartnerById.has(x.id);
       if (!linkKinds.some((k) => (k === "linked") === isLinked)) return false;
+      const hasSuggestion = (suggestionsByTxn.get(x.id) ?? []).some((s) => !isUnsure(s, agentMinConfidence));
+      if (!suggestionKinds.some((k) => (k === "with_suggestion") === hasSuggestion)) return false;
       return rowKinds.some((k) => rowMatchesKind(x, k));
     });
-  }, [txns, selectedAccountIds, selectedKinds, dateFrom, dateTo, docLinksByTxn, linkPartnerById]);
+  }, [
+    txns,
+    selectedAccountIds,
+    selectedKinds,
+    dateFrom,
+    dateTo,
+    docLinksByTxn,
+    linkPartnerById,
+    suggestionsByTxn,
+    agentMinConfidence,
+  ]);
 
   // The "same account" hover tint only tells something when the visible rows
   // span several accounts; with a single account it would just tint the
@@ -1104,7 +1128,9 @@ export function TransactionsPage({
                     ? t("transactions.filterGroupNote")
                     : LINK_KINDS.includes(k)
                       ? t("transactions.filterGroupLink")
-                      : t("transactions.filterGroupKind"),
+                      : SUGGESTION_KINDS.includes(k)
+                        ? t("transactions.filterGroupSuggestion")
+                        : t("transactions.filterGroupKind"),
                 }))}
                 selected={selectedKinds}
                 onApply={setSelectedKinds}
