@@ -19,10 +19,6 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use crate::host::AppHandle;
 
-/// Import/restore payloads can be large (a year of statements as JSON rows,
-/// a multi-megabyte DB in a ZIP) — axum's 2 MB default is far too small.
-const BODY_LIMIT_BYTES: usize = 512 * 1024 * 1024;
-
 pub async fn serve(app: AppHandle) {
     let bind = std::env::var(crate::ENV_BIND).unwrap_or_else(|_| crate::DEFAULT_BIND.to_string());
     let static_dir =
@@ -38,7 +34,9 @@ pub async fn serve(app: AppHandle) {
         .route("/api/attachments/{id}/file", get(attachment_file))
         .route("/api/health", get(|| async { "ok" }))
         .fallback_service(ServeDir::new(&static_dir).fallback(ServeFile::new(index)))
-        .layer(DefaultBodyLimit::max(BODY_LIMIT_BYTES))
+        // No cap on request bodies: a single-user server, and a backup ZIP
+        // grows with every stored document (axum's default is only 2 MB).
+        .layer(DefaultBodyLimit::disable())
         .with_state(app);
     if let Some(token) = std::env::var(crate::ENV_ACCESS_TOKEN).ok().filter(|t| !t.is_empty()) {
         let token = std::sync::Arc::new(token);

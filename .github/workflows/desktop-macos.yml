@@ -172,7 +172,7 @@ jobs:
           gh release upload desktop-dev latest.json --clobber
           current="$(ls ./*.app.tar.gz | xargs -n1 basename)"
           gh release view desktop-dev --json assets -q '.assets[].name' \
-            | grep '\.app\.tar\.gz$' | grep -vxF "$current" \
+            | { grep '\.app\.tar\.gz$' | grep -vxF "$current" || true; } \
             | while read -r old; do gh release delete-asset desktop-dev "$old" --yes; done
 
       - name: Publish stable release
