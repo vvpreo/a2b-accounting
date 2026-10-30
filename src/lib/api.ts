@@ -486,6 +486,66 @@ export function deleteCashTransactions(
   return invoke<{ deleted: number; skippedNotCash: number }>("delete_cash_transactions", { transactionIds });
 }
 
+/** One row the app derived from the agent's plan (Records → "Entries from a
+ *  description"). `date` is the owner's local date. */
+export interface CashDraftRow {
+  date: string;
+  direction: CashDirection;
+  amount: string;
+  categoryId: number | null;
+  peer: string | null;
+  comment: string | null;
+  /** Index of the repeating rule; null for a one-off entry. */
+  ruleIndex: number | null;
+  /** The rule's day is not in this month — moved to its last day. */
+  movedToMonthEnd: boolean;
+  /** The model named a category that is unknown or of the other kind. */
+  categoryDropped: boolean;
+}
+
+export interface CashDraft {
+  rows: CashDraftRow[];
+  ruleCount: number;
+  onceCount: number;
+  notes: string | null;
+  logId: number;
+  totalTokens: number;
+  durationMs: number;
+}
+
+/** Ask the agent's model to turn a text description into cash entries. Error
+ *  codes: `agent.no_connection`, `cash_dictation.empty`,
+ *  `cash_dictation.too_many_rows`; anything else is the provider's message. */
+export function draftCashEntries(args: {
+  accountId: number;
+  text: string;
+  today: string;
+  tzOffsetMinutes: number;
+}): Promise<CashDraft> {
+  return invoke<CashDraft>("draft_cash_entries", { ...args });
+}
+
+export interface CashEntryInput {
+  occurredAtUtc: string;
+  direction: CashDirection;
+  amount: string;
+  categoryId: number | null;
+  peer: string | null;
+  comment: string | null;
+}
+
+/** Create the confirmed entries at once (each with its category on the whole
+ *  amount). `logId` / `proposed` / `edited` only go to the agent log. */
+export function createCashEntries(args: {
+  accountId: number;
+  entries: CashEntryInput[];
+  logId: number | null;
+  proposed: number;
+  edited: number;
+}): Promise<number> {
+  return invoke<number>("create_cash_entries", { ...args });
+}
+
 // Stable error codes from `create_cash_withdrawal` and friends. The
 // `link.*` codes reuse the existing pairing errors when a withdrawal
 // hits the same invariants (already linked, same account).

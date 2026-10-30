@@ -358,6 +358,11 @@ async fn rpc(
             id: i64]),
         "delete_cash_transactions" => run!(state crate::cash_transactions::delete_cash_transactions, [
             transaction_ids: Vec<i64>]),
+        "draft_cash_entries" => run!(app_async crate::cash_dictation::draft_cash_entries, [
+            account_id: i64, text: String, today: String, tz_offset_minutes: i32]),
+        "create_cash_entries" => run!(state crate::cash_dictation::create_cash_entries, [
+            account_id: i64, entries: Vec<crate::cash_dictation::CashEntryInput>,
+            log_id: Option<i64>, proposed: usize, edited: usize]),
         "create_cash_withdrawal" => run!(state crate::cash_withdrawals::create_cash_withdrawal, [
             source_txn_id: i64, cash_account_id: i64, amount: String]),
 

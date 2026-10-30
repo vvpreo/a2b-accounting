@@ -3,6 +3,7 @@ mod accounts;
 mod ai;
 mod attachments;
 mod backup;
+mod cash_dictation;
 mod cash_transactions;
 mod cash_withdrawals;
 mod categories;

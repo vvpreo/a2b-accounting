@@ -48,6 +48,7 @@ import {
   triggerDownload,
 } from "../lib/api";
 import type { BulkUpdateResult } from "../lib/api";
+import { CashDictationModal } from "../components/CashDictationModal";
 import { buildAccountCsv } from "../lib/csv-export";
 import { parseByFormat } from "../lib/import-formats";
 import { ACCOUNT_PRESETS, findPresetByName } from "../lib/account-presets";
@@ -1621,6 +1622,7 @@ function CashTransactionsTab({ account }: { account: Account }) {
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Transaction | null>(null);
   const [creating, setCreating] = useState(false);
+  const [dictating, setDictating] = useState(false);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<number | null>(
     null,
   );
@@ -1712,6 +1714,14 @@ function CashTransactionsTab({ account }: { account: Account }) {
       <div className="cash-tab-toolbar">
         <button
           type="button"
+          className="btn-ghost"
+          onClick={() => setDictating(true)}
+          title={t("accounts.cash.dictation.buttonHint")}
+        >
+          {t("accounts.cash.dictation.button")}
+        </button>
+        <button
+          type="button"
           className="btn-primary"
           onClick={() => setCreating(true)}
         >
@@ -1796,6 +1806,17 @@ function CashTransactionsTab({ account }: { account: Account }) {
         </table>
       )}
 
+      {dictating && (
+        <CashDictationModal
+          account={account}
+          existing={rows}
+          onClose={() => setDictating(false)}
+          onCreated={async () => {
+            setDictating(false);
+            await refresh();
+          }}
+        />
+      )}
       {creating && (
         <CashTransactionModal
           account={account}

@@ -560,7 +560,168 @@ body {
 .cash-tab-toolbar {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
   margin-bottom: 12px;
+}
+
+/* Records → "Entries from a description": the text step, then the preview.
+   `.modal` comes later in the file — hence the doubled class. */
+.modal.modal--cash-dictation {
+  width: min(640px, 94vw);
+  bottom: auto;
+}
+
+.cash-dictation-text {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  font: inherit;
+  line-height: 1.4;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  resize: vertical;
+}
+
+.cash-dictation-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  font-weight: 500;
+}
+
+.cash-dictation-source {
+  padding: 8px 10px;
+  border-left: 3px solid #a1a1aa;
+  border-radius: 4px;
+  background: #fafafa;
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.cash-dictation-source strong {
+  display: block;
+  margin-bottom: 2px;
+}
+
+.cash-dictation-notes {
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: #f4f4f5;
+  white-space: pre-wrap;
+}
+
+.cash-dictation-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.cash-dictation-table th,
+.cash-dictation-table td {
+  padding: 3px 4px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.cash-dictation-table input:not([type="checkbox"]),
+.cash-dictation-table select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 3px 6px;
+  font: inherit;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background: transparent;
+}
+
+.cash-dictation-table input[type="date"] {
+  width: 140px;
+}
+
+.cash-dictation-table .cash-dictation-amount {
+  width: 110px;
+  text-align: right;
+}
+
+.cash-dictation-table .is-invalid {
+  border-color: #dc2626;
+}
+
+.cash-dictation-table tr.is-excluded td:not(:first-child) {
+  opacity: 0.45;
+}
+
+.cash-dictation-category {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 26px;
+  padding: 2px 6px;
+  font: inherit;
+  text-align: left;
+  border: 1px dashed #d4d4d8;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.cash-dictation-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.cash-dictation-placeholder {
+  color: #a1a1aa;
+}
+
+.cash-dictation-marks {
+  white-space: nowrap;
+}
+
+.cash-dictation-mark {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
+  border-radius: 8px;
+  background: #e4e4e7;
+  color: #3f3f46;
+}
+
+.cash-dictation-mark.is-warn {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+:root[data-theme="dark"] .cash-dictation-text,
+:root[data-theme="dark"] .cash-dictation-table input:not([type="checkbox"]),
+:root[data-theme="dark"] .cash-dictation-table select,
+:root[data-theme="dark"] .cash-dictation-category {
+  background: #18181b;
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .cash-dictation-source {
+  background: #27272a;
+  border-left-color: #52525b;
+}
+
+:root[data-theme="dark"] .cash-dictation-notes {
+  background: #18181b;
+}
+
+:root[data-theme="dark"] .cash-dictation-mark {
+  background: #3f3f46;
+  color: #e4e4e7;
+}
+
+:root[data-theme="dark"] .cash-dictation-mark.is-warn {
+  background: #451a03;
+  color: #fcd34d;
 }
 
 .cash-tab-table {

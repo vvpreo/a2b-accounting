@@ -45,7 +45,7 @@ const SAME_PEER_EXAMPLES: usize = 5;
 /// One retry when the answer does not parse or names a wrong category.
 const MAX_ATTEMPTS: usize = 2;
 
-const ERR_NO_CONNECTION: &str = "agent.no_connection";
+pub(crate) const ERR_NO_CONNECTION: &str = "agent.no_connection";
 const ERR_NOT_FOUND: &str = "agent.not_found";
 /// Skip reason: the model was not sure (abstained or below the threshold).
 const SKIP_NOT_CONFIDENT: &str = "not_confident";
@@ -297,7 +297,8 @@ pub struct TokenUsageRow {
     pub last_at: String,
 }
 
-/// Token spend per connection and model, from the log.
+/// Token spend per connection and model, from the log (category agent and
+/// cash-dictation calls).
 pub fn agent_token_usage(state: State<'_, DbState>) -> Result<Vec<TokenUsageRow>, String> {
     let conn = state.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
@@ -306,13 +307,13 @@ pub fn agent_token_usage(state: State<'_, DbState>) -> Result<Vec<TokenUsageRow>
                     COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0),
                     COALESCE(SUM(reasoning_tokens), 0), COALESCE(SUM(total_tokens), 0),
                     COALESCE(SUM(duration_ms), 0), MAX(created_at)
-             FROM agent_log WHERE event = ?1
+             FROM agent_log WHERE event IN (?1, ?2)
              GROUP BY connection_name, model
              ORDER BY MAX(created_at) DESC",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map([EVENT_LLM_CALL], |r| {
+        .query_map([EVENT_LLM_CALL, crate::cash_dictation::EVENT_CALL], |r| {
             Ok(TokenUsageRow {
                 connection_name: r.get(0)?,
                 model: r.get(1)?,
@@ -455,7 +456,7 @@ fn marked_examples(conn: &Connection) -> Result<HashSet<i64>, String> {
 /// (`<<--->>`) — those belong to linked transactions, which the agent skips,
 /// and must never be suggested for an ordinary one. Their transactions drop
 /// out of the examples too: an example needs all its categories here.
-fn agent_category_paths(conn: &Connection) -> Result<Vec<(i64, String, String, Option<String>, Option<i64>)>, String> {
+pub(crate) fn agent_category_paths(conn: &Connection) -> Result<Vec<(i64, String, String, Option<String>, Option<i64>)>, String> {
     let system = crate::transfer_categories::system_category_ids(conn).map_err(|e| e.to_string())?;
     Ok(sg::category_paths(conn)?.into_iter().filter(|p| !system.contains(&p.0)).collect())
 }
@@ -640,7 +641,7 @@ Confidence: 9-10 the examples or notes leave no doubt; 6-8 likely; 3-5 a reasona
 
 /// The owner's own description of their life (Life context → Context), as a
 /// prompt section — empty when they wrote nothing.
-fn life_section(conn: &Connection) -> Result<String, String> {
+pub(crate) fn life_section(conn: &Connection) -> Result<String, String> {
     Ok(crate::life_contexts::description(conn)?
         .map(|text| format!("## The owner's life\n\nWho the owner is, where and how they live — use it to read names, places and purposes in transactions.\n\n{text}\n\n"))
         .unwrap_or_default())
@@ -650,7 +651,7 @@ fn fill(template: &str, pairs: &[(&str, &str)]) -> String {
     pairs.iter().fold(template.to_string(), |acc, (k, v)| acc.replace(&format!("{{{k}}}"), v))
 }
 
-fn category_lines(paths: &[(i64, String, String, Option<String>, Option<i64>)], kind: &str) -> String {
+pub(crate) fn category_lines(paths: &[(i64, String, String, Option<String>, Option<i64>)], kind: &str) -> String {
     paths
         .iter()
         .filter(|(_, _, k, ..)| k == kind)
@@ -803,7 +804,7 @@ pub(crate) fn build_prompt(
     Ok(Prompt { system, user, examples, allowed })
 }
 
-fn sha256_hex(parts: &[&str]) -> String {
+pub(crate) fn sha256_hex(parts: &[&str]) -> String {
     let mut h = Sha256::new();
     for p in parts {
         h.update(p.as_bytes());

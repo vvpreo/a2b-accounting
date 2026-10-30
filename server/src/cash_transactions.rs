@@ -33,13 +33,13 @@ fn split_amount(direction: &CashDirection, amount: &str) -> Result<(i64, i64), S
     })
 }
 
-fn normalize_optional(value: Option<String>) -> Option<String> {
+pub(crate) fn normalize_optional(value: Option<String>) -> Option<String> {
     value
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
 }
 
-fn normalize_occurred_at(input: &str) -> Result<String, String> {
+pub(crate) fn normalize_occurred_at(input: &str) -> Result<String, String> {
     let trimmed = input.trim();
     let dt = DateTime::parse_from_rfc3339(trimmed)
         .map_err(|e| format!("invalid occurred_at '{trimmed}': {e}"))?;
@@ -179,8 +179,23 @@ pub(crate) fn insert_cash_transaction_row(
     peer: Option<&str>,
     comment: Option<&str>,
 ) -> Result<i64, String> {
-    // Placeholder balance — recompute_cash_balances overwrites it below.
-    let new_id: i64 = tx
+    let new_id = insert_cash_row(tx, account_id, occurred_at_utc, credit, debit, peer, comment)?;
+    recompute_cash_balances(tx, account_id, occurred_at_utc).map_err(|e| e.to_string())?;
+    Ok(new_id)
+}
+
+/// The bare insert, with a placeholder balance: the caller recomputes the
+/// running balance — once, from the earliest row, when it inserts many.
+pub(crate) fn insert_cash_row(
+    tx: &Connection,
+    account_id: i64,
+    occurred_at_utc: &str,
+    credit: i64,
+    debit: i64,
+    peer: Option<&str>,
+    comment: Option<&str>,
+) -> Result<i64, String> {
+    tx
         .query_row(
             "INSERT INTO transactions
                 (account_id, import_batch_id, occurred_at_utc,
@@ -191,10 +206,7 @@ pub(crate) fn insert_cash_transaction_row(
             params![account_id, occurred_at_utc, credit, debit, peer, comment],
             |r| r.get(0),
         )
-        .map_err(|e| e.to_string())?;
-
-    recompute_cash_balances(tx, account_id, occurred_at_utc).map_err(|e| e.to_string())?;
-    Ok(new_id)
+        .map_err(|e| e.to_string())
 }
 
 pub fn create_cash_transaction(
