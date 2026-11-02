@@ -3,12 +3,14 @@
 //! port and shows it in a native window. The web UI and the backend are
 //! shared with the Docker build; this crate only adds what a desktop app
 //! needs on top — data/resource paths, an access token for the local port, a
-//! DB copy before a new version migrates it, and self-update (`updater.rs`).
+//! DB copy before a new version migrates it, self-update (`updater.rs`) and
+//! page zoom (`zoom.rs`).
 
 // No console window next to the app on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod updater;
+mod zoom;
 
 use std::fs;
 use std::net::{TcpListener, TcpStream};
@@ -65,9 +67,11 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .invoke_handler(tauri::generate_handler![zoom::zoom_hotkey])
         .setup(move |app| {
             let handle = app.handle().clone();
             updater::install(&handle, &data_dir)?;
+            zoom::install(&handle, &data_dir)?;
             std::thread::spawn(move || {
                 let result = startup.and_then(|()| wait_for_server(server.unwrap()));
                 match result {
@@ -185,9 +189,11 @@ fn open_main_window(app: &AppHandle, token: &str) {
         .title("A2B Accounting")
         .inner_size(1400.0, 900.0)
         .min_inner_size(1000.0, 650.0)
+        .initialization_script(zoom::HOTKEYS_SCRIPT)
         .build();
-    if let Err(e) = built {
-        fail(app, &format!("Cannot open the window: {e}"));
+    match built {
+        Ok(window) => zoom::restore(&window),
+        Err(e) => fail(app, &format!("Cannot open the window: {e}")),
     }
 }
 

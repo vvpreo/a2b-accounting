@@ -65,6 +65,7 @@ Only newer versions are offered, so switching channels never installs an older a
 
 **Notes:**
 - The server is reachable only with a per-launch token: the window opens `/?access_token=…`, which is exchanged for an HttpOnly cookie; other local programs and web pages get `403` (`FINANCES_ACCESS_TOKEN`, desktop mode only).
+- Zoom works like in Chrome: ⌘+ / ⌘=, ⌘− / ⌘⇧− and the keypad scale the whole app, ⌘0 returns to 100%, same steps from 25% to 500%, same *View* menu items (native webview zoom; the level is kept in `desktop-zoom` in the data dir). In a browser these keys are the browser's own zoom.
 - An app started from the Dock does not see shell environment variables, so `env:VAR` API-key references do not resolve — store the key itself in the AI settings.
 - The updater signing key is kept outside the repo (`~/.tauri/a2b-accounting-updater.key` + its password); CI reads it from the `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secrets. Losing it means installed apps can no longer verify updates and must be reinstalled from a DMG once.
 - Local compile check of the shell on Linux (no Mac needed, no host packages): build a throwaway image `FROM rust:1-trixie` with `libwebkit2gtk-4.1-dev libgtk-3-dev libxdo-dev libssl-dev librsvg2-dev`, generate icons (`npx @tauri-apps/cli@2 icon public/favicon.svg -o desktop/icons`), create an empty `ocr-models/` if missing, and run `cargo build` in `desktop/` inside it.
