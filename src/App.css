@@ -844,6 +844,26 @@ tr.month-separator td {
   position: sticky;
   top: var(--thead-h, 29px);
   z-index: 1;
+  overflow: hidden;
+}
+
+/* Scroll progress through the month, see useMonthFill. Sits behind the label:
+   the sticky cell is its own stacking context, so z-index -1 stays above the
+   cell's background. The cell's overflow keeps it out of the table's scrollable
+   area: after a column shrinks, its stale offset would leave a blank tail. */
+tr.month-separator td::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--view-left, 0);
+  width: var(--view-width, 100%);
+  z-index: -1;
+  background: #d4d4d8;
+  transform: scaleX(var(--month-fill, 0));
+  transform-origin: left;
+  transition: transform 120ms linear;
+  pointer-events: none;
 }
 
 .dow {
@@ -881,6 +901,10 @@ tr.month-separator td {
     background: #1f1f22;
     color: #a1a1aa;
     border-top-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] tr.month-separator td::before {
+    background: #36363c;
   }
 
 :root[data-theme="dark"] .dow {
@@ -6695,9 +6719,48 @@ a.btn-ghost {
   max-width: var(--split-category);
 }
 
-/* Entirely inside the Suggestion header: the next (sticky) header would
-   otherwise sit on top of any part that sticks out. */
-.col-split-handle {
+/* After the first resize every column has its own width on <col>: the column
+   holds it whatever the cells contain, and the cells clip what doesn't fit. The
+   category cell clips inside, its tooltip has to leave the cell. */
+.page--transactions table.has-fixed-columns {
+  table-layout: fixed;
+}
+
+.page--transactions table.has-fixed-columns th,
+.page--transactions table.has-fixed-columns td:not(.col-category) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Hidden copy of one column, measured to fit the column to its widest row. */
+.page--transactions table.col-fit-probe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  width: auto;
+  table-layout: auto;
+}
+
+.page--transactions table.col-fit-probe th,
+.page--transactions table.col-fit-probe td {
+  position: static;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+}
+
+.col-fit-probe td * {
+  position: static !important;
+}
+
+.col-fit-probe .txn-categories-edit-btn {
+  display: none;
+}
+
+/* Entirely inside its header: the next (sticky) header would otherwise sit on
+   top of any part that sticks out. */
+.col-resize-handle {
   position: absolute;
   top: 0;
   right: 0;
@@ -6708,7 +6771,7 @@ a.btn-ghost {
   touch-action: none;
 }
 
-.col-split-handle::after {
+.col-resize-handle::after {
   content: "";
   position: absolute;
   top: 25%;
@@ -6717,19 +6780,38 @@ a.btn-ghost {
   width: 2px;
   border-radius: 1px;
   background: #d4d4d8;
+  opacity: 0;
 }
 
-.col-split-handle:hover::after,
-.col-split-handle:active::after {
+thead:hover .col-resize-handle::after {
+  opacity: 1;
+}
+
+/* Where the column's right edge lands when the drag is released. */
+.col-resize-guide {
+  position: fixed;
+  width: 2px;
+  margin-left: -2px;
+  z-index: 60;
+  background: #2563eb;
+  pointer-events: none;
+}
+
+:root[data-theme="dark"] .col-resize-guide {
+  background: #60a5fa;
+}
+
+.col-resize-handle:hover::after,
+.col-resize-handle:active::after {
   background: #2563eb;
 }
 
-:root[data-theme="dark"] .col-split-handle::after {
+:root[data-theme="dark"] .col-resize-handle::after {
   background: #52525b;
 }
 
-:root[data-theme="dark"] .col-split-handle:hover::after,
-:root[data-theme="dark"] .col-split-handle:active::after {
+:root[data-theme="dark"] .col-resize-handle:hover::after,
+:root[data-theme="dark"] .col-resize-handle:active::after {
   background: #60a5fa;
 }
 

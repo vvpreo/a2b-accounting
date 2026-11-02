@@ -381,7 +381,7 @@
     "tableContext": "Context",
     "tableContextTitle": "What was going on in life on the transaction day (the Context screen)",
     "tableExampleTitle": "Examples for the agent: ✨ — the agent sees this transaction as an example of how you categorise. Click ✨ on a categorised transaction to mark or unmark it.",
-    "splitHandle": "Drag to give the width to Suggestion or Category. Double-click resets.",
+    "columnWidthHandle": "Drag to resize the column. Double-click fits the widest row.",
     "filterGroupSuggestion": "Suggestions",
     "filterGroupCategory": "Category",
     "filterCategories": "Categories",

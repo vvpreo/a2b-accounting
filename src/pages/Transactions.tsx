@@ -67,6 +67,18 @@ import { BulkActionsMenu } from "./transactions/BulkActionsMenu";
 import { PeriodDropdown, periodPresets } from "./transactions/PeriodDropdown";
 import { SelectCheckbox } from "./transactions/SelectCheckbox";
 import { rangeIds } from "./transactions/selection";
+import { monthStartMs, useMonthFill } from "./transactions/monthFill";
+import {
+  COLUMN_WIDTH_FALLBACK,
+  ColumnWidths,
+  TABLE_COLUMNS,
+  TableColumn,
+  clampColumnWidth,
+  fittedColumnWidth,
+  parseColumnWidths,
+  totalColumnWidth,
+  trackHandleDrag,
+} from "./transactions/columnWidths";
 
 type RowKind =
   | "correcting"
@@ -200,9 +212,8 @@ const DEFAULT_VISIBLE_COLUMNS: ColumnKey[] = COLUMN_KEYS.filter((k) => k !== "de
 /// shows up per its default instead of silently staying hidden.
 const VISIBLE_COLUMNS_SETTING_KEY = "transactions.visible_columns";
 
-/// Suggestion | Category share one fixed width; the user drags the border
-/// between their headers to give more of it to one or the other. The
-/// Suggestion width (px) is persisted in `app_settings`.
+/// Width of Suggestion | Category from when the two shared one draggable border:
+/// a value saved back then still applies until the user first resizes a column.
 const SPLIT_WIDTH_SETTING_KEY = "transactions.suggestion_width";
 const SPLIT_TOTAL = 560;
 const SPLIT_DEFAULT = 224;
@@ -210,6 +221,11 @@ const SPLIT_MIN_SUGGESTION = 110;
 const SPLIT_MIN_CATEGORY = 150;
 const clampSplit = (w: number) =>
   Math.round(Math.min(SPLIT_TOTAL - SPLIT_MIN_CATEGORY, Math.max(SPLIT_MIN_SUGGESTION, w)));
+
+/// Columns follow the table's auto layout until the user first drags a border
+/// or double-clicks it to fit. From then on every visible column has its own
+/// width, kept in `app_settings` as `{[column]: px}`.
+const COLUMN_WIDTHS_SETTING_KEY = "transactions.column_widths";
 
 function restoreVisibleColumns(raw: string | null): ColumnKey[] | null {
   if (!raw) return null;
@@ -579,34 +595,78 @@ export function TransactionsPage({
       .catch(() => {});
   }, []);
 
-  // Drag on the Suggestion | Category border: pointer capture on the handle,
-  // the new width persisted when the drag ends. Double-click resets.
-  function startSplitDrag(e: React.PointerEvent<HTMLSpanElement>) {
-    e.preventDefault();
-    const handle = e.currentTarget;
-    handle.setPointerCapture(e.pointerId);
-    const startX = e.clientX;
-    const startWidth = suggestionWidth;
-    let last = startWidth;
-    const move = (ev: PointerEvent) => {
-      last = clampSplit(startWidth + ev.clientX - startX);
-      setSuggestionWidth(last);
-    };
-    const up = () => {
-      handle.removeEventListener("pointermove", move);
-      handle.removeEventListener("pointerup", up);
-      handle.removeEventListener("pointercancel", up);
-      void setSetting(SPLIT_WIDTH_SETTING_KEY, String(last)).catch(() => {});
-    };
-    handle.addEventListener("pointermove", move);
-    handle.addEventListener("pointerup", up);
-    handle.addEventListener("pointercancel", up);
+  const tableRef = useRef<HTMLTableElement>(null);
+  const [columnWidths, setColumnWidths] = useState<ColumnWidths>({});
+  useEffect(() => {
+    getSetting(COLUMN_WIDTHS_SETTING_KEY)
+      .then((v) => setColumnWidths(parseColumnWidths(v)))
+      .catch(() => {});
+  }, []);
+  const hasColumnWidths = Object.keys(columnWidths).length > 0;
+
+  // The widths to resize from: on first use, what auto layout gave the columns.
+  function currentColumnWidths(): ColumnWidths {
+    if (hasColumnWidths) return columnWidths;
+    const cells = tableRef.current!.tHead!.rows[0].cells;
+    const measured: ColumnWidths = {};
+    visibleTableColumns.forEach((column, i) => {
+      measured[column] = clampColumnWidth(cells[i].getBoundingClientRect().width);
+    });
+    return measured;
   }
 
-  function resetSplit() {
-    setSuggestionWidth(SPLIT_DEFAULT);
-    void setSetting(SPLIT_WIDTH_SETTING_KEY, String(SPLIT_DEFAULT)).catch(() => {});
+  function saveColumnWidths(next: ColumnWidths) {
+    setColumnWidths(next);
+    void setSetting(COLUMN_WIDTHS_SETTING_KEY, JSON.stringify(next)).catch(() => {});
   }
+
+  // Only a guide line follows the pointer: laying out a year of rows takes far
+  // longer than a frame, so the width is applied once, on release. A click
+  // without movement changes nothing and doesn't freeze the auto layout.
+  function startColumnDrag(
+    e: React.PointerEvent<HTMLSpanElement>,
+    column: TableColumn,
+  ) {
+    const th = e.currentTarget.parentElement as HTMLTableCellElement;
+    const rect = th.getBoundingClientRect();
+    const view = scrollWrapRef.current!.getBoundingClientRect();
+    const guide = document.createElement("div");
+    guide.className = "col-resize-guide";
+    guide.style.top = `${view.top}px`;
+    guide.style.height = `${view.height}px`;
+    let width: number | null = null;
+    trackHandleDrag(
+      e,
+      (dx) => {
+        width = clampColumnWidth(rect.width + dx);
+        guide.style.left = `${Math.min(view.right, rect.left + width)}px`;
+        if (!guide.isConnected) document.body.appendChild(guide);
+      },
+      () => {
+        guide.remove();
+        if (width !== null) saveColumnWidths({ ...currentColumnWidths(), [column]: width });
+      },
+    );
+  }
+
+  function fitColumn(e: React.MouseEvent<HTMLSpanElement>, column: TableColumn) {
+    const th = e.currentTarget.parentElement as HTMLTableCellElement;
+    saveColumnWidths({
+      ...currentColumnWidths(),
+      [column]: clampColumnWidth(fittedColumnWidth(tableRef.current!, th.cellIndex)),
+    });
+  }
+
+  const columnHandle = (column: TableColumn) => (
+    <span
+      className="col-resize-handle"
+      role="separator"
+      aria-orientation="vertical"
+      title={t("transactions.columnWidthHandle")}
+      onPointerDown={(e) => startColumnDrag(e, column)}
+      onDoubleClick={(e) => fitColumn(e, column)}
+    />
+  );
 
   function changeVisibleColumns(next: ColumnKey[]) {
     // Canonical table order, independent of click order.
@@ -845,6 +905,9 @@ export function TransactionsPage({
   // 1 selection column + always-visible 🔗 + 5 fixed money/date columns +
   // optional togglables (Δ and 📎 included).
   const visibleColCount = 1 + 1 + 5 + visibleColumns.length;
+  const visibleTableColumns = TABLE_COLUMNS.filter(
+    (c) => !(COLUMN_KEYS as string[]).includes(c) || visibleColumns.includes(c as ColumnKey),
+  );
 
   const visibleTxns = useMemo(() => {
     const fromMs = dateFrom ? Date.parse(dateFrom + "T00:00:00Z") : null;
@@ -976,6 +1039,8 @@ export function TransactionsPage({
       lastFilterSigRef.current = filterSignature;
     }
   }, [visibleTxns, filterSignature]);
+
+  useMonthFill(scrollWrapRef, visibleTxns);
 
   // Auto-clear transient link errors so the banner doesn't linger.
   useEffect(() => {
@@ -1340,26 +1405,49 @@ export function TransactionsPage({
         }
       >
         <table
-          className={showSuggestion && showCategory ? "has-col-split" : undefined}
+          ref={tableRef}
+          className={
+            hasColumnWidths
+              ? "has-fixed-columns"
+              : showSuggestion && showCategory
+                ? "has-col-split"
+                : undefined
+          }
           style={
-            showSuggestion && showCategory
-              ? ({
-                  "--split-suggestion": `${suggestionWidth}px`,
-                  "--split-category": `${SPLIT_TOTAL - suggestionWidth}px`,
-                } as CSSProperties)
-              : undefined
+            hasColumnWidths
+              ? { width: `${totalColumnWidth(visibleTableColumns, columnWidths)}px` }
+              : showSuggestion && showCategory
+                ? ({
+                    "--split-suggestion": `${suggestionWidth}px`,
+                    "--split-category": `${SPLIT_TOTAL - suggestionWidth}px`,
+                  } as CSSProperties)
+                : undefined
           }
         >
+          <colgroup>
+            {visibleTableColumns.map((column) => (
+              <col
+                key={column}
+                style={
+                  hasColumnWidths
+                    ? { width: `${columnWidths[column] ?? COLUMN_WIDTH_FALLBACK}px` }
+                    : undefined
+                }
+              />
+            ))}
+          </colgroup>
           <thead ref={theadRef}>
             <tr>
               {showContext && (
                 <th className="col-context" title={t("transactions.tableContextTitle")}>
                   {t("transactions.tableContext")}
+                  {columnHandle("context")}
                 </th>
               )}
               {showExample && (
                 <th className="col-example" title={t("transactions.tableExampleTitle")}>
                   <span className="col-example-icon">✨</span>
+                  {columnHandle("example")}
                 </th>
               )}
               <th className="col-select">
@@ -1376,42 +1464,52 @@ export function TransactionsPage({
                   }}
                   onChange={toggleSelectAllVisible}
                 />
+                {columnHandle("select")}
               </th>
-              <th className="col-fixed col-account">{t("transactions.tableAccount")}</th>
-              <th className="col-fixed col-date">{t("transactions.tableDate")}</th>
-              <th className="col-fixed num">{t("transactions.tableCredit")}</th>
-              <th className="col-fixed num">{t("transactions.tableDebit")}</th>
+              <th className="col-fixed col-account">
+                {t("transactions.tableAccount")}
+                {columnHandle("account")}
+              </th>
+              <th className="col-fixed col-date">
+                {t("transactions.tableDate")}
+                {columnHandle("date")}
+              </th>
+              <th className="col-fixed num">
+                {t("transactions.tableCredit")}
+                {columnHandle("credit")}
+              </th>
+              <th className="col-fixed num">
+                {t("transactions.tableDebit")}
+                {columnHandle("debit")}
+              </th>
               <th className="col-fixed num">
                 {t("transactions.tableBalance")}
+                {columnHandle("balance")}
               </th>
               {showNote && (
                 <th className="col-note" title={t("transactions.tableNoteTitle")}>
                   {t("transactions.tableNote")}
+                  {columnHandle("note")}
                 </th>
               )}
               {showSuggestion && (
                 <th className="col-suggestion" title={t("transactions.tableSuggestionTitle")}>
                   {t("transactions.tableSuggestion")}
-                  {showCategory && (
-                    <span
-                      className="col-split-handle"
-                      role="separator"
-                      aria-orientation="vertical"
-                      title={t("transactions.splitHandle")}
-                      onPointerDown={startSplitDrag}
-                      onDoubleClick={resetSplit}
-                    />
-                  )}
+                  {columnHandle("suggestion")}
                 </th>
               )}
               {showCategory && (
-                <th className="col-category">{t("transactions.tableCategory")}</th>
+                <th className="col-category">
+                  {t("transactions.tableCategory")}
+                  {columnHandle("category")}
+                </th>
               )}
               <th
                 className="col-link"
                 title={t("transactions.tableLinkTitle")}
               >
                 🔗
+                {columnHandle("link")}
               </th>
               {showDelta && (
                 <th
@@ -1434,14 +1532,19 @@ export function TransactionsPage({
                   >
                     {deltaMode === "percent" ? "Δ%" : "Δ"}
                   </button>
+                  {columnHandle("delta")}
                 </th>
               )}
               {showPeer && (
-                <th className="col-peer">{t("transactions.tablePeer")}</th>
+                <th className="col-peer">
+                  {t("transactions.tablePeer")}
+                  {columnHandle("peer")}
+                </th>
               )}
               {showBankDescription && (
                 <th className="col-bank-description">
                   {t("transactions.tableBankDescription")}
+                  {columnHandle("bank_description")}
                 </th>
               )}
             </tr>
@@ -1465,7 +1568,11 @@ export function TransactionsPage({
                 const nodes: ReactElement[] = [];
                 if (isMonthStart) {
                   nodes.push(
-                    <tr key={`sep:${x.id}`} className="month-separator">
+                    <tr
+                      key={`sep:${x.id}`}
+                      className="month-separator"
+                      data-ts={monthStartMs(Date.parse(x.occurredAtUtc))}
+                    >
                       <td colSpan={visibleColCount}>
                         {formatMonthLabel(x.occurredAtUtc, locale)}
                       </td>
@@ -1556,6 +1663,7 @@ export function TransactionsPage({
                   <tr
                     key={x.id}
                     className={rowClasses}
+                    data-ts={Date.parse(x.occurredAtUtc)}
                     onMouseEnter={() =>
                       setHovered({ id: x.id, accountId: x.accountId })
                     }
