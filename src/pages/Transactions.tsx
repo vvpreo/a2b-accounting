@@ -1,0 +1,2511 @@
+import {
+  CSSProperties,
+  ReactElement,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { createPortal } from "react-dom";
+import { listen, type UnlistenFn } from "../lib/events";
+
+import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
+import { useI18n, useT } from "../i18n";
+import {
+  Account,
+  AttachmentLink,
+  Category,
+  LifeContext,
+  LINK_ERROR_CODES,
+  LinkErrorCode,
+  Transaction,
+  Suggestion,
+  TransactionCategoryView,
+  TransferDelta,
+  TxnLink,
+  WITHDRAWAL_ERROR_CODES,
+  WithdrawalErrorCode,
+  convertAmount,
+  createCashWithdrawal,
+  exportReferenceSet,
+  getAgentSettings,
+  getSetting,
+  linkTransactions,
+  listAccounts,
+  listAttachmentLinks,
+  listCategories,
+  listLifeContexts,
+  listTransactionSuggestions,
+  listCategoryExamples,
+  setCategoryExamples,
+  listTransactionLinks,
+  listTransactions,
+  listTransactionsCategories,
+  listTransferDeltas,
+  setSetting,
+  unlinkTransaction,
+  updateTransactionComment,
+} from "../lib/api";
+import { formatMoney, parseMoneyToMinor } from "../lib/money";
+import { useViewState } from "../lib/view-state";
+import { buildTree, flattenTree } from "../lib/category-tree";
+import { isUnsure } from "../lib/suggestion-state";
+import { TransactionModal } from "../components/TransactionModal";
+import { ContextFormModal } from "./Context";
+import { nextRootColor } from "../lib/colors";
+import { BulkCategorizeModal } from "../components/BulkCategorizeModal";
+import { BulkAnalyzeDocumentsModal } from "../components/BulkAnalyzeDocumentsModal";
+import { BulkDetectSuggestionsModal, DetectKind } from "../components/BulkDetectSuggestionsModal";
+import { BulkSuggestCategoriesModal } from "../components/BulkSuggestCategoriesModal";
+import { BulkAcceptSuggestionsModal } from "../components/BulkAcceptSuggestionsModal";
+import { BulkDeleteCashModal } from "../components/BulkDeleteCashModal";
+import { CategoriesCell } from "./transactions/CategoriesCell";
+import { NoteCell } from "./transactions/NoteCell";
+import { SuggestionCell } from "./transactions/SuggestionCell";
+import { BulkActionsMenu } from "./transactions/BulkActionsMenu";
+import { PeriodDropdown, periodPresets } from "./transactions/PeriodDropdown";
+import { SelectCheckbox } from "./transactions/SelectCheckbox";
+import { rangeIds } from "./transactions/selection";
+
+type RowKind =
+  | "correcting"
+  | "incoming"
+  | "outgoing"
+  | "with_bank_description"
+  | "with_comment"
+  | "with_note"
+  | "without_note"
+  | "linked"
+  | "unlinked"
+  | "with_suggestion"
+  | "without_suggestion"
+  | "with_category"
+  | "without_category";
+
+/// The Filter dropdown has five groups: row kinds, note presence, transfer
+/// links, pending suggestions and categories (any category / none; which
+/// categories is the separate Categories filter). Within a group items combine with OR, the groups combine
+/// with AND — so "Outgoing" + "Without note" means outgoing rows nothing is
+/// known about yet, and unticking "Linked pairs" hides both sides of every
+/// transfer / cash withdrawal.
+///
+/// A transaction "has a note" when the user wrote a comment or a document
+/// (slip) is linked — even one with no recognised text: the same rule as the
+/// icon in the Note column.
+///
+/// A transaction "has a suggestion" when the Suggestion column offers
+/// something to apply — a category, a transfer pair or a cash withdrawal, of
+/// any kind; an "agent not sure" mark does not count.
+const NOTE_KINDS: RowKind[] = ["with_note", "without_note"];
+const LINK_KINDS: RowKind[] = ["linked", "unlinked"];
+const SUGGESTION_KINDS: RowKind[] = ["with_suggestion", "without_suggestion"];
+const CATEGORY_KINDS: RowKind[] = ["with_category", "without_category"];
+const GROUPED_KINDS: RowKind[] = [...NOTE_KINDS, ...LINK_KINDS, ...SUGGESTION_KINDS, ...CATEGORY_KINDS];
+const ROW_KINDS: RowKind[] = [
+  "correcting",
+  "incoming",
+  "outgoing",
+  "with_bank_description",
+  "with_comment",
+  ...NOTE_KINDS,
+  ...LINK_KINDS,
+  ...SUGGESTION_KINDS,
+  ...CATEGORY_KINDS,
+];
+
+/// Amount filter: the transaction's amount (credit or debit, in its own
+/// currency) against one value — or two for "between", both inclusive. Empty
+/// value = no filtering. Combines with the rest (e.g. Outgoing + "> 1000").
+type AmountOp = "eq" | "ne" | "gt" | "ge" | "lt" | "le" | "between";
+const AMOUNT_OPS: AmountOp[] = ["gt", "ge", "lt", "le", "eq", "ne", "between"];
+interface AmountFilter {
+  op: AmountOp;
+  value: string;
+  value2: string;
+}
+
+/// User input ("1 234,5" / "1234.50") → minor units, or null when empty / not a number.
+function amountInputToMinor(raw: string): number | null {
+  const v = Number(raw.replace(/\s/g, "").replace(",", "."));
+  return raw.trim() === "" || !Number.isFinite(v) ? null : Math.round(Math.abs(v) * 100);
+}
+
+function amountMatches(minor: number, f: AmountFilter): boolean {
+  const a = amountInputToMinor(f.value);
+  if (f.op === "between") {
+    const b = amountInputToMinor(f.value2);
+    if (a === null && b === null) return true;
+    return (a === null || minor >= Math.min(a, b ?? a)) && (b === null || minor <= Math.max(b, a ?? b));
+  }
+  if (a === null) return true;
+  switch (f.op) {
+    case "eq":
+      return minor === a;
+    case "ne":
+      return minor !== a;
+    case "gt":
+      return minor > a;
+    case "ge":
+      return minor >= a;
+    case "lt":
+      return minor < a;
+    case "le":
+      return minor <= a;
+  }
+}
+
+/// Two display modes for the Δ column. "percent" is the default:
+///   - Only the credit (incoming) row of each linked pair shows a value, as
+///     a signed percentage of the dictionary-fair amount; the debit row is
+///     blank. Reads as "we lost / gained X% on this conversion."
+///   - "absolute" mirrors the older behaviour and shows the signed delta in
+///     each side's own currency on both rows.
+/// Toggled via a click on the column header; the choice is persisted in
+/// `app_settings` under DELTA_MODE_SETTING_KEY.
+type DeltaMode = "percent" | "absolute";
+const DELTA_MODES: DeltaMode[] = ["percent", "absolute"];
+const DELTA_MODE_SETTING_KEY = "transactions.delta_display_mode";
+
+type ColumnKey =
+  | "context"
+  | "example"
+  | "delta"
+  | "category"
+  | "note"
+  | "suggestion"
+  | "peer"
+  | "bank_description";
+// Picker order follows the table: Context (leftmost), ✨ examples for the
+// agent, then the checkbox, the fixed money/date block, Note, Suggestion,
+// category, then the transfer columns (🔗 always shown, Δ optional), then
+// free text.
+const COLUMN_KEYS: ColumnKey[] = [
+  "context",
+  "example",
+  "note",
+  "suggestion",
+  "category",
+  "delta",
+  "peer",
+  "bank_description",
+];
+// Δ (FX loss/gain on transfers) is hidden by default to save width; the user
+// turns it on in the Columns filter when needed.
+const DEFAULT_VISIBLE_COLUMNS: ColumnKey[] = COLUMN_KEYS.filter((k) => k !== "delta");
+
+/// The user's column choice, persisted in `app_settings` as
+/// `{visible: ColumnKey[], known: ColumnKey[]}`. `known` lists the columns that
+/// existed when the choice was saved, so a column added in a later version
+/// shows up per its default instead of silently staying hidden.
+const VISIBLE_COLUMNS_SETTING_KEY = "transactions.visible_columns";
+
+/// Suggestion | Category share one fixed width; the user drags the border
+/// between their headers to give more of it to one or the other. The
+/// Suggestion width (px) is persisted in `app_settings`.
+const SPLIT_WIDTH_SETTING_KEY = "transactions.suggestion_width";
+const SPLIT_TOTAL = 560;
+const SPLIT_DEFAULT = 224;
+const SPLIT_MIN_SUGGESTION = 110;
+const SPLIT_MIN_CATEGORY = 150;
+const clampSplit = (w: number) =>
+  Math.round(Math.min(SPLIT_TOTAL - SPLIT_MIN_CATEGORY, Math.max(SPLIT_MIN_SUGGESTION, w)));
+
+function restoreVisibleColumns(raw: string | null): ColumnKey[] | null {
+  if (!raw) return null;
+  try {
+    const saved = JSON.parse(raw) as { visible?: unknown; known?: unknown };
+    if (!Array.isArray(saved.visible) || !Array.isArray(saved.known)) return null;
+    const visible = new Set(saved.visible);
+    const known = new Set(saved.known);
+    return COLUMN_KEYS.filter((k) =>
+      known.has(k) ? visible.has(k) : DEFAULT_VISIBLE_COLUMNS.includes(k),
+    );
+  } catch {
+    return null;
+  }
+}
+
+function rowMatchesKind(row: { isCorrecting: boolean; credit: string; debit: string; bankDescription: string | null; comment: string | null }, kind: RowKind): boolean {
+  switch (kind) {
+    case "correcting":
+      return row.isCorrecting;
+    case "incoming":
+      return row.credit !== "0.00";
+    case "outgoing":
+      return row.debit !== "0.00";
+    case "with_bank_description":
+      return !!row.bankDescription && row.bankDescription.trim() !== "";
+    case "with_comment":
+      return !!row.comment && row.comment.trim() !== "";
+    case "with_note":
+    case "without_note":
+    case "linked":
+    case "unlinked":
+    case "with_suggestion":
+    case "without_suggestion":
+    case "with_category":
+    case "without_category":
+      // Note, link and suggestion presence are decided by the caller (they
+      // need the document-link, transfer-link and suggestion maps).
+      return false;
+  }
+}
+
+interface Props {
+  selectedAccountIds: number[];
+  onChangeSelectedAccountIds: (ids: number[]) => void;
+  version: number;
+  onImportTransactions: () => void;
+  /// One-shot navigation hint. When set (typically right after the user clicks
+  /// a month cell on the Accounts tab), the page snaps its date filter to that
+  /// calendar month and then asks the host to clear the hint so the user can
+  /// freely change filters without the navigation re-applying.
+  pendingMonthFilter?: { accountId: number; yearMonth: string } | null;
+  onPendingMonthFilterApplied?: () => void;
+}
+
+function defaultDateFrom(monthsBack = 12): string {
+  const d = new Date();
+  d.setDate(1);
+  d.setMonth(d.getMonth() - monthsBack);
+  return toDateInputValue(d);
+}
+
+function defaultDateTo(): string {
+  const d = new Date();
+  d.setMonth(d.getMonth() + 1, 0);
+  return toDateInputValue(d);
+}
+
+function toDateInputValue(d: Date): string {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+export function TransactionsPage({
+  selectedAccountIds,
+  onChangeSelectedAccountIds,
+  version,
+  onImportTransactions,
+  pendingMonthFilter,
+  onPendingMonthFilterApplied,
+}: Props) {
+  const t = useT();
+  const { locale } = useI18n();
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [txns, setTxns] = useState<Transaction[]>([]);
+  const [txnCategories, setTxnCategories] = useState<TransactionCategoryView[]>(
+    [],
+  );
+  const [categoriesVersion, setCategoriesVersion] = useState(0);
+  // Bumped after an inline edit / per-transaction modal save to reload the
+  // transaction list locally (the `version` prop is owned by the host).
+  const [localRefresh, setLocalRefresh] = useState(0);
+  // The transaction whose view/edit modal is open, if any.
+  const [detailTxnId, setDetailTxnId] = useState<number | null>(null);
+  // Bulk-selection state. `selectedTxnIds` holds the chosen transactions;
+  // `lastSelectedId` is the anchor for range selection (long press or
+  // Shift+click). `bulkOpen`
+  // gates the bulk-categorise confirmation/progress modal.
+  const [selectedTxnIds, setSelectedTxnIds] = useState<Set<number>>(
+    () => new Set(),
+  );
+  const [lastSelectedId, setLastSelectedId] = useState<number | null>(null);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkDocsOpen, setBulkDocsOpen] = useState(false);
+  const [bulkDetect, setBulkDetect] = useState<DetectKind | null>(null);
+  const [bulkSuggestOpen, setBulkSuggestOpen] = useState(false);
+  const [bulkAcceptOpen, setBulkAcceptOpen] = useState(false);
+  const [bulkDeleteCashOpen, setBulkDeleteCashOpen] = useState(false);
+  // Transactions marked as examples for the category agent (the ✨ column).
+  const [exampleIds, setExampleIds] = useState<Set<number>>(() => new Set());
+  // Pending suggestions (cash withdrawal / transfer / category) for the
+  // Suggestion column, and the categories to describe category suggestions.
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [suggestionsVersion, setSuggestionsVersion] = useState(0);
+  const [categories, setCategories] = useState<Category[]>([]);
+  // Life-context intervals (the Context screen) for the Context column.
+  const [lifeContexts, setLifeContexts] = useState<LifeContext[]>([]);
+  const [lifeContextsVersion, setLifeContextsVersion] = useState(0);
+  // An event being created (on a transaction's day) or edited right from the
+  // Context column.
+  const [eventEditing, setEventEditing] = useState<{ context: LifeContext | null; day: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // Filters survive switching tabs (see lib/view-state.ts).
+  const [selectedKinds, setSelectedKinds] = useViewState<RowKind[]>("transactions.kinds.v4", () => [
+    ...ROW_KINDS,
+  ]);
+  const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(() => [
+    ...DEFAULT_VISIBLE_COLUMNS,
+  ]);
+  const [dateFrom, setDateFrom] = useViewState<string>("transactions.dateFrom", defaultDateFrom);
+  const [dateTo, setDateTo] = useViewState<string>("transactions.dateTo", defaultDateTo);
+  const [filtersExpanded, setFiltersExpanded] = useViewState("transactions.filtersExpanded", true);
+  const [accountsInitialised, setAccountsInitialised] = useViewState(
+    "transactions.accountsInitialised",
+    false,
+  );
+  // Hover state: the exact row under the cursor plus its accountId, so we can
+  // tint every row of the same account softly while highlighting the hovered
+  // one strongly. Both fields update together to keep the two cues in sync.
+  const [hovered, setHovered] = useState<{ id: number; accountId: number } | null>(
+    null,
+  );
+  // Transfer-link state. `links` mirrors the backend table; `pendingLinkTxnId`
+  // holds the txn whose 🔗 cell was clicked first and is now waiting for a
+  // partner. `unlinkConfirm` defers an actual unlink until the user confirms
+  // — matches user spec: linking is unconfirmed, unlinking is.
+  const [links, setLinks] = useState<TxnLink[]>([]);
+  // Linked documents (bank slips) per transaction, for the 📎 column.
+  const [docLinks, setDocLinks] = useState<AttachmentLink[]>([]);
+  const [docLinksVersion, setDocLinksVersion] = useState(0);
+  const [pendingLinkTxnId, setPendingLinkTxnId] = useState<number | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const [unlinkConfirm, setUnlinkConfirm] = useState<number | null>(null);
+  // True while the "Withdraw to cash" modal sits on top of the pending-link
+  // overlay. Opening it doesn't cancel the pending link — the modal owns the
+  // commit and clears the pending state itself on success or cancel.
+  const [withdrawModalOpen, setWithdrawModalOpen] = useState(false);
+  // FX-conversion deltas for every linked pair, keyed by txnId. Reloaded
+  // alongside `links` and again whenever a background rate download finishes
+  // — newly arrived rates can flip a row from "—" to a real number.
+  const [deltas, setDeltas] = useState<Map<number, TransferDelta>>(
+    () => new Map(),
+  );
+  // Δ-column display mode + the persistence flag. We start in "percent" and
+  // upgrade to whatever's stored in app_settings on first effect tick — that
+  // tiny flash on cold load is preferable to blocking the page render until
+  // the setting comes back. Once `deltaModeLoaded` flips, subsequent toggles
+  // get persisted; we don't write back the initial fetch result.
+  const [deltaMode, setDeltaMode] = useState<DeltaMode>("percent");
+  const [deltaModeLoaded, setDeltaModeLoaded] = useState(false);
+  // Floating tooltip rendered via a portal so it isn't clipped by the
+  // scrollable .txns-wrap. Coordinates are captured in viewport space at
+  // mouseenter time and placed directly over document.body.
+  const [tooltip, setTooltip] = useState<
+    { x: number; y: number; text: string } | null
+  >(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([listAccounts(), listTransactions(undefined)])
+      .then(([a, ts]) => {
+        if (cancelled) return;
+        setAccounts(a);
+        setTxns(ts);
+        setError(null);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [version, localRefresh]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listTransactionsCategories(undefined)
+      .then((tc) => {
+        if (!cancelled) setTxnCategories(tc);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [version, categoriesVersion]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listTransactionLinks(undefined)
+      .then((ls) => {
+        if (!cancelled) setLinks(ls);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [version]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listAttachmentLinks()
+      .then((ls) => {
+        if (!cancelled) setDocLinks(ls);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [version, localRefresh, docLinksVersion]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listCategoryExamples()
+      .then((ids) => {
+        if (!cancelled) setExampleIds(new Set(ids));
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [version, localRefresh, categoriesVersion]);
+
+  async function markExamples(ids: number[], example: boolean) {
+    try {
+      await setCategoryExamples(ids, example);
+      setExampleIds(new Set(await listCategoryExamples()));
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    listTransactionSuggestions()
+      .then((s) => {
+        if (!cancelled) setSuggestions(s);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [version, localRefresh, suggestionsVersion, categoriesVersion, links]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listCategories()
+      .then((c) => {
+        if (!cancelled) setCategories(c);
+      })
+      .catch(() => {
+        // Only used to label category suggestions — the table works without.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [version]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listLifeContexts()
+      .then((c) => {
+        if (!cancelled) setLifeContexts(c);
+      })
+      .catch(() => {
+        // Only feeds the Context column — the table works without.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [version, lifeContextsVersion]);
+
+  // Oldest interval first, so overlapping contexts keep a stable order.
+  const lifeContextsAsc = useMemo(
+    () =>
+      [...lifeContexts].sort(
+        (a, b) => a.startsOn.localeCompare(b.startsOn) || a.endsOn.localeCompare(b.endsOn),
+      ),
+    [lifeContexts],
+  );
+
+  const suggestionsByTxn = useMemo(() => {
+    const map = new Map<number, Suggestion[]>();
+    for (const s of suggestions) {
+      const list = map.get(s.transactionId);
+      if (list) list.push(s);
+      else map.set(s.transactionId, [s]);
+    }
+    return map;
+  }, [suggestions]);
+  const categoryById = useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories]);
+  const txnById = useMemo(() => new Map(txns.map((x) => [x.id, x])), [txns]);
+
+  const docLinksByTxn = useMemo(() => {
+    const map = new Map<number, AttachmentLink[]>();
+    for (const l of docLinks) {
+      const list = map.get(l.transactionId);
+      if (list) list.push(l);
+      else map.set(l.transactionId, [l]);
+    }
+    return map;
+  }, [docLinks]);
+
+  // Restore the persisted column choice once on mount.
+  useEffect(() => {
+    let cancelled = false;
+    getSetting(VISIBLE_COLUMNS_SETTING_KEY)
+      .then((v) => {
+        const restored = restoreVisibleColumns(v);
+        if (!cancelled && restored) setVisibleColumns(restored);
+      })
+      .catch(() => {
+        // No saved choice / backend hiccup — keep the defaults.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // The agent's confidence threshold: its category answers below it show as
+  // "agent not sure" marks, at or above it as suggestions (Settings → AI).
+  const [agentMinConfidence, setAgentMinConfidence] = useState(8);
+  useEffect(() => {
+    getAgentSettings()
+      .then((s) => setAgentMinConfidence(s.minConfidence))
+      .catch(() => {});
+  }, []);
+
+  const [suggestionWidth, setSuggestionWidth] = useState(SPLIT_DEFAULT);
+  useEffect(() => {
+    getSetting(SPLIT_WIDTH_SETTING_KEY)
+      .then((v) => {
+        const n = Number(v);
+        if (v !== null && Number.isFinite(n)) setSuggestionWidth(clampSplit(n));
+      })
+      .catch(() => {});
+  }, []);
+
+  // Drag on the Suggestion | Category border: pointer capture on the handle,
+  // the new width persisted when the drag ends. Double-click resets.
+  function startSplitDrag(e: React.PointerEvent<HTMLSpanElement>) {
+    e.preventDefault();
+    const handle = e.currentTarget;
+    handle.setPointerCapture(e.pointerId);
+    const startX = e.clientX;
+    const startWidth = suggestionWidth;
+    let last = startWidth;
+    const move = (ev: PointerEvent) => {
+      last = clampSplit(startWidth + ev.clientX - startX);
+      setSuggestionWidth(last);
+    };
+    const up = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      handle.removeEventListener("pointercancel", up);
+      void setSetting(SPLIT_WIDTH_SETTING_KEY, String(last)).catch(() => {});
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+    handle.addEventListener("pointercancel", up);
+  }
+
+  function resetSplit() {
+    setSuggestionWidth(SPLIT_DEFAULT);
+    void setSetting(SPLIT_WIDTH_SETTING_KEY, String(SPLIT_DEFAULT)).catch(() => {});
+  }
+
+  function changeVisibleColumns(next: ColumnKey[]) {
+    // Canonical table order, independent of click order.
+    const ordered = COLUMN_KEYS.filter((k) => next.includes(k));
+    setVisibleColumns(ordered);
+    void setSetting(
+      VISIBLE_COLUMNS_SETTING_KEY,
+      JSON.stringify({ visible: ordered, known: COLUMN_KEYS }),
+    ).catch((e) => console.error("[transactions] failed to persist columns:", e));
+  }
+
+  // Restore the persisted Δ-column display mode once on mount.
+  useEffect(() => {
+    let cancelled = false;
+    getSetting(DELTA_MODE_SETTING_KEY)
+      .then((v) => {
+        if (cancelled) return;
+        if (v === "percent" || v === "absolute") setDeltaMode(v);
+        setDeltaModeLoaded(true);
+      })
+      .catch(() => {
+        if (!cancelled) setDeltaModeLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function toggleDeltaMode() {
+    setDeltaMode((cur) => {
+      const idx = DELTA_MODES.indexOf(cur);
+      const next = DELTA_MODES[(idx + 1) % DELTA_MODES.length];
+      // Only persist user-initiated changes — the initial restore above
+      // doesn't bounce a write back to settings.
+      if (deltaModeLoaded) {
+        void setSetting(DELTA_MODE_SETTING_KEY, next).catch(() => {
+          // Persist failures are silent — the in-memory toggle still works
+          // for the rest of the session.
+        });
+      }
+      return next;
+    });
+  }
+
+  // Pull FX deltas for all linked pairs. Re-run whenever links change (new
+  // pair created / broken) and whenever a background rate download finishes
+  // — both can affect the answer. Errors are swallowed: a missing rate is
+  // already represented by a `null` deltaMinor, so the page stays usable.
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: UnlistenFn | undefined;
+
+    const refresh = () => {
+      listTransferDeltas()
+        .then((ds) => {
+          if (cancelled) return;
+          const next = new Map<number, TransferDelta>();
+          for (const d of ds) next.set(d.transactionId, d);
+          setDeltas(next);
+        })
+        .catch(() => {
+          // Don't surface — the column simply stays empty / dashed and the
+          // user can still see / break links.
+        });
+    };
+
+    refresh();
+    listen("rates:download:completed", refresh)
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {
+        // Tauri event subsystem unavailable (shouldn't happen in production)
+        // — we just lose the live refresh; the next mount cycle will fetch.
+      });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [version, links]);
+
+  // Map of txn id → partner txn id. A transaction is part of at most one
+  // link, so this lookup is unambiguous.
+  const linkPartnerById = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const l of links) {
+      m.set(l.txnAId, l.txnBId);
+      m.set(l.txnBId, l.txnAId);
+    }
+    return m;
+  }, [links]);
+
+  const categoriesByTxn = useMemo(() => {
+    const map = new Map<number, TransactionCategoryView[]>();
+    for (const tc of txnCategories) {
+      const arr = map.get(tc.transactionId);
+      if (arr) arr.push(tc);
+      else map.set(tc.transactionId, [tc]);
+    }
+    for (const arr of map.values()) {
+      arr.sort((a, b) => a.position - b.position);
+    }
+    return map;
+  }, [txnCategories]);
+
+  const [amountFilter, setAmountFilter] = useViewState<AmountFilter>("transactions.amount", {
+    op: "gt",
+    value: "",
+    value2: "",
+  });
+
+  // Categories filter: `null` = all (no filtering). Picking a category also
+  // takes its subcategories, so the set holds every matching id.
+  const [categoryFilter, setCategoryFilter] = useViewState<number[] | null>("transactions.categories", null);
+  const categoryFilterIds = useMemo(() => {
+    if (categoryFilter === null) return null;
+    const ids = new Set(categoryFilter);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const c of categories) {
+        if (c.parentId !== null && ids.has(c.parentId) && !ids.has(c.id)) {
+          ids.add(c.id);
+          grew = true;
+        }
+      }
+    }
+    return ids;
+  }, [categoryFilter, categories]);
+  // Tree order for the picker: income then expense, system ones first.
+  const categoryFilterItems = useMemo(
+    () =>
+      (["income", "expense"] as const).flatMap((kind) =>
+        flattenTree(buildTree(categories, kind)).map((n) => ({
+          id: n.category.id,
+          label: n.category.name,
+          depth: n.depth,
+          group: t(kind === "income" ? "categories.sectionIncome" : "categories.sectionExpense"),
+        })),
+      ),
+    [categories, t],
+  );
+
+  // First-time default for the account filter: select all accounts. After this
+  // initialisation the user owns the selection — clearing it stays cleared.
+  useEffect(() => {
+    if (accountsInitialised) return;
+    if (accounts.length === 0) return;
+    if (selectedAccountIds.length === 0) {
+      onChangeSelectedAccountIds(accounts.map((a) => a.id));
+    }
+    setAccountsInitialised(true);
+  }, [accounts, accountsInitialised, selectedAccountIds, onChangeSelectedAccountIds]);
+
+  // Apply the one-shot month-navigation hint emitted by the Accounts tab:
+  // pin dateFrom/dateTo to the picked month, mark accounts as initialised so
+  // the auto-select-all branch above doesn't fight the host's per-account
+  // selection, then ask the host to clear the hint. The selectedAccountIds
+  // prop has already been narrowed to the clicked account on the host side.
+  useEffect(() => {
+    if (!pendingMonthFilter) return;
+    const [yStr, mStr] = pendingMonthFilter.yearMonth.split("-");
+    const y = Number(yStr);
+    const m = Number(mStr);
+    // `new Date(y, m, 0)` rolls back one day from the next month's first =
+    // last day of month m (m is 1-indexed here, which is what we need).
+    const lastDay = new Date(y, m, 0).getDate();
+    setDateFrom(`${pendingMonthFilter.yearMonth}-01`);
+    setDateTo(`${pendingMonthFilter.yearMonth}-${String(lastDay).padStart(2, "0")}`);
+    setAccountsInitialised(true);
+    onPendingMonthFilterApplied?.();
+  }, [pendingMonthFilter, onPendingMonthFilterApplied]);
+
+  const scrollWrapRef = useRef<HTMLDivElement>(null);
+  const theadRef = useRef<HTMLTableSectionElement>(null);
+  const [theadHeight, setTheadHeight] = useState(0);
+  // Track the filter signature so we can scroll-to-bottom on the first
+  // load and on every filter change, but *not* on in-place mutations of
+  // existing rows (comment edits, withdrawal-paired cash inserts, etc).
+  // Without this distinction, every keystroke that triggers a re-render
+  // would yank the scroll position down to the latest transaction —
+  // jarring when the user is mid-task. Null on mount → first effect run
+  // always scrolls (initial population of the table).
+  const lastFilterSigRef = useRef<string | null>(null);
+
+  useLayoutEffect(() => {
+    const el = theadRef.current;
+    if (!el) return;
+    const update = () => setTheadHeight(el.offsetHeight);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const accountById = new Map(accounts.map((a) => [a.id, a]));
+  // Cash-kind accounts only — used to populate the "Withdraw to cash"
+  // selector. Recomputed on every accounts change but the list is tiny in
+  // practice (1–2 entries) and downstream consumers are stable, so this is
+  // cheap.
+  const cashAccounts = useMemo(
+    () => accounts.filter((a) => a.kind === "cash"),
+    [accounts],
+  );
+  // The transaction the pending-link banner is anchored on, if any. Null when
+  // not in pending mode or when the source is no longer in the filtered list
+  // (we still keep the banner up, but features that need the source — like
+  // "Withdraw to cash" — gracefully hide).
+  const pendingSourceTxn = useMemo(
+    () =>
+      pendingLinkTxnId === null
+        ? null
+        : txns.find((tt) => tt.id === pendingLinkTxnId) ?? null,
+    [txns, pendingLinkTxnId],
+  );
+  const pendingSourceAccount = pendingSourceTxn
+    ? accountById.get(pendingSourceTxn.accountId) ?? null
+    : null;
+  // "Withdraw to cash" only makes sense when the user started linking from
+  // an outgoing transaction — the new cash entry will be the matching
+  // incoming side.
+  const canWithdrawToCash =
+    pendingSourceTxn !== null &&
+    pendingSourceTxn.debit !== "0.00" &&
+    pendingSourceTxn.credit === "0.00";
+  const showCategory = visibleColumns.includes("category");
+  const showNote = visibleColumns.includes("note");
+  const showSuggestion = visibleColumns.includes("suggestion");
+  const showContext = visibleColumns.includes("context");
+  const showExample = visibleColumns.includes("example");
+  const showDelta = visibleColumns.includes("delta");
+  const showPeer = visibleColumns.includes("peer");
+  const showBankDescription = visibleColumns.includes("bank_description");
+  // 1 selection column + always-visible 🔗 + 5 fixed money/date columns +
+  // optional togglables (Δ and 📎 included).
+  const visibleColCount = 1 + 1 + 5 + visibleColumns.length;
+
+  const visibleTxns = useMemo(() => {
+    const fromMs = dateFrom ? Date.parse(dateFrom + "T00:00:00Z") : null;
+    const toMs = dateTo ? Date.parse(dateTo + "T23:59:59.999Z") : null;
+    const accountSet = new Set(selectedAccountIds);
+    return txns.filter((x) => {
+      if (!accountSet.has(x.accountId)) return false;
+      const ts = Date.parse(x.occurredAtUtc);
+      if (fromMs !== null && ts < fromMs) return false;
+      if (toMs !== null && ts > toMs) return false;
+      const noteKinds = selectedKinds.filter((k) => NOTE_KINDS.includes(k));
+      const linkKinds = selectedKinds.filter((k) => LINK_KINDS.includes(k));
+      const suggestionKinds = selectedKinds.filter((k) => SUGGESTION_KINDS.includes(k));
+      const categoryKinds = selectedKinds.filter((k) => CATEGORY_KINDS.includes(k));
+      const rowKinds = selectedKinds.filter((k) => !GROUPED_KINDS.includes(k));
+      const hasNote = !!x.comment?.trim() || docLinksByTxn.has(x.id);
+      if (!noteKinds.some((k) => (k === "with_note") === hasNote)) return false;
+      const isLinked = linkPartnerById.has(x.id);
+      if (!linkKinds.some((k) => (k === "linked") === isLinked)) return false;
+      const hasSuggestion = (suggestionsByTxn.get(x.id) ?? []).some((s) => !isUnsure(s, agentMinConfidence));
+      if (!suggestionKinds.some((k) => (k === "with_suggestion") === hasSuggestion)) return false;
+      const txnCats = categoriesByTxn.get(x.id) ?? [];
+      if (!categoryKinds.some((k) => (k === "with_category") === txnCats.length > 0)) return false;
+      if (categoryFilterIds !== null && !txnCats.some((c) => categoryFilterIds.has(c.categoryId))) return false;
+      const amount = (parseMoneyToMinor(x.credit) ?? 0) + (parseMoneyToMinor(x.debit) ?? 0);
+      if (!amountMatches(amount, amountFilter)) return false;
+      return rowKinds.some((k) => rowMatchesKind(x, k));
+    });
+  }, [
+    txns,
+    selectedAccountIds,
+    selectedKinds,
+    dateFrom,
+    dateTo,
+    docLinksByTxn,
+    linkPartnerById,
+    suggestionsByTxn,
+    agentMinConfidence,
+    categoriesByTxn,
+    categoryFilterIds,
+    amountFilter,
+  ]);
+
+  // The "same account" hover tint only tells something when the visible rows
+  // span several accounts; with a single account it would just tint the
+  // whole table.
+  const multiAccountView = useMemo(
+    () => new Set(visibleTxns.map((x) => x.accountId)).size > 1,
+    [visibleTxns],
+  );
+
+  // Drop any selected ids that are no longer visible (filters changed). This
+  // guarantees a bulk action can only ever touch rows the user can currently
+  // see — never something hidden behind a filter.
+  useEffect(() => {
+    setSelectedTxnIds((prev) => {
+      if (prev.size === 0) return prev;
+      const visibleIds = new Set(visibleTxns.map((x) => x.id));
+      let changed = false;
+      const next = new Set<number>();
+      for (const id of prev) {
+        if (visibleIds.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [visibleTxns]);
+
+  // Short tap on a row's checkbox: toggle that single row and make it the
+  // anchor for the next range selection.
+  function toggleSelectOne(id: number) {
+    setSelectedTxnIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    setLastSelectedId(id);
+  }
+
+  // Long press or Shift+click: select the inclusive range between the previous anchor and the
+  // pressed row (display order), then re-anchor on the pressed row.
+  function selectRangeTo(id: number) {
+    const orderedIds = visibleTxns.map((x) => x.id);
+    const ids = rangeIds(orderedIds, lastSelectedId, id);
+    setSelectedTxnIds((prev) => {
+      const next = new Set(prev);
+      for (const r of ids) next.add(r);
+      return next;
+    });
+    setLastSelectedId(id);
+  }
+
+  const allVisibleSelected =
+    visibleTxns.length > 0 &&
+    visibleTxns.every((x) => selectedTxnIds.has(x.id));
+
+  function toggleSelectAllVisible() {
+    if (allVisibleSelected) {
+      setSelectedTxnIds(new Set());
+      setLastSelectedId(null);
+    } else {
+      setSelectedTxnIds(new Set(visibleTxns.map((x) => x.id)));
+    }
+  }
+
+  // The concrete target set for a bulk action: the selected, currently-visible
+  // transactions. Order follows the table.
+  const bulkTargets = useMemo(
+    () => visibleTxns.filter((x) => selectedTxnIds.has(x.id)),
+    [visibleTxns, selectedTxnIds],
+  );
+
+  // Only scroll to the bottom when the *filter shape* changes (or on
+  // first mount). Row-level edits and additions keep the user's current
+  // position so the table doesn't jump out from under them.
+  const filterSignature = JSON.stringify({
+    selectedAccountIds,
+    selectedKinds,
+    dateFrom,
+    dateTo,
+    visibleColumns,
+  });
+  useLayoutEffect(() => {
+    const el = scrollWrapRef.current;
+    if (!el) return;
+    if (lastFilterSigRef.current !== filterSignature) {
+      el.scrollTop = el.scrollHeight;
+      lastFilterSigRef.current = filterSignature;
+    }
+  }, [visibleTxns, filterSignature]);
+
+  // Auto-clear transient link errors so the banner doesn't linger.
+  useEffect(() => {
+    if (!linkError) return;
+    const handle = window.setTimeout(() => setLinkError(null), 4000);
+    return () => window.clearTimeout(handle);
+  }, [linkError]);
+
+  // Cancel a pending link whenever the user clicks anywhere outside the
+  // 🔗 column. Clicks *inside* `.col-link` are handled by the cell itself
+  // (selection / cancel-on-anchor). Clicks on the cancel button in the
+  // pending banner also leave the column, so they cancel naturally.
+  // Escape works as a global cancel — handy when the cursor is parked on
+  // a comment input or anywhere else focus might trap clicks.
+  useEffect(() => {
+    if (pendingLinkTxnId === null) return;
+    // The Withdraw-to-cash modal sits on top of pending mode and owns its
+    // own outside-click / Escape handling — disable the global cancel so
+    // clicks inside the modal don't accidentally tear down the pending
+    // state behind it.
+    if (withdrawModalOpen) return;
+    const onClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest(".col-link")) return;
+      if (target.closest(".txn-link-overlay")) return;
+      if (target.closest(".withdraw-modal")) return;
+      setPendingLinkTxnId(null);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setPendingLinkTxnId(null);
+      }
+    };
+    window.addEventListener("click", onClick);
+    // Capture-phase keydown so we beat any inputs that swallow Escape
+    // (e.g. the comment field's onKeyDown handler) — the user expects
+    // Escape to exit pending mode regardless of where focus sits.
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("click", onClick);
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [pendingLinkTxnId, withdrawModalOpen]);
+
+  function localizedLinkError(code: string): string {
+    if ((LINK_ERROR_CODES as string[]).includes(code)) {
+      return t(`transactions.linkError.${code as LinkErrorCode}`);
+    }
+    if ((WITHDRAWAL_ERROR_CODES as string[]).includes(code)) {
+      return t(`transactions.linkError.${code as WithdrawalErrorCode}`);
+    }
+    return code;
+  }
+
+  function localizedSuggestionError(code: string): string {
+    if (code.startsWith("suggestion.")) {
+      return t(`suggestions.error.${code.slice("suggestion.".length)}`);
+    }
+    return localizedLinkError(code);
+  }
+
+  // Applying a suggestion may add a cash transaction, a link or categories —
+  // reload all of them along with the suggestions.
+  function onSuggestionApplied() {
+    setLocalRefresh((v) => v + 1);
+    setCategoriesVersion((v) => v + 1);
+    setSuggestionsVersion((v) => v + 1);
+    void refreshLinks();
+  }
+
+  async function downloadReferenceSet() {
+    try {
+      const data = await exportReferenceSet(bulkTargets.map((x) => x.id));
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `a2b-reference-set-${new Date().toISOString().slice(0, 10)}-${bulkTargets.length}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function refreshLinks() {
+    try {
+      const ls = await listTransactionLinks(undefined);
+      setLinks(ls);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function commitLink(aId: number, bId: number) {
+    try {
+      await linkTransactions(aId, bId);
+      setPendingLinkTxnId(null);
+      setLinkError(null);
+      await refreshLinks();
+    } catch (e) {
+      setLinkError(localizedLinkError(String(e)));
+    }
+  }
+
+  async function commitUnlink(txnId: number) {
+    try {
+      await unlinkTransaction(txnId);
+      setUnlinkConfirm(null);
+      await refreshLinks();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  // Pre-flight check matching the backend's link rules. Returns a
+  // localised reason if `target` is *not* a valid partner for the current
+  // anchor, or null when a link can be created. Doesn't apply to the
+  // anchor itself or when no anchor is set — callers gate on those.
+  function linkInvalidReason(target: Transaction): string | null {
+    if (pendingLinkTxnId === null) return null;
+    if (pendingLinkTxnId === target.id) return null;
+    if (linkPartnerById.has(target.id)) {
+      return t("transactions.linkError.link.already_linked");
+    }
+    const anchor = txns.find((tt) => tt.id === pendingLinkTxnId);
+    if (!anchor) return null;
+    if (anchor.accountId === target.accountId) {
+      return t("transactions.linkError.link.same_account");
+    }
+    const anchorIncoming = anchor.credit !== "0.00";
+    const targetIncoming = target.credit !== "0.00";
+    if (anchorIncoming === targetIncoming) {
+      return t("transactions.linkError.link.same_direction");
+    }
+    return null;
+  }
+
+  // Click on a 🔗 / ❌ cell. Invalid candidates during pending mode are
+  // silent no-ops — the ❌ icon and its hover tooltip already communicate
+  // the rejection, so we don't surface separate error toasts.
+  function onLinkCellClick(x: Transaction) {
+    const partnerId = linkPartnerById.get(x.id);
+    if (pendingLinkTxnId !== null) {
+      if (pendingLinkTxnId === x.id) {
+        setPendingLinkTxnId(null);
+        return;
+      }
+      if (linkInvalidReason(x) !== null) {
+        return; // silent no-op; ❌ tooltip already explains why
+      }
+      const anchor = txns.find((tt) => tt.id === pendingLinkTxnId);
+      if (anchor) void commitLink(anchor.id, x.id);
+      return;
+    }
+    if (partnerId !== undefined) {
+      // Out of pending mode, clicking a linked row asks to break the link.
+      setUnlinkConfirm(x.id);
+      return;
+    }
+    setPendingLinkTxnId(x.id);
+    setLinkError(null);
+  }
+
+  // Saves the comment typed in the 📎 "Document & comment" dialog; rethrows so
+  // the dialog can show the failure next to the field.
+  async function persistComment(id: number, raw: string) {
+    const trimmed = raw.trim();
+    const next = trimmed === "" ? null : trimmed;
+    await updateTransactionComment(id, next);
+    setTxns((prev) =>
+      prev.map((tt) => (tt.id === id ? { ...tt, comment: next } : tt)),
+    );
+  }
+
+  const accountItems = accounts.map((a) => ({
+    id: a.id,
+    label: `${a.name || a.accountNumber || `#${a.id}`} · ${a.currency}`,
+  }));
+
+  return (
+    <section className="page page--transactions">
+      <section
+        className={`filter-bar${filtersExpanded ? "" : " filter-bar--collapsed"}`}
+      >
+        <button
+          type="button"
+          className="filter-bar-handle"
+          onClick={() => setFiltersExpanded((v) => !v)}
+          aria-label={
+            filtersExpanded ? t("toolbar.collapse") : t("toolbar.expand")
+          }
+          title={
+            filtersExpanded ? t("toolbar.collapse") : t("toolbar.expand")
+          }
+        >
+          <span className="filter-bar-handle-grip" />
+        </button>
+        {filtersExpanded && (
+          <div className="filter-bar-row">
+            <label className="filter-field">
+              <span>{t("transactions.filterAccounts")}</span>
+              <MultiSelectDropdown
+                items={accountItems}
+                selected={selectedAccountIds}
+                onApply={onChangeSelectedAccountIds}
+                allLabel={t("transactions.filterAccountsAll")}
+                noneLabel={t("transactions.filterAccountsNone")}
+                emptyItemsLabel={t("transactions.filterAccountsEmpty")}
+                multiSelectedLabel={(count) =>
+                  t("transactions.filterAccountsMany", { count })
+                }
+                applyLabel={t("transactions.applyButton")}
+              />
+            </label>
+            <div className="filter-field">
+              <span>{t("transactions.filterPeriod")}</span>
+              <PeriodDropdown
+                from={dateFrom}
+                to={dateTo}
+                presets={periodPresets()}
+                onChange={(from, to) => {
+                  setDateFrom(from);
+                  setDateTo(to);
+                }}
+              />
+            </div>
+            <label className="filter-field">
+              <span>{t("transactions.filterKind")}</span>
+              <MultiSelectDropdown<RowKind>
+                items={ROW_KINDS.map((k) => ({
+                  id: k,
+                  label: t(`transactions.kind.${k}`),
+                  group: NOTE_KINDS.includes(k)
+                    ? t("transactions.filterGroupNote")
+                    : LINK_KINDS.includes(k)
+                      ? t("transactions.filterGroupLink")
+                      : SUGGESTION_KINDS.includes(k)
+                        ? t("transactions.filterGroupSuggestion")
+                        : CATEGORY_KINDS.includes(k)
+                          ? t("transactions.filterGroupCategory")
+                          : t("transactions.filterGroupKind"),
+                }))}
+                selected={selectedKinds}
+                onApply={setSelectedKinds}
+                allLabel={t("transactions.filterKindAll")}
+                noneLabel={t("transactions.filterKindNone")}
+                emptyItemsLabel={t("transactions.filterKindAll")}
+                multiSelectedLabel={(count) =>
+                  t("transactions.filterKindMany", { count })
+                }
+                applyLabel={t("transactions.applyButton")}
+              />
+            </label>
+            <label className="filter-field">
+              <span>{t("transactions.filterCategories")}</span>
+              <MultiSelectDropdown<number>
+                items={categoryFilterItems}
+                selected={categoryFilter ?? categoryFilterItems.map((i) => i.id)}
+                onApply={(ids) => setCategoryFilter(ids.length === categoryFilterItems.length ? null : ids)}
+                allLabel={t("transactions.filterCategoriesAll")}
+                noneLabel={t("transactions.filterCategoriesNone")}
+                emptyItemsLabel={t("transactions.filterCategoriesAll")}
+                multiSelectedLabel={(count) => t("transactions.filterCategoriesMany", { count })}
+                applyLabel={t("transactions.applyButton")}
+              />
+            </label>
+            <div className="filter-field filter-field--amount">
+              <span>{t("transactions.filterAmount")}</span>
+              <div className="amount-filter">
+                <select
+                  aria-label={t("transactions.filterAmount")}
+                  value={amountFilter.op}
+                  onChange={(e) => setAmountFilter({ ...amountFilter, op: e.target.value as AmountOp })}
+                >
+                  {AMOUNT_OPS.map((op) => (
+                    <option key={op} value={op}>
+                      {t(`transactions.amountOp.${op}`)}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder={amountFilter.op === "between" ? t("transactions.amountFrom") : "0.00"}
+                  value={amountFilter.value}
+                  onChange={(e) => setAmountFilter({ ...amountFilter, value: e.target.value })}
+                />
+                {amountFilter.op === "between" && (
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    placeholder={t("transactions.amountTo")}
+                    value={amountFilter.value2}
+                    onChange={(e) => setAmountFilter({ ...amountFilter, value2: e.target.value })}
+                  />
+                )}
+                {(amountFilter.value || amountFilter.value2) && (
+                  <button
+                    type="button"
+                    className="icon-btn amount-filter-clear"
+                    aria-label={t("transactions.amountClear")}
+                    title={t("transactions.amountClear")}
+                    onClick={() => setAmountFilter({ ...amountFilter, value: "", value2: "" })}
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+            </div>
+            <label className="filter-field">
+              <span>{t("transactions.filterColumns")}</span>
+              <MultiSelectDropdown<ColumnKey>
+                items={COLUMN_KEYS.map((k) => ({
+                  id: k,
+                  label: t(`transactions.column.${k}`),
+                }))}
+                selected={visibleColumns}
+                onApply={changeVisibleColumns}
+                allLabel={t("transactions.filterColumnsAll")}
+                noneLabel={t("transactions.filterColumnsNone")}
+                emptyItemsLabel={t("transactions.filterColumnsAll")}
+                multiSelectedLabel={(count) =>
+                  t("transactions.filterColumnsMany", { count })
+                }
+                applyLabel={t("transactions.applyButton")}
+              />
+            </label>
+            {/* Right edge of the bar, where the Import button used to be;
+                importing is the last item of the menu. */}
+            <div className="filter-bar-action">
+              <BulkActionsMenu
+                selectedCount={bulkTargets.length}
+                onImportTransactions={onImportTransactions}
+                onAnalyzeDocuments={() => setBulkDocsOpen(true)}
+                onDetectCashWithdrawals={() => setBulkDetect("cash_withdrawal")}
+                onDetectTransfers={() => setBulkDetect("transfer")}
+                onSuggestCategories={() => setBulkSuggestOpen(true)}
+                onAcceptSuggestions={() => setBulkAcceptOpen(true)}
+                onDeleteCash={() => setBulkDeleteCashOpen(true)}
+                onAssignCategory={() => setBulkOpen(true)}
+                onMarkExamples={(example) => void markExamples(bulkTargets.map((x) => x.id), example)}
+                onExportReferenceSet={() => void downloadReferenceSet()}
+              />
+            </div>
+          </div>
+        )}
+      </section>
+
+      {error && <div className="error">{error}</div>}
+
+      <div
+        className="txns-wrap"
+        ref={scrollWrapRef}
+        style={
+          theadHeight
+            ? ({ "--thead-h": `${theadHeight}px` } as CSSProperties)
+            : undefined
+        }
+      >
+        <table
+          className={showSuggestion && showCategory ? "has-col-split" : undefined}
+          style={
+            showSuggestion && showCategory
+              ? ({
+                  "--split-suggestion": `${suggestionWidth}px`,
+                  "--split-category": `${SPLIT_TOTAL - suggestionWidth}px`,
+                } as CSSProperties)
+              : undefined
+          }
+        >
+          <thead ref={theadRef}>
+            <tr>
+              {showContext && (
+                <th className="col-context" title={t("transactions.tableContextTitle")}>
+                  {t("transactions.tableContext")}
+                </th>
+              )}
+              {showExample && (
+                <th className="col-example" title={t("transactions.tableExampleTitle")}>
+                  <span className="col-example-icon">✨</span>
+                </th>
+              )}
+              <th className="col-select">
+                <input
+                  type="checkbox"
+                  aria-label={t("transactions.bulk.selectAll")}
+                  title={t("transactions.bulk.selectAll")}
+                  checked={allVisibleSelected}
+                  ref={(el) => {
+                    if (el) {
+                      el.indeterminate =
+                        !allVisibleSelected && selectedTxnIds.size > 0;
+                    }
+                  }}
+                  onChange={toggleSelectAllVisible}
+                />
+              </th>
+              <th className="col-fixed col-account">{t("transactions.tableAccount")}</th>
+              <th className="col-fixed col-date">{t("transactions.tableDate")}</th>
+              <th className="col-fixed num">{t("transactions.tableCredit")}</th>
+              <th className="col-fixed num">{t("transactions.tableDebit")}</th>
+              <th className="col-fixed num">
+                {t("transactions.tableBalance")}
+              </th>
+              {showNote && (
+                <th className="col-note" title={t("transactions.tableNoteTitle")}>
+                  {t("transactions.tableNote")}
+                </th>
+              )}
+              {showSuggestion && (
+                <th className="col-suggestion" title={t("transactions.tableSuggestionTitle")}>
+                  {t("transactions.tableSuggestion")}
+                  {showCategory && (
+                    <span
+                      className="col-split-handle"
+                      role="separator"
+                      aria-orientation="vertical"
+                      title={t("transactions.splitHandle")}
+                      onPointerDown={startSplitDrag}
+                      onDoubleClick={resetSplit}
+                    />
+                  )}
+                </th>
+              )}
+              {showCategory && (
+                <th className="col-category">{t("transactions.tableCategory")}</th>
+              )}
+              <th
+                className="col-link"
+                title={t("transactions.tableLinkTitle")}
+              >
+                🔗
+              </th>
+              {showDelta && (
+                <th
+                  className="col-delta"
+                  title={
+                    deltaMode === "percent"
+                      ? t("transactions.tableDeltaTitlePercent")
+                      : t("transactions.tableDeltaTitleAbsolute")
+                  }
+                >
+                  <button
+                    type="button"
+                    className="col-delta-toggle"
+                    onClick={toggleDeltaMode}
+                    aria-label={
+                      deltaMode === "percent"
+                        ? t("transactions.tableDeltaTitlePercent")
+                        : t("transactions.tableDeltaTitleAbsolute")
+                    }
+                  >
+                    {deltaMode === "percent" ? "Δ%" : "Δ"}
+                  </button>
+                </th>
+              )}
+              {showPeer && (
+                <th className="col-peer">{t("transactions.tablePeer")}</th>
+              )}
+              {showBankDescription && (
+                <th className="col-bank-description">
+                  {t("transactions.tableBankDescription")}
+                </th>
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {visibleTxns.length === 0 ? (
+              <tr>
+                <td colSpan={visibleColCount} className="empty">
+                  {t("transactions.empty")}
+                </td>
+              </tr>
+            ) : (
+              visibleTxns.flatMap((x, i) => {
+                const acc = accountById.get(x.accountId);
+                const accLabel = acc
+                  ? `${acc.name || acc.accountNumber} · ${acc.currency}`
+                  : `#${x.accountId}`;
+                const prev = i > 0 ? visibleTxns[i - 1] : null;
+                const isMonthStart =
+                  !prev || !sameLocalMonth(prev.occurredAtUtc, x.occurredAtUtc);
+                const nodes: ReactElement[] = [];
+                if (isMonthStart) {
+                  nodes.push(
+                    <tr key={`sep:${x.id}`} className="month-separator">
+                      <td colSpan={visibleColCount}>
+                        {formatMonthLabel(x.occurredAtUtc, locale)}
+                      </td>
+                    </tr>,
+                  );
+                }
+                const partnerId = linkPartnerById.get(x.id);
+                const isLinkPartnerOfHover =
+                  hovered !== null &&
+                  linkPartnerById.get(hovered.id) === x.id;
+                const isSelected = selectedTxnIds.has(x.id);
+                const rowClasses = [
+                  x.isCorrecting ? "is-correcting" : "",
+                  multiAccountView && hovered?.accountId === x.accountId
+                    ? "is-hover-account"
+                    : "",
+                  hovered?.id === x.id ? "is-hover-row" : "",
+                  isLinkPartnerOfHover ? "is-link-partner" : "",
+                  isSelected ? "is-selected" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ");
+                const isLinked = partnerId !== undefined;
+                const isPendingAnchor = pendingLinkTxnId === x.id;
+                const invalidReason =
+                  pendingLinkTxnId !== null && !isPendingAnchor
+                    ? linkInvalidReason(x)
+                    : null;
+                // Icon decision is split by pending state:
+                //  - in pending mode the table reads as a go/no-go pick:
+                //    🔗 (anchor or valid candidate) vs. ❌ (invalid for any
+                //    reason — including rows that are *already* linked).
+                //  - out of pending mode the link icon only marks rows that
+                //    actually have an existing link.
+                let iconKind: "link" | "invalid" | "none";
+                if (isPendingAnchor) {
+                  iconKind = "link";
+                } else if (pendingLinkTxnId !== null) {
+                  iconKind = invalidReason !== null ? "invalid" : "link";
+                } else if (isLinked) {
+                  iconKind = "link";
+                } else {
+                  iconKind = "none";
+                }
+                // Visual variant of the chain icon. Green ("candidate") only
+                // applies when a click would actually create a link; the
+                // existing-link tint takes over outside pending mode.
+                const isCandidate =
+                  pendingLinkTxnId !== null &&
+                  !isPendingAnchor &&
+                  iconKind === "link" &&
+                  invalidReason === null &&
+                  !isLinked;
+                // Outside pending mode, a click on an unlinked row's cell
+                // *starts* a new pending. Mark the cell as "startable" so
+                // hover can hint at that affordance with the same green
+                // tint we use for the second-pick step.
+                const isStartable =
+                  pendingLinkTxnId === null && !isLinked;
+                const linkBtnClasses = [
+                  "txn-link-btn",
+                  isLinked && pendingLinkTxnId === null ? "is-linked" : "",
+                  isPendingAnchor ? "is-pending" : "",
+                  isCandidate ? "is-candidate" : "",
+                  isStartable ? "is-startable" : "",
+                  iconKind === "invalid" ? "is-invalid" : "",
+                  // Startable cells render a hidden ChainIcon that fades in
+                  // on hover (see is-startable CSS), so they aren't truly
+                  // "empty" and shouldn't suppress the hover background
+                  // via the :not(.is-empty) rule.
+                  iconKind === "none" && !isStartable ? "is-empty" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ");
+                let linkTitle: string;
+                if (isLinked && pendingLinkTxnId === null) {
+                  linkTitle = t("transactions.linkLinkedTitle");
+                } else if (isPendingAnchor) {
+                  linkTitle = t("transactions.linkPendingTitle");
+                } else if (invalidReason !== null) {
+                  linkTitle = invalidReason;
+                } else if (pendingLinkTxnId !== null) {
+                  linkTitle = t("transactions.linkPartnerCandidateTitle");
+                } else {
+                  linkTitle = t("transactions.linkStartTitle");
+                }
+                nodes.push(
+                  <tr
+                    key={x.id}
+                    className={rowClasses}
+                    onMouseEnter={() =>
+                      setHovered({ id: x.id, accountId: x.accountId })
+                    }
+                    onMouseLeave={() =>
+                      setHovered((cur) => (cur?.id === x.id ? null : cur))
+                    }
+                  >
+                    {showContext && (() => {
+                      // The day as shown in the Date column (local time).
+                      const day = formatInstantLocal(x.occurredAtUtc).slice(0, 10);
+                      const on = lifeContextsAsc.filter((c) => c.startsOn <= day && day <= c.endsOn);
+                      const formatDay = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString(locale);
+                      // Per event: title, period, note; two empty lines
+                      // between events so each one stands apart.
+                      const text = on
+                        .map((c) =>
+                          [
+                            c.title,
+                            c.startsOn === c.endsOn
+                              ? formatDay(c.startsOn)
+                              : `${formatDay(c.startsOn)} – ${formatDay(c.endsOn)}`,
+                            c.note,
+                          ]
+                            .filter(Boolean)
+                            .join("\n"),
+                        )
+                        .join("\n\n\n");
+                      return (
+                        <td
+                          className="col-context col-context--editable"
+                          title={text ? undefined : t("transactions.contextAdd")}
+                          onClick={() => {
+                            setTooltip(null);
+                            setEventEditing({ context: null, day });
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!text) return;
+                            const r = e.currentTarget.getBoundingClientRect();
+                            // The column is at the very left edge: keep the
+                            // centred tooltip (max 280px + padding) on screen.
+                            setTooltip({ x: Math.max(r.left + r.width / 2, 160), y: r.top, text });
+                          }}
+                          onMouseLeave={() => setTooltip(null)}
+                        >
+                          {on.map((c) => (
+                            <button
+                              key={c.id}
+                              type="button"
+                              className="context-chip"
+                              style={{ borderColor: c.color }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setTooltip(null);
+                                setEventEditing({ context: c, day });
+                              }}
+                            >
+                              <span className="context-chip-dot" style={{ background: c.color }} />
+                              {c.title}
+                            </button>
+                          ))}
+                          <span className="context-add" aria-hidden="true">
+                            +
+                          </span>
+                        </td>
+                      );
+                    })()}
+                    {showExample && (
+                      <td className="col-example">
+                        {(categoriesByTxn.get(x.id)?.length ?? 0) > 0 && (
+                          <button
+                            type="button"
+                            className={`txn-example-btn${exampleIds.has(x.id) ? " is-example" : ""}`}
+                            aria-pressed={exampleIds.has(x.id)}
+                            title={
+                              exampleIds.has(x.id)
+                                ? t("transactions.categories.exampleOn")
+                                : t("transactions.categories.exampleOff")
+                            }
+                            onClick={() => void markExamples([x.id], !exampleIds.has(x.id))}
+                          >
+                            ✨
+                          </button>
+                        )}
+                      </td>
+                    )}
+                    <td className="col-select">
+                      <SelectCheckbox
+                        selected={isSelected}
+                        onShortPress={() => toggleSelectOne(x.id)}
+                        onLongPress={() => selectRangeTo(x.id)}
+                        ariaLabel={t("transactions.bulk.selectRow")}
+                      />
+                    </td>
+                    <td
+                      className="col-fixed col-account"
+                      onMouseEnter={(e) => {
+                        if (!acc) return;
+                        const r = e.currentTarget.getBoundingClientRect();
+                        setTooltip({
+                          x: r.left + r.width / 2,
+                          y: r.top,
+                          text: buildAccountTooltip(acc, t),
+                        });
+                      }}
+                      onMouseLeave={() => setTooltip(null)}
+                    >
+                      {accLabel}
+                    </td>
+                    <td
+                      className="col-fixed col-date txn-open-cell"
+                      title={formatInstantUtc(x.occurredAtUtc)}
+                      onClick={() => setDetailTxnId(x.id)}
+                    >
+                      {formatInstantLocal(x.occurredAtUtc)}{" "}
+                      <span className="dow">
+                        ({formatDayOfWeekShort(x.occurredAtUtc, locale)})
+                      </span>
+                    </td>
+                    <td className="col-fixed num">
+                      {x.credit !== "0.00" ? (
+                        <span className="amount-credit">
+                          {formatMoney(x.credit)}
+                        </span>
+                      ) : (
+                        ""
+                      )}
+                    </td>
+                    <td className="col-fixed num">
+                      {x.debit !== "0.00" ? (
+                        <span className="amount-debit">
+                          {formatMoney(x.debit)}
+                        </span>
+                      ) : (
+                        ""
+                      )}
+                    </td>
+                    <td className="col-fixed num">
+                      {formatMoney(x.balance)}
+                    </td>
+                    {showNote && (
+                      <NoteCell
+                        txn={x}
+                        dateLabel={formatInstantLocal(x.occurredAtUtc)}
+                        accountLabel={
+                          acc ? `${acc.name || acc.accountNumber || acc.bank} · ${acc.currency}` : ""
+                        }
+                        onSaveComment={(c) => persistComment(x.id, c)}
+                        links={docLinksByTxn.get(x.id) ?? []}
+                        onChanged={() => setDocLinksVersion((v) => v + 1)}
+                      />
+                    )}
+                    {showSuggestion && (
+                      <SuggestionCell
+                        txn={x}
+                        suggestions={suggestionsByTxn.get(x.id) ?? []}
+                        note={
+                          x.comment?.trim() ||
+                          docLinksByTxn.get(x.id)?.find((l) => l.memo)?.memo ||
+                          null
+                        }
+                        txnById={txnById}
+                        accountById={accountById}
+                        categoryById={categoryById}
+                        formatDate={formatInstantLocal}
+                        localizeError={localizedSuggestionError}
+                        agentMinConfidence={agentMinConfidence}
+                        onChanged={onSuggestionApplied}
+                      />
+                    )}
+                    {showCategory && (() => {
+                      const totalMinor =
+                        (parseMoneyToMinor(x.credit) ?? 0) +
+                        (parseMoneyToMinor(x.debit) ?? 0);
+                      const kind = x.credit !== "0.00" ? "income" : "expense";
+                      const entries = categoriesByTxn.get(x.id) ?? [];
+                      return (
+                        <CategoriesCell
+                          transactionId={x.id}
+                          totalMinor={totalMinor}
+                          kind={kind}
+                          entries={entries}
+                          onChanged={() => setCategoriesVersion((v) => v + 1)}
+                        />
+                      );
+                    })()}
+                    <td className="col-link">
+                      <button
+                        type="button"
+                        className={linkBtnClasses}
+                        aria-label={linkTitle}
+                        data-icon-kind={iconKind}
+                        data-invalid-reason={invalidReason ?? ""}
+                        data-pending={pendingLinkTxnId === null ? "false" : "true"}
+                        data-anchor={isPendingAnchor ? "true" : "false"}
+                        onClick={() => onLinkCellClick(x)}
+                        onMouseEnter={(e) => {
+                          let text: string | null = null;
+                          if (iconKind === "invalid" && invalidReason) {
+                            text = invalidReason;
+                          } else if (
+                            isLinked &&
+                            partnerId !== undefined &&
+                            pendingLinkTxnId === null
+                          ) {
+                            // Linked-row hover: surface the partner's
+                            // basic facts so the user can identify which
+                            // transaction this row is paired with even
+                            // when the account/date filter hides the
+                            // other side from the table.
+                            const partner = txns.find(
+                              (tt) => tt.id === partnerId,
+                            );
+                            if (partner) {
+                              const pa = accountById.get(partner.accountId);
+                              const accLabelP = pa
+                                ? `${pa.name || pa.accountNumber} · ${pa.currency}`
+                                : `#${partner.accountId}`;
+                              const dateP = formatInstantLocal(
+                                partner.occurredAtUtc,
+                              );
+                              const isIncoming = partner.credit !== "0.00";
+                              const amountP = isIncoming
+                                ? formatMoney(partner.credit)
+                                : formatMoney(partner.debit);
+                              const typeLabel = isIncoming
+                                ? t("transactions.tableCredit")
+                                : t("transactions.tableDebit");
+                              text = `${accLabelP}\n${dateP}\n${typeLabel}: ${amountP}`;
+                            }
+                          }
+                          if (text !== null) {
+                            const r = e.currentTarget.getBoundingClientRect();
+                            setTooltip({
+                              x: r.left + r.width / 2,
+                              y: r.top,
+                              text,
+                            });
+                          }
+                        }}
+                        onMouseLeave={() => setTooltip(null)}
+                      >
+                        {iconKind === "link" || isStartable ? (
+                          <ChainIcon />
+                        ) : iconKind === "invalid" ? (
+                          <CrossIcon />
+                        ) : (
+                          ""
+                        )}
+                      </button>
+                    </td>
+                    {showDelta && (
+                      <td className="col-delta num">
+                        {(() => {
+                          const delta = deltas.get(x.id);
+                          if (!delta) return "";
+                          const isCredit = x.credit !== "0.00";
+                          // Default ("%") mode shows nothing on the debit side
+                          // — the percentage on the incoming row alone is the
+                          // canonical "how much we lost on this conversion".
+                          if (deltaMode === "percent" && !isCredit) return "";
+                          return (
+                            <DeltaCell
+                              delta={delta}
+                              mode={deltaMode}
+                              t={t}
+                              onShowTooltip={(text, rect) =>
+                                setTooltip({
+                                  x: rect.left + rect.width / 2,
+                                  y: rect.top,
+                                  text,
+                                })
+                              }
+                              onHideTooltip={() => setTooltip(null)}
+                            />
+                          );
+                        })()}
+                      </td>
+                    )}
+                    {showPeer && (
+                      <TruncatedCell
+                        className="col-peer"
+                        text={
+                          x.isCorrecting
+                            ? t("transactions.correctingLabel")
+                            : x.peer ?? ""
+                        }
+                        onShowTooltip={(text, rect) =>
+                          setTooltip({
+                            x: rect.left + rect.width / 2,
+                            y: rect.top,
+                            text,
+                          })
+                        }
+                        onHideTooltip={() => setTooltip(null)}
+                      />
+                    )}
+                    {showBankDescription && (
+                      <TruncatedCell
+                        className="col-bank-description"
+                        text={x.bankDescription ?? ""}
+                        onShowTooltip={(text, rect) =>
+                          setTooltip({
+                            x: rect.left + rect.width / 2,
+                            y: rect.top,
+                            text,
+                          })
+                        }
+                        onHideTooltip={() => setTooltip(null)}
+                      />
+                    )}
+                  </tr>,
+                );
+                return nodes;
+              })
+            )}
+            {visibleTxns.length > 0 && (
+              <tr className="txn-tail-spacer" aria-hidden="true">
+                <td colSpan={visibleColCount}></td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {pendingLinkTxnId !== null && (
+        <div className="txn-link-overlay">
+          <span>{t("transactions.linkPickPartner")}</span>
+          {canWithdrawToCash && (
+            <button
+              type="button"
+              disabled={cashAccounts.length === 0}
+              title={
+                cashAccounts.length === 0
+                  ? t("transactions.withdrawNoCashAccounts")
+                  : undefined
+              }
+              onClick={() => setWithdrawModalOpen(true)}
+            >
+              {t("transactions.withdrawToCash")}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setPendingLinkTxnId(null)}
+          >
+            {t("common.cancel")}
+          </button>
+        </div>
+      )}
+      {linkError && (
+        <div className="txn-link-overlay txn-link-overlay--error">
+          <span>{linkError}</span>
+        </div>
+      )}
+      {tooltip !== null &&
+        createPortal(
+          <div
+            className="txn-link-portal-tooltip"
+            style={{ left: tooltip.x, top: tooltip.y }}
+            role="tooltip"
+          >
+            {tooltip.text}
+          </div>,
+          document.body,
+        )}
+      {unlinkConfirm !== null && (
+        <div
+          className="txn-link-confirm-overlay"
+          onClick={() => setUnlinkConfirm(null)}
+        >
+          <div
+            className="txn-link-confirm"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3>{t("transactions.linkUnlinkConfirmTitle")}</h3>
+            <p>{t("transactions.linkUnlinkConfirmText")}</p>
+            <div className="txn-link-confirm-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setUnlinkConfirm(null)}
+              >
+                {t("common.cancel")}
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => commitUnlink(unlinkConfirm)}
+              >
+                {t("transactions.linkUnlinkConfirmYes")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {withdrawModalOpen && pendingSourceTxn && pendingSourceAccount && (
+        <WithdrawToCashModal
+          source={pendingSourceTxn}
+          sourceAccount={pendingSourceAccount}
+          cashAccounts={cashAccounts}
+          localizedError={localizedLinkError}
+          onCancel={() => setWithdrawModalOpen(false)}
+          onCreated={(result) => {
+            // Splice the new cash transaction into the txns array in
+            // chronological order so it lands next to its source rather
+            // than at the very bottom of the table. The backend returns
+            // `listTransactions` sorted by occurred_at_utc ASC with id
+            // ASC as the implicit tiebreaker — replicate that here so a
+            // freshly-created row of the same date as an existing one
+            // settles after it (the new row always has the higher id).
+            setTxns((prev) => {
+              const next = [...prev, result.newTransaction];
+              next.sort((a, b) => {
+                const t = a.occurredAtUtc.localeCompare(b.occurredAtUtc);
+                if (t !== 0) return t;
+                return a.id - b.id;
+              });
+              return next;
+            });
+            setLinks((prev) => [...prev, result.link]);
+            setWithdrawModalOpen(false);
+            setPendingLinkTxnId(null);
+            setLinkError(null);
+          }}
+        />
+      )}
+
+      {eventEditing && (
+        <ContextFormModal
+          context={eventEditing.context}
+          defaultDay={eventEditing.day}
+          defaultColor={nextRootColor(lifeContexts.map((c) => c.color))}
+          onClose={() => setEventEditing(null)}
+          onSaved={() => {
+            setEventEditing(null);
+            setLifeContextsVersion((v) => v + 1);
+          }}
+        />
+      )}
+      {detailTxnId !== null && (
+        <TransactionModal
+          transactionId={detailTxnId}
+          onClose={() => setDetailTxnId(null)}
+          onChanged={() => {
+            setLocalRefresh((v) => v + 1);
+            setCategoriesVersion((v) => v + 1);
+          }}
+        />
+      )}
+      {bulkDetect !== null && (
+        <BulkDetectSuggestionsModal
+          kind={bulkDetect}
+          transactions={bulkTargets}
+          suggestions={suggestions}
+          onClose={() => setBulkDetect(null)}
+          onDone={() => setSuggestionsVersion((v) => v + 1)}
+        />
+      )}
+      {bulkDeleteCashOpen && (
+        <BulkDeleteCashModal
+          transactions={bulkTargets}
+          accountById={accountById}
+          onClose={() => setBulkDeleteCashOpen(false)}
+          onDeleted={() => {
+            setSelectedTxnIds(new Set());
+            onSuggestionApplied();
+          }}
+        />
+      )}
+      {bulkAcceptOpen && (
+        <BulkAcceptSuggestionsModal
+          transactions={bulkTargets}
+          suggestions={suggestions}
+          agentMinConfidence={agentMinConfidence}
+          onClose={() => setBulkAcceptOpen(false)}
+          onApplied={onSuggestionApplied}
+        />
+      )}
+      {bulkSuggestOpen && (
+        <BulkSuggestCategoriesModal
+          transactions={bulkTargets}
+          suggestions={suggestions}
+          onClose={() => setBulkSuggestOpen(false)}
+          onProgress={() => setSuggestionsVersion((v) => v + 1)}
+        />
+      )}
+      {bulkDocsOpen && (
+        <BulkAnalyzeDocumentsModal
+          transactions={bulkTargets}
+          onClose={() => setBulkDocsOpen(false)}
+          onDone={() => setDocLinksVersion((v) => v + 1)}
+        />
+      )}
+      {bulkOpen && (
+        <BulkCategorizeModal
+          transactions={bulkTargets}
+          categoriesByTxn={categoriesByTxn}
+          accountById={accountById}
+          onClose={() => setBulkOpen(false)}
+          onDone={() => {
+            setBulkOpen(false);
+            setSelectedTxnIds(new Set());
+            setLastSelectedId(null);
+            setCategoriesVersion((v) => v + 1);
+          }}
+        />
+      )}
+    </section>
+  );
+}
+
+// Modal that turns an outgoing bank transaction into a paired cash credit:
+// the user picks which cash account receives the funds, confirms (and
+// optionally adjusts) the amount, and the backend creates the new cash
+// transaction plus the link in a single round-trip. When the source and
+// cash-account currencies differ, the amount is prefilled via the
+// `convert_amount` Tauri command using the rate at the source's date — but
+// the user remains free to override the value.
+function WithdrawToCashModal({
+  source,
+  sourceAccount,
+  cashAccounts,
+  localizedError,
+  onCancel,
+  onCreated,
+}: {
+  source: Transaction;
+  sourceAccount: Account;
+  cashAccounts: Account[];
+  localizedError: (code: string) => string;
+  onCancel: () => void;
+  onCreated: (result: { newTransaction: Transaction; link: TxnLink }) => void;
+}) {
+  const t = useT();
+  const [cashAccountId, setCashAccountId] = useState<number | null>(
+    cashAccounts[0]?.id ?? null,
+  );
+  const [amount, setAmount] = useState("");
+  const [rateLoading, setRateLoading] = useState(false);
+  const [rateUnavailable, setRateUnavailable] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const selectedCashAccount = useMemo(
+    () => cashAccounts.find((a) => a.id === cashAccountId) ?? null,
+    [cashAccounts, cashAccountId],
+  );
+
+  // Prefill / refresh the amount whenever the selected cash account changes
+  // (and on first open). Same-currency case skips the network round-trip
+  // and just copies the source debit. Cross-currency falls back to the
+  // backend FX converter; on missing rate we leave the field empty and
+  // surface a hint so the user can type the value by hand.
+  useEffect(() => {
+    if (!selectedCashAccount) return;
+    let cancelled = false;
+    setErrorMessage(null);
+    setRateUnavailable(false);
+
+    if (selectedCashAccount.currency === sourceAccount.currency) {
+      setAmount(source.debit);
+      setRateLoading(false);
+      return;
+    }
+
+    setRateLoading(true);
+    const date = source.occurredAtUtc.slice(0, 10);
+    convertAmount({
+      amount: source.debit,
+      fromCurrency: sourceAccount.currency,
+      toCurrency: selectedCashAccount.currency,
+      dateYyyyMmDd: date,
+    })
+      .then((converted) => {
+        if (cancelled) return;
+        setAmount(converted);
+        setRateLoading(false);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        // Stable code from the backend → leave the field empty and show a
+        // localised hint. Any other error we surface as a generic message.
+        const code = String(e);
+        if (code.includes("withdrawal.rate_unavailable")) {
+          setRateUnavailable(true);
+          setAmount("");
+        } else {
+          setErrorMessage(localizedError(code));
+          setAmount("");
+        }
+        setRateLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    selectedCashAccount,
+    sourceAccount.currency,
+    source.debit,
+    source.occurredAtUtc,
+    localizedError,
+  ]);
+
+  // Local Escape handler — the parent's pending-link cancel effect is paused
+  // while we're open, so we own dismissal here. Submit stays on the form
+  // button only.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        onCancel();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [onCancel]);
+
+  const amountMinor = parseMoneyToMinor(amount);
+  const canSubmit =
+    cashAccountId !== null &&
+    !rateLoading &&
+    !submitting &&
+    amountMinor !== null &&
+    amountMinor > 0;
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!canSubmit || cashAccountId === null) return;
+    setSubmitting(true);
+    setErrorMessage(null);
+    try {
+      const result = await createCashWithdrawal({
+        sourceTxnId: source.id,
+        cashAccountId,
+        amount,
+      });
+      onCreated(result);
+    } catch (e) {
+      setErrorMessage(localizedError(String(e)));
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div
+      className="txn-link-confirm-overlay withdraw-modal-backdrop"
+      onClick={onCancel}
+    >
+      <form
+        className="txn-link-confirm withdraw-modal"
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={handleSubmit}
+      >
+        <h3>{t("transactions.withdrawModalTitle")}</h3>
+        <label className="withdraw-modal-field">
+          <span>{t("transactions.withdrawAccountLabel")}</span>
+          <select
+            value={cashAccountId ?? ""}
+            disabled={cashAccounts.length === 0 || submitting}
+            onChange={(e) => setCashAccountId(Number(e.target.value))}
+          >
+            {cashAccounts.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name || a.bank} · {a.currency}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="withdraw-modal-field">
+          <span>
+            {t("transactions.withdrawAmountLabel")}
+            {selectedCashAccount ? ` · ${selectedCashAccount.currency}` : ""}
+          </span>
+          <input
+            type="text"
+            inputMode="decimal"
+            value={amount}
+            disabled={submitting}
+            placeholder={rateLoading ? t("transactions.withdrawRateLoading") : ""}
+            onChange={(e) => setAmount(e.target.value)}
+            autoFocus
+          />
+          {rateUnavailable && (
+            <span className="withdraw-modal-hint">
+              {t("transactions.withdrawRateUnavailable")}
+            </span>
+          )}
+        </label>
+        {errorMessage && (
+          <p className="withdraw-modal-error">{errorMessage}</p>
+        )}
+        <div className="txn-link-confirm-actions">
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={onCancel}
+            disabled={submitting}
+          >
+            {t("common.cancel")}
+          </button>
+          <button
+            type="submit"
+            className="btn-primary"
+            disabled={!canSubmit}
+          >
+            {t("transactions.withdrawSubmit")}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// Plain-text table cell with ellipsis truncation and a hover tooltip that
+// reveals the full text. Only triggers when the rendered span is wider
+// than its visible area — short content doesn't fire a redundant popup.
+// Used for the Peer and Bank Description columns where the value is
+// opaque text that can be long and wraps awkwardly.
+function TruncatedCell({
+  className,
+  text,
+  onShowTooltip,
+  onHideTooltip,
+}: {
+  className: string;
+  text: string;
+  onShowTooltip: (text: string, rect: DOMRect) => void;
+  onHideTooltip: () => void;
+}) {
+  return (
+    <td
+      className={className}
+      onMouseEnter={(e) => {
+        const el = e.currentTarget;
+        if (!text.trim()) return;
+        if (el.scrollWidth <= el.clientWidth) return;
+        onShowTooltip(text, el.getBoundingClientRect());
+      }}
+      onMouseLeave={onHideTooltip}
+    >
+      {text}
+    </td>
+  );
+}
+
+// Chain link glyph. Used everywhere the cell wants a 🔗 symbol — rendered
+// as an SVG so CSS `color` actually changes its hue (the emoji 🔗 is
+// rendered in fixed multi-colour by the OS and ignores text color).
+function ChainIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5" />
+      <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5" />
+    </svg>
+  );
+}
+
+// "Can't link" cross — used during pending mode for rows that are not
+// valid partners. Bigger, bolder strokes than ChainIcon so the rejection
+// reads instantly even at thumbnail size.
+function CrossIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <line x1="5" y1="5" x2="19" y2="19" />
+      <line x1="19" y1="5" x2="5" y2="19" />
+    </svg>
+  );
+}
+
+/// Format a signed minor amount for the Δ column. Positive values get an
+/// explicit "+" prefix so a quick visual scan distinguishes gains from the
+/// losses that share the row with the Debit column. Zero is rendered as plain
+/// "0.00" — no sign, no plus.
+function formatSignedDeltaMinor(minor: number): string {
+  if (minor === 0) return "0.00";
+  const sign = minor > 0 ? "+" : "-";
+  const abs = Math.abs(minor);
+  const major = Math.trunc(abs / 100);
+  const cents = abs % 100;
+  const grouped = String(major).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return `${sign}${grouped}.${cents.toString().padStart(2, "0")}`;
+}
+
+/// Signed percentage of the dictionary-fair amount, rounded to two decimals.
+/// Returns null when the percentage can't be computed — defensively handles
+/// `expectedMinor === 0`, which would only happen on a degenerate link with
+/// a near-zero partner amount and isn't worth surfacing as a number.
+function formatSignedPercent(
+  deltaMinor: number,
+  expectedMinor: number | null,
+): string | null {
+  if (expectedMinor === null || expectedMinor === 0) return null;
+  const pct = (deltaMinor / expectedMinor) * 100;
+  // Round to two decimals so the displayed value matches the comparison
+  // we use for the zero case (avoid "+0.00%" when the underlying float is
+  // 0.0001 — we want the neutral colour and no sign in that case).
+  const rounded = Math.round(pct * 100) / 100;
+  if (rounded === 0) return "0.00%";
+  const sign = rounded > 0 ? "+" : "-";
+  return `${sign}${Math.abs(rounded).toFixed(2)}%`;
+}
+
+/// Renders one Δ cell for a linked transaction. Encapsulates the two display
+/// modes and the cross-mode tooltip composition so the table-row JSX stays
+/// focused on layout. The caller decides whether to render this at all (in
+/// "percent" mode the debit side of every pair is just an empty cell).
+function DeltaCell({
+  delta,
+  mode,
+  t,
+  onShowTooltip,
+  onHideTooltip,
+}: {
+  delta: TransferDelta;
+  mode: DeltaMode;
+  t: (key: string, vars?: Record<string, string | number>) => string;
+  onShowTooltip: (text: string, rect: DOMRect) => void;
+  onHideTooltip: () => void;
+}) {
+  // Missing rate — same red bold dash regardless of mode. Tooltip explains.
+  if (delta.deltaMinor === null) {
+    const text = t("transactions.deltaNoRateTooltip");
+    return (
+      <span
+        className="txn-delta is-missing"
+        onMouseEnter={(e) =>
+          onShowTooltip(text, e.currentTarget.getBoundingClientRect())
+        }
+        onMouseLeave={onHideTooltip}
+      >
+        —
+      </span>
+    );
+  }
+
+  const polarityCls =
+    delta.deltaMinor > 0
+      ? "is-pos"
+      : delta.deltaMinor < 0
+      ? "is-neg"
+      : "is-zero";
+
+  // Pre-compute both representations: the active mode goes into the cell,
+  // the other one rides along in the tooltip so the user can see what the
+  // alternative mode would show without flipping the toggle.
+  const absText = formatSignedDeltaMinor(delta.deltaMinor);
+  const pctText = formatSignedPercent(delta.deltaMinor, delta.expectedMinor);
+
+  const primary = mode === "percent" ? pctText : absText;
+  const alternate =
+    mode === "percent" ? `${absText} ${delta.currency}` : pctText;
+
+  const lines: string[] = [];
+  if (delta.rateDate !== null) {
+    lines.push(t("transactions.deltaRateDateTooltip", { date: delta.rateDate }));
+  }
+  if (alternate !== null && alternate !== "") {
+    lines.push(alternate);
+  }
+  const tooltip = lines.join("\n");
+
+  return (
+    <span
+      className={`txn-delta ${polarityCls}`}
+      onMouseEnter={(e) =>
+        onShowTooltip(tooltip, e.currentTarget.getBoundingClientRect())
+      }
+      onMouseLeave={onHideTooltip}
+    >
+      {primary ?? ""}
+    </span>
+  );
+}
+
+function buildAccountTooltip(
+  acc: Account,
+  t: (key: string, vars?: Record<string, string | number>) => string,
+): string {
+  const lines: string[] = [];
+  if (acc.name) lines.push(`${t("accounts.fieldName")}: ${acc.name}`);
+  if (acc.bank) lines.push(`${t("accounts.fieldBank")}: ${acc.bank}`);
+  lines.push(`${t("accounts.fieldCurrency")}: ${acc.currency}`);
+  if (acc.accountNumber)
+    lines.push(`${t("accounts.fieldAccountNumber")}: ${acc.accountNumber}`);
+  if (acc.ownerName)
+    lines.push(`${t("accounts.fieldOwner")}: ${acc.ownerName}`);
+  return lines.join("\n");
+}
+
+function formatInstantLocal(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  return `${y}-${m}-${day} ${h}:${mi}`;
+}
+
+function formatInstantUtc(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return `${d.toISOString().slice(0, 19).replace("T", " ")} UTC`;
+}
+
+function formatDayOfWeekShort(iso: string, locale: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const dow = new Intl.DateTimeFormat(locale, {
+    weekday: "short",
+  }).format(d);
+  return dow.slice(0, 2).toUpperCase();
+}
+
+function sameLocalMonth(aIso: string, bIso: string): boolean {
+  const a = new Date(aIso);
+  const b = new Date(bIso);
+  return (
+    a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth()
+  );
+}
+
+function formatMonthLabel(iso: string, locale: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const month = new Intl.DateTimeFormat(locale, {
+    month: "long",
+  }).format(d);
+  const cap = month.charAt(0).toUpperCase() + month.slice(1);
+  return `${cap} ${d.getFullYear()}`;
+}

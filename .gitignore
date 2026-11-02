@@ -1,0 +1,44 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+# Stand-badged favicon, generated from src/assets/app-icon.svg (scripts/badge-icons.mjs)
+public/favicon.svg
+dist-ssr
+*.local
+
+# OCR models for local dev runs (scripts/fetch-ocr-models.sh)
+/ocr-models/
+
+# Local app data (FINANCES_DATA_DIR)
+/data/
+.direnv/
+
+# Scratch/throwaway artifacts (screenshots, debug dumps, local smoke-test data)
+.tmp/
+
+# Real bank-statement samples — never commit (PII). Existing generic test
+# samples in samples/*.csv stay tracked; only per-bank subfolders are ignored.
+/samples/*/
+/samples/*.json
+
+# Machine-local agent notes (private hosts)
+CLAUDE.local.md
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

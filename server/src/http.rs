@@ -1,0 +1,516 @@
+//! HTTP layer: axum server exposing every command as `POST /api/rpc/<cmd>`
+//! (JSON args in, JSON result out — a 1:1 replacement for Tauri `invoke`),
+//! plus SSE events, backup download/upload and the built frontend as static
+//! files.
+
+use std::convert::Infallible;
+
+use axum::extract::{DefaultBodyLimit, Path as UrlPath, Query, Request, State};
+use axum::http::{header, HeaderMap, StatusCode};
+use axum::middleware::{self, Next};
+use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use serde_json::Value;
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::{Stream, StreamExt};
+use tower_http::services::{ServeDir, ServeFile};
+
+use crate::host::AppHandle;
+
+pub async fn serve(app: AppHandle) {
+    let bind = std::env::var(crate::ENV_BIND).unwrap_or_else(|_| crate::DEFAULT_BIND.to_string());
+    let static_dir =
+        std::env::var(crate::ENV_STATIC_DIR).unwrap_or_else(|_| "./static".to_string());
+    let index = std::path::Path::new(&static_dir).join("index.html");
+
+    let mut router = Router::new()
+        .route("/api/rpc/{cmd}", post(rpc))
+        .route("/api/events", get(events))
+        .route("/api/backup", get(backup))
+        .route("/api/restore", post(restore))
+        .route("/api/attachments/upload/{upload_id}", post(upload_attachment))
+        .route("/api/attachments/{id}/file", get(attachment_file))
+        .route("/api/health", get(|| async { "ok" }))
+        .fallback_service(ServeDir::new(&static_dir).fallback(ServeFile::new(index)))
+        // No cap on request bodies: a single-user server, and a backup ZIP
+        // grows with every stored document (axum's default is only 2 MB).
+        .layer(DefaultBodyLimit::disable())
+        .with_state(app);
+    if let Some(token) = std::env::var(crate::ENV_ACCESS_TOKEN).ok().filter(|t| !t.is_empty()) {
+        let token = std::sync::Arc::new(token);
+        router = router.layer(middleware::from_fn(move |req: Request, next: Next| {
+            let token = token.clone();
+            async move { require_token(&token, req, next).await }
+        }));
+    }
+
+    let listener = tokio::net::TcpListener::bind(&bind)
+        .await
+        .unwrap_or_else(|e| panic!("failed to bind {bind}: {e}"));
+    eprintln!("a2b-accounting-server listening on http://{bind}");
+    axum::serve(listener, router).await.expect("server error");
+}
+
+const ACCESS_COOKIE: &str = "a2b_access";
+
+/// Desktop mode only: the embedded server listens on a fixed loopback port,
+/// reachable by any local process and by any web page the user opens. The
+/// shell opens its window at `/?access_token=<t>`; that request is answered
+/// with an HttpOnly SameSite=Strict cookie and a redirect, and every other
+/// request without the cookie is refused.
+async fn require_token(token: &str, req: Request, next: Next) -> Response {
+    if let Some(given) = req.uri().query().and_then(query_token) {
+        if given != token {
+            return (StatusCode::FORBIDDEN, "forbidden").into_response();
+        }
+        return (
+            StatusCode::SEE_OTHER,
+            [
+                (header::LOCATION, req.uri().path().to_string()),
+                (
+                    header::SET_COOKIE,
+                    format!("{ACCESS_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict"),
+                ),
+            ],
+        )
+            .into_response();
+    }
+    if cookie_has_token(req.headers(), token) {
+        next.run(req).await
+    } else {
+        (StatusCode::FORBIDDEN, "forbidden").into_response()
+    }
+}
+
+fn query_token(query: &str) -> Option<&str> {
+    query.split('&').find_map(|pair| pair.strip_prefix("access_token="))
+}
+
+fn cookie_has_token(headers: &HeaderMap, token: &str) -> bool {
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(';'))
+        .filter_map(|pair| pair.trim().split_once('='))
+        .any(|(name, value)| name == ACCESS_COOKIE && value == token)
+}
+
+fn ok<T: serde::Serialize>(value: T) -> Response {
+    Json(value).into_response()
+}
+
+fn err(message: String) -> Response {
+    // Command errors are strings (often stable codes the frontend localises);
+    // deliver them as plain text so the client can rethrow them verbatim.
+    (StatusCode::BAD_REQUEST, message).into_response()
+}
+
+fn respond<T: serde::Serialize>(result: Result<T, String>) -> Response {
+    match result {
+        Ok(value) => ok(value),
+        Err(message) => err(message),
+    }
+}
+
+/// SSE stream of backend events. Each message is a JSON object
+/// `{event, payload}`; the frontend's `listen()` filters by `event`.
+async fn events(
+    State(app): State<AppHandle>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let rx = app.0.events.subscribe();
+    let stream = BroadcastStream::new(rx).filter_map(|msg| match msg {
+        Ok(value) => Some(Ok(Event::default().data(value.to_string()))),
+        // Lagged receiver — the missed events are gone; keep streaming.
+        Err(_) => None,
+    });
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+/// Stream the current DB as a single-entry ZIP download.
+async fn backup(State(app): State<AppHandle>) -> Response {
+    match crate::backup::backup_zip_bytes(app.db()) {
+        Ok(bytes) => {
+            let filename = format!(
+                "finances-backup-{}.zip",
+                chrono::Utc::now().format("%Y-%m-%d")
+            );
+            (
+                [
+                    (header::CONTENT_TYPE, "application/zip".to_string()),
+                    (
+                        header::CONTENT_DISPOSITION,
+                        format!("attachment; filename=\"{filename}\""),
+                    ),
+                ],
+                bytes,
+            )
+                .into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    }
+}
+
+/// Accept an uploaded backup ZIP (raw request body), validate and install it,
+/// then reopen the DB in-process. The frontend reloads the page afterwards.
+async fn restore(State(app): State<AppHandle>, body: axum::body::Bytes) -> Response {
+    match crate::backup::restore_from_zip_bytes(&app, &body) {
+        Ok(()) => ok(Value::Null),
+        Err(e) => err(e),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct UploadQuery {
+    name: String,
+}
+
+/// Ingest one uploaded file (raw body; a ZIP is unpacked) into an upload
+/// opened via the `begin_attachment_upload` command. Hashing, unzipping and
+/// file writes run on a blocking thread.
+async fn upload_attachment(
+    State(app): State<AppHandle>,
+    UrlPath(upload_id): UrlPath<i64>,
+    Query(q): Query<UploadQuery>,
+    body: axum::body::Bytes,
+) -> Response {
+    let data_dir = crate::data_dir_context().data_dir.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::attachments::ingest_upload(app.db(), &data_dir, upload_id, &q.name, &body)
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("attachments.ingest_panicked: {e}")));
+    respond(result)
+}
+
+/// Serve a stored document. Content never changes for a given id (files are
+/// content-addressed), so the browser may cache it for good.
+async fn attachment_file(State(app): State<AppHandle>, UrlPath(id): UrlPath<i64>) -> Response {
+    let data_dir = &crate::data_dir_context().data_dir;
+    let (mime, path) = match crate::attachments::attachment_file(app.db(), data_dir, id) {
+        Ok(found) => found,
+        Err(e) => return (StatusCode::NOT_FOUND, e).into_response(),
+    };
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => (
+            [
+                (header::CONTENT_TYPE, mime),
+                (header::CACHE_CONTROL, "private, max-age=31536000, immutable".to_string()),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, format!("attachments.file_missing: {e}")).into_response(),
+    }
+}
+
+async fn rpc(
+    State(app): State<AppHandle>,
+    UrlPath(cmd): UrlPath<String>,
+    body: Option<Json<Value>>,
+) -> Response {
+    let args = body.map(|Json(v)| v).unwrap_or_else(|| Value::Object(Default::default()));
+
+    /// One dispatch arm: deserialize the camelCase JSON args into the
+    /// command's parameters and call it. Variants by first parameter(s):
+    /// `state` = `(State<DbState>, ...)`, `app_state` = `(AppHandle,
+    /// State<DbState>, ...)`, `app_async` = `async (AppHandle, ...)`,
+    /// `plain` = no shared state at all.
+    macro_rules! run {
+        (state $f:path) => {
+            respond($f(app.db()))
+        };
+        (state $f:path, [ $($arg:ident : $ty:ty),+ ]) => {{
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Args { $( $arg: $ty, )+ }
+            match serde_json::from_value::<Args>(args) {
+                Ok(a) => respond($f(app.db(), $( a.$arg ),+)),
+                Err(e) => err(format!("invalid arguments for {cmd}: {e}")),
+            }
+        }};
+        (app_state $f:path) => {
+            respond($f(app.clone(), app.db()))
+        };
+        (app_state $f:path, [ $($arg:ident : $ty:ty),+ ]) => {{
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Args { $( $arg: $ty, )+ }
+            match serde_json::from_value::<Args>(args) {
+                Ok(a) => respond($f(app.clone(), app.db(), $( a.$arg ),+)),
+                Err(e) => err(format!("invalid arguments for {cmd}: {e}")),
+            }
+        }};
+        (app_async $f:path) => {
+            respond($f(app.clone()).await)
+        };
+        (app_async $f:path, [ $($arg:ident : $ty:ty),+ ]) => {{
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Args { $( $arg: $ty, )+ }
+            match serde_json::from_value::<Args>(args) {
+                Ok(a) => respond($f(app.clone(), $( a.$arg ),+).await),
+                Err(e) => err(format!("invalid arguments for {cmd}: {e}")),
+            }
+        }};
+        (plain $v:expr) => {
+            respond(Ok::<_, String>($v))
+        };
+    }
+
+    match cmd.as_str() {
+        "data_dir" => run!(plain crate::data_dir()),
+        "data_dir_info" => run!(plain crate::backup::data_dir_info()),
+
+        "create_account" => run!(app_state crate::accounts::create_account, [
+            name: String, kind: Option<String>, bank: String, currency: String,
+            account_number: Option<String>, owner_name: Option<String>]),
+        "list_accounts" => run!(state crate::accounts::list_accounts),
+        "update_account" => run!(state crate::accounts::update_account, [
+            id: i64, name: String, kind: Option<String>, bank: String, currency: String,
+            account_number: Option<String>, owner_name: Option<String>]),
+        "delete_account" => run!(state crate::accounts::delete_account, [id: i64]),
+        "reorder_accounts" => run!(state crate::accounts::reorder_accounts, [ids: Vec<i64>]),
+
+        "account_monthly_status" => run!(state crate::account_status::account_monthly_status, [
+            months: Vec<crate::account_status::MonthRange>]),
+        "account_monthly_summary_stats" => {
+            run!(state crate::account_status::account_monthly_summary_stats, [
+                months: Vec<crate::account_status::MonthRange>])
+        }
+
+        "create_category" => run!(state crate::categories::create_category, [
+            name: String, color: String, kind: String,
+            parent_id: Option<i64>, description: Option<String>, color_auto: Option<bool>]),
+        "list_categories" => run!(state crate::categories::list_categories),
+        "update_category" => run!(state crate::categories::update_category, [
+            id: i64, name: String, color: String,
+            description: Option<String>, parent_id: Option<i64>, color_auto: Option<bool>]),
+        "delete_category" => run!(state crate::categories::delete_category, [id: i64]),
+        "merge_category" => run!(state crate::categories::merge_category, [
+            source_id: i64, target_id: i64, dry_run: bool]),
+
+        "list_currencies" => run!(state crate::currencies::list_currencies),
+
+        "set_transaction_categories" => {
+            run!(state crate::category_agent::set_transaction_categories_by_user, [
+                transaction_id: i64, items: Vec<crate::transaction_categories::CategoryItem>])
+        }
+        "list_transactions_categories" => {
+            run!(state crate::transaction_categories::list_transactions_categories, [
+                account_ids: Option<Vec<i64>>])
+        }
+
+        "link_transactions" => run!(state crate::transaction_links::link_transactions, [
+            a_id: i64, b_id: i64]),
+        "unlink_transaction" => run!(state crate::transaction_links::unlink_transaction, [
+            transaction_id: i64]),
+        "list_transaction_links" => run!(state crate::transaction_links::list_transaction_links, [
+            account_ids: Option<Vec<i64>>]),
+
+        "list_transfer_deltas" => run!(state crate::transfer_deltas::list_transfer_deltas),
+
+        "import_transactions" => {
+            let response = run!(state crate::transactions::import_transactions, [
+                account_id: i64, source_filename: Option<String>,
+                default_timezone_offset: String, rows: Vec<crate::transactions::TxnImportRow>]);
+            // New transactions may fit documents waiting for a link.
+            crate::recognition_queue::wake();
+            response
+        }
+        "list_transactions" => run!(state crate::transactions::list_transactions, [
+            account_ids: Option<Vec<i64>>]),
+        "first_transaction_date" => run!(state crate::transactions::first_transaction_date, [
+            account_ids: Option<Vec<i64>>]),
+        "latest_transactions" => run!(state crate::transactions::latest_transactions),
+        "list_import_batches" => run!(state crate::transactions::list_import_batches, [
+            account_id: i64]),
+        "delete_import_batch" => run!(state crate::transactions::delete_import_batch, [
+            batch_id: i64]),
+        "validate_balance_chain" => run!(state crate::transactions::validate_balance_chain, [
+            account_id: i64]),
+        "validate_import_preview" => run!(state crate::transactions::validate_import_preview, [
+            account_id: i64, default_timezone_offset: String,
+            rows: Vec<crate::transactions::TxnImportRow>]),
+        "update_transaction_comment" => {
+            run!(state crate::transactions::update_transaction_comment, [
+                id: i64, comment: Option<String>])
+        }
+        "bulk_update_transaction_fields" => {
+            run!(state crate::transactions::bulk_update_transaction_fields, [
+                account_id: i64, default_timezone_offset: String,
+                rows: Vec<crate::transactions::TxnImportRow>])
+        }
+        "get_transaction" => run!(state crate::transactions::get_transaction, [id: i64]),
+        "update_transaction_fields" => run!(state crate::transactions::update_transaction_fields, [
+            id: i64, peer: Option<String>, bank_description: Option<String>,
+            comment: Option<String>]),
+
+        "create_cash_transaction" => run!(state crate::cash_transactions::create_cash_transaction, [
+            account_id: i64, occurred_at_utc: String,
+            direction: crate::cash_transactions::CashDirection, amount: String,
+            peer: Option<String>, comment: Option<String>]),
+        "update_cash_transaction" => run!(state crate::cash_transactions::update_cash_transaction, [
+            id: i64, occurred_at_utc: String,
+            direction: crate::cash_transactions::CashDirection, amount: String,
+            peer: Option<String>, comment: Option<String>]),
+        "delete_cash_transaction" => run!(state crate::cash_transactions::delete_cash_transaction, [
+            id: i64]),
+        "delete_cash_transactions" => run!(state crate::cash_transactions::delete_cash_transactions, [
+            transaction_ids: Vec<i64>]),
+        "draft_cash_entries" => run!(app_async crate::cash_dictation::draft_cash_entries, [
+            account_id: i64, text: String, today: String, tz_offset_minutes: i32]),
+        "create_cash_entries" => run!(state crate::cash_dictation::create_cash_entries, [
+            account_id: i64, entries: Vec<crate::cash_dictation::CashEntryInput>,
+            log_id: Option<i64>, proposed: usize, edited: usize]),
+        "create_cash_withdrawal" => run!(state crate::cash_withdrawals::create_cash_withdrawal, [
+            source_txn_id: i64, cash_account_id: i64, amount: String]),
+
+        "begin_attachment_upload" => run!(state crate::attachments::begin_attachment_upload, [
+            source_name: Option<String>]),
+        "finish_attachment_upload" => run!(state crate::attachments::finish_attachment_upload, [
+            upload_id: i64]),
+        "recognition_status" => run!(state crate::recognition_queue::recognition_status),
+        "set_recognition_paused" => {
+            run!(app_state crate::recognition_queue::set_recognition_paused, [paused: bool])
+        }
+        "list_attachment_uploads" => run!(state crate::attachments::list_attachment_uploads),
+        "list_attachments" => run!(state crate::attachments::list_attachments),
+        "delete_attachment" => run!(state crate::attachments::delete_attachment, [id: i64]),
+        "delete_attachments" => run!(state crate::attachments::delete_attachments, [ids: Vec<i64>]),
+        "link_attachment" => run!(state crate::attachments::link_attachment, [
+            attachment_id: i64, transaction_id: i64]),
+        "unlink_attachment" => run!(state crate::attachments::unlink_attachment, [
+            attachment_id: i64]),
+        "list_transaction_attachments" => {
+            run!(state crate::attachments::list_transaction_attachments, [transaction_id: i64])
+        }
+        "list_attachment_links" => run!(state crate::attachments::list_attachment_links),
+        "analyze_transaction_documents" => {
+            run!(app_async crate::document_analysis::analyze_transaction_documents, [
+                transaction_id: i64])
+        }
+        "recognise_document" => run!(app_async crate::document_analysis::recognise_document, [
+            attachment_id: i64]),
+        "recognition_test_connection" => {
+            run!(app_async crate::document_analysis::recognition_test_connection)
+        }
+        "list_attachment_candidates" => {
+            run!(state crate::attachments::list_attachment_candidates, [
+                transaction_id: i64, window_minutes: i64])
+        }
+
+        "list_life_contexts" => run!(state crate::life_contexts::list_life_contexts),
+        "create_life_context" => run!(state crate::life_contexts::create_life_context, [
+            title: String, starts_on: String, ends_on: String, color: String,
+            note: Option<String>]),
+        "update_life_context" => run!(state crate::life_contexts::update_life_context, [
+            id: i64, title: String, starts_on: String, ends_on: String, color: String,
+            note: Option<String>]),
+        "delete_life_context" => run!(state crate::life_contexts::delete_life_context, [id: i64]),
+
+        "get_setting" => run!(state crate::settings::get_setting, [key: String]),
+        "set_setting" => run!(state crate::settings::set_setting, [key: String, value: String]),
+
+        "list_ai_connections" => run!(state crate::ai::list_ai_connections),
+        "save_ai_connection" => run!(state crate::ai::save_ai_connection, [
+            connection: crate::ai::AiConnection]),
+        "delete_ai_connection" => run!(state crate::ai::delete_ai_connection, [id: i64]),
+        "ai_test_connection" => run!(app_async crate::ai::ai_test_connection, [id: i64]),
+
+        "get_agent_settings" => run!(state crate::category_agent::get_agent_settings),
+        "save_agent_settings" => run!(state crate::category_agent::save_agent_settings, [
+            connection_id: Option<i64>, instructions: String, examples_per_category: usize,
+            auto_examples: bool, min_confidence: i64]),
+        "suggest_category" => run!(app_async crate::category_agent::suggest_category, [
+            transaction_id: i64, redo: bool, include_dismissed: bool]),
+        "set_category_examples" => run!(state crate::category_agent::set_category_examples, [
+            transaction_ids: Vec<i64>, example: bool]),
+        "list_category_examples" => run!(state crate::category_agent::list_category_examples),
+        "category_examples_report" => {
+            run!(state crate::category_agent::category_examples_report)
+        }
+        "preview_category_prompt" => run!(state crate::category_agent::preview_category_prompt, [
+            transaction_id: i64]),
+        "agent_token_usage" => run!(state crate::category_agent::agent_token_usage),
+        "export_agent_log" => run!(state crate::category_agent::export_agent_log),
+
+        "detect_cash_withdrawals" => run!(state crate::suggestions::detect_cash_withdrawals, [
+            transaction_ids: Vec<i64>, redo: bool, include_dismissed: bool]),
+        "detect_transfers" => run!(state crate::suggestions::detect_transfers, [
+            transaction_ids: Vec<i64>, redo: bool, include_dismissed: bool]),
+        "dismissed_suggestion_counts" => run!(state crate::suggestions::dismissed_suggestion_counts, [
+            transaction_ids: Vec<i64>]),
+        "list_transaction_suggestions" => {
+            run!(state crate::suggestions::list_transaction_suggestions)
+        }
+        "apply_suggestion" => run!(state crate::suggestions::apply_suggestion, [id: i64]),
+        "dismiss_suggestion" => run!(state crate::suggestions::dismiss_suggestion, [id: i64]),
+        "export_reference_set" => run!(state crate::suggestions::export_reference_set, [
+            transaction_ids: Vec<i64>]),
+
+        "list_exchange_rates" => run!(state crate::exchange_rates::list_exchange_rates),
+        "upsert_exchange_rate" => run!(state crate::exchange_rates::upsert_exchange_rate, [
+            currency: String, rate_date: String, rate_to_base: String]),
+        "delete_exchange_rate" => run!(state crate::exchange_rates::delete_exchange_rate, [
+            id: i64]),
+        "download_rates_for_currency" => {
+            run!(app_async crate::exchange_rates::download_rates_for_currency, [currency: String])
+        }
+        "list_currency_rate_summaries" => {
+            run!(state crate::exchange_rates::list_currency_rate_summaries)
+        }
+        "list_rate_entries_for_currency" => {
+            run!(state crate::exchange_rates::list_rate_entries_for_currency, [currency: String])
+        }
+        "convert_amount" => run!(state crate::exchange_rates::convert_amount, [
+            amount: String, from_currency: String, to_currency: String,
+            date_yyyy_mm_dd: String]),
+
+        "list_report_views" => run!(state crate::report_views::list_report_views),
+        "create_report_view" => run!(state crate::report_views::create_report_view, [
+            name: String, config: String]),
+        "update_report_view" => run!(state crate::report_views::update_report_view, [
+            id: i64, name: String, config: String]),
+        "delete_report_view" => run!(state crate::report_views::delete_report_view, [id: i64]),
+        "reorder_report_views" => run!(state crate::report_views::reorder_report_views, [
+            ids: Vec<i64>]),
+
+        "compute_report" => run!(state crate::reports::compute_report, [
+            request: crate::reports::ReportRequest]),
+        "report_cell_transactions" => run!(state crate::reports::report_cell_transactions, [
+            request: crate::reports::ReportRequest, target: crate::reports::CellTarget]),
+
+        "seed_demo_data" => run!(app_state crate::seed::seed_demo_data),
+        "clear_all_data" => run!(state crate::seed::clear_all_data),
+
+        _ => (StatusCode::NOT_FOUND, format!("unknown command: {cmd}")).into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn query_token_finds_the_parameter() {
+        assert_eq!(query_token("access_token=abc"), Some("abc"));
+        assert_eq!(query_token("x=1&access_token=abc"), Some("abc"));
+        assert_eq!(query_token("x=1"), None);
+    }
+
+    #[test]
+    fn cookie_must_match_name_and_value() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::COOKIE, "theme=dark; a2b_access=abc".parse().unwrap());
+        assert!(cookie_has_token(&headers, "abc"));
+        assert!(!cookie_has_token(&headers, "abd"));
+
+        let mut other = HeaderMap::new();
+        other.insert(header::COOKIE, "not_a2b_access=abc".parse().unwrap());
+        assert!(!cookie_has_token(&other, "abc"));
+        assert!(!cookie_has_token(&HeaderMap::new(), "abc"));
+    }
+}

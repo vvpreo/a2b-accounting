@@ -1,0 +1,818 @@
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
+
+import { useT } from "../i18n";
+import {
+  Category,
+  CategoryKind,
+  createCategory,
+  deleteCategory,
+  mergeCategory,
+  MergeCategoryResult,
+  listCategories,
+  updateCategory,
+} from "../lib/api";
+import { buildTree, CategoryNode } from "../lib/category-tree";
+import { AgentExamplesSection } from "./categories/AgentExamplesSection";
+import { useViewState } from "../lib/view-state";
+import {
+  ROOT_PALETTE,
+  autoChildColor,
+  deriveChildColor,
+  nextRootColor,
+  shadesOf,
+} from "../lib/colors";
+
+const MAX_VISIBLE_DEPTH = 6;
+
+export function CategoriesPage() {
+  const t = useT();
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [version, setVersion] = useState(0);
+
+  const [creating, setCreating] = useState<{
+    kind: CategoryKind;
+    parent: Category | null;
+  } | null>(null);
+  const [editing, setEditing] = useState<Category | null>(null);
+  const [tab, setTab] = useViewState<"tree" | "examples">("categories.tab", "tree");
+
+  useEffect(() => {
+    listCategories()
+      .then(setCategories)
+      .catch((e) => setError(String(e)));
+  }, [version]);
+
+  const refresh = () => setVersion((v) => v + 1);
+
+  const findById = (id: number): Category | null =>
+    categories.find((c) => c.id === id) ?? null;
+
+  const usedRootColors = (kind: CategoryKind): string[] =>
+    categories.filter((c) => c.kind === kind && c.parentId === null).map((c) => c.color);
+
+  return (
+    <section className="page">
+      {error && <div className="error">{error}</div>}
+
+      <div className="settings-tabs">
+        <button
+          type="button"
+          className={"settings-tab-button" + (tab === "tree" ? " active" : "")}
+          onClick={() => setTab("tree")}
+        >
+          {t("categories.tabs.tree")}
+        </button>
+        <button
+          type="button"
+          className={"settings-tab-button" + (tab === "examples" ? " active" : "")}
+          onClick={() => setTab("examples")}
+        >
+          {t("categories.tabs.examples")}
+        </button>
+      </div>
+
+      {tab === "examples" && <AgentExamplesSection categories={categories} />}
+
+      {tab === "tree" && (
+        <>
+          <CategorySection
+            kind="income"
+            title={t("categories.sectionIncome")}
+            nodes={buildTree(categories, "income")}
+            onCreateRoot={() => setCreating({ kind: "income", parent: null })}
+            onCreateChild={(parent) =>
+              setCreating({ kind: "income", parent })
+            }
+            onEdit={setEditing}
+          />
+
+          <CategorySection
+            kind="expense"
+            title={t("categories.sectionExpense")}
+            nodes={buildTree(categories, "expense")}
+            onCreateRoot={() => setCreating({ kind: "expense", parent: null })}
+            onCreateChild={(parent) =>
+              setCreating({ kind: "expense", parent })
+            }
+            onEdit={setEditing}
+          />
+        </>
+      )}
+
+      {creating && (
+        <CategoryFormModal
+          mode="create"
+          kind={creating.kind}
+          parent={creating.parent}
+          parentDepth={
+            creating.parent
+              ? depthOfCategory(creating.parent, findById)
+              : -1
+          }
+          defaultColor={
+            creating.parent
+              ? deriveChildColor(
+                  creating.parent.color,
+                  depthOfCategory(creating.parent, findById) + 1,
+                )
+              : nextRootColor(usedRootColors(creating.kind))
+          }
+          categories={categories}
+          onClose={() => setCreating(null)}
+          onSaved={() => {
+            setCreating(null);
+            refresh();
+          }}
+        />
+      )}
+
+      {editing && (
+        <CategoryFormModal
+          mode="edit"
+          category={editing}
+          kind={editing.kind}
+          parent={editing.parentId ? findById(editing.parentId) : null}
+          parentDepth={
+            editing.parentId
+              ? depthOfCategory(findById(editing.parentId)!, findById)
+              : -1
+          }
+          defaultColor={editing.color}
+          categories={categories}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            refresh();
+          }}
+          onDeleted={() => {
+            setEditing(null);
+            refresh();
+          }}
+        />
+      )}
+    </section>
+  );
+}
+
+function depthOfCategory(
+  category: Category,
+  findById: (id: number) => Category | null,
+): number {
+  let depth = 0;
+  let current: Category | null = category;
+  while (current && current.parentId !== null) {
+    const parent = findById(current.parentId);
+    if (!parent) break;
+    depth += 1;
+    current = parent;
+  }
+  return depth;
+}
+
+function CategorySection({
+  title,
+  nodes,
+  onCreateRoot,
+  onCreateChild,
+  onEdit,
+}: {
+  kind: CategoryKind;
+  title: string;
+  nodes: CategoryNode[];
+  onCreateRoot: () => void;
+  onCreateChild: (parent: Category) => void;
+  onEdit: (c: Category) => void;
+}) {
+  const t = useT();
+  return (
+    <div className="categories-section">
+      <header className="categories-section-header">
+        <h2>{title}</h2>
+        <button type="button" className="btn-primary" onClick={onCreateRoot}>
+          {t("categories.createRoot")}
+        </button>
+      </header>
+
+      {nodes.length === 0 ? (
+        <p className="hint">{t("categories.empty")}</p>
+      ) : (
+        <ul className="categories-tree">
+          {nodes.map((node) => (
+            <CategoryNodeRow
+              key={node.category.id}
+              node={node}
+              onCreateChild={onCreateChild}
+              onEdit={onEdit}
+            />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function CategoryNodeRow({
+  node,
+  onCreateChild,
+  onEdit,
+}: {
+  node: CategoryNode;
+  onCreateChild: (parent: Category) => void;
+  onEdit: (c: Category) => void;
+}) {
+  const t = useT();
+  const canAddChild = node.depth + 1 < MAX_VISIBLE_DEPTH;
+
+  return (
+    <li className="categories-node" data-depth={node.depth}>
+      <div className="categories-node-row">
+        <span
+          className="categories-swatch"
+          style={{ backgroundColor: node.category.color }}
+          aria-hidden="true"
+        />
+        <span className="categories-label">
+          <span className="categories-name">{node.category.name}</span>
+          {node.category.description && (
+            <span className="categories-description">
+              {node.category.description}
+            </span>
+          )}
+        </span>
+        <span className="categories-actions">
+          {canAddChild && (
+            <button
+              type="button"
+              className="categories-action-btn"
+              onClick={() => onCreateChild(node.category)}
+              aria-label={t("categories.createChild")}
+              title={t("categories.createChild")}
+            >
+              +
+            </button>
+          )}
+          <button
+            type="button"
+            className="categories-action-btn"
+            onClick={() => onEdit(node.category)}
+            aria-label={t("categories.edit")}
+            title={t("categories.edit")}
+          >
+            ✎
+          </button>
+        </span>
+      </div>
+
+      {node.children.length > 0 && (
+        <ul className="categories-tree categories-tree--nested">
+          {node.children.map((child) => (
+            <CategoryNodeRow
+              key={child.category.id}
+              node={child}
+              onCreateChild={onCreateChild}
+              onEdit={onEdit}
+            />
+          ))}
+        </ul>
+      )}
+    </li>
+  );
+}
+
+type ModalProps =
+  | {
+      mode: "create";
+      kind: CategoryKind;
+      parent: Category | null;
+      parentDepth: number;
+      defaultColor: string;
+      categories: Category[];
+      onClose: () => void;
+      onSaved: () => void;
+    }
+  | {
+      mode: "edit";
+      category: Category;
+      kind: CategoryKind;
+      parent: Category | null;
+      parentDepth: number;
+      defaultColor: string;
+      categories: Category[];
+      onClose: () => void;
+      onSaved: () => void;
+      onDeleted: () => void;
+    };
+
+function CategoryFormModal(props: ModalProps) {
+  const t = useT();
+  const isEdit = props.mode === "edit";
+
+  const [name, setName] = useState<string>(
+    isEdit ? props.category.name : "",
+  );
+  const [description, setDescription] = useState<string>(
+    isEdit ? (props.category.description ?? "") : "",
+  );
+  const [parentId, setParentId] = useState<number | null>(
+    isEdit ? props.category.parentId : (props.parent?.id ?? null),
+  );
+  const [color, setColor] = useState<string>(props.defaultColor);
+  const [colorTab, setColorTab] = useState<"palette" | "shades">(
+    props.parent ? "shades" : "palette",
+  );
+  // A subcategory's colour follows its parent unless set by hand; a root
+  // always has its own.
+  const [colorAuto, setColorAuto] = useState<boolean>(
+    isEdit ? (props.category.colorAuto ?? false) : props.parent !== null,
+  );
+  const colorParent =
+    parentId === null ? null : (props.categories.find((c) => c.id === parentId) ?? null);
+  // Preview of the automatic colour: the server derives it from the parent
+  // and the place among siblings in creation order.
+  const autoColor = useMemo(() => {
+    if (!colorParent) return null;
+    const selfId = isEdit ? props.category.id : Number.POSITIVE_INFINITY;
+    const index = props.categories.filter(
+      (c) => c.parentId === colorParent.id && c.id < selfId,
+    ).length;
+    return autoChildColor(colorParent.color, index);
+  }, [colorParent, props.categories, isEdit ? props.category.id : null]);
+  const useAuto = colorParent !== null && colorAuto;
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  // Merge into another category: the picked target and the dry-run counts.
+  const [merging, setMerging] = useState(false);
+  const [mergeTarget, setMergeTarget] = useState<number | null>(null);
+  const [mergePreview, setMergePreview] = useState<MergeCategoryResult | null>(null);
+  const [mergeBusy, setMergeBusy] = useState(false);
+
+  const childDepth = props.parent ? props.parentDepth + 1 : 0;
+  const shades = useMemo(
+    () => (colorParent ? shadesOf(colorParent.color, childDepth) : []),
+    [colorParent, childDepth],
+  );
+
+  // Eligible parents for the "Родитель" select (edit mode only). Rules:
+  //  - same kind as the category being edited;
+  //  - not the category itself and not one of its descendants (cycle);
+  //  - moving the subtree under this candidate must not push any descendant
+  //    beyond depth MAX_VISIBLE_DEPTH-1:
+  //    candidate.depth + 1 + subtreeHeight ≤ MAX_VISIBLE_DEPTH-1.
+  const eligibleParents = useMemo<Array<{ id: number; path: string }>>(() => {
+    if (!isEdit) return [];
+    const editingCat = props.category;
+    const byParent = new Map<number | null, Category[]>();
+    for (const c of props.categories) {
+      if (c.kind !== editingCat.kind) continue;
+      const key = c.parentId ?? null;
+      if (!byParent.has(key)) byParent.set(key, []);
+      byParent.get(key)!.push(c);
+    }
+
+    const descendants = new Set<number>([editingCat.id]);
+    const queue: number[] = [editingCat.id];
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      const kids = byParent.get(id) ?? [];
+      for (const k of kids) {
+        if (!descendants.has(k.id)) {
+          descendants.add(k.id);
+          queue.push(k.id);
+        }
+      }
+    }
+
+    function subtreeHeight(id: number): number {
+      const kids = byParent.get(id) ?? [];
+      if (kids.length === 0) return 0;
+      return 1 + Math.max(...kids.map((k) => subtreeHeight(k.id)));
+    }
+    const movingHeight = subtreeHeight(editingCat.id);
+
+    const out: Array<{ id: number; path: string; depth: number; sort: string }> = [];
+    const walk = (parent: number | null, depth: number, prefix: string) => {
+      const items = (byParent.get(parent) ?? [])
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name));
+      for (const c of items) {
+        const path = prefix ? `${prefix} → ${c.name}` : c.name;
+        if (
+          !descendants.has(c.id) &&
+          depth + 1 + movingHeight <= MAX_VISIBLE_DEPTH - 1
+        ) {
+          out.push({ id: c.id, path, depth, sort: path.toLowerCase() });
+        }
+        walk(c.id, depth + 1, path);
+      }
+    };
+    walk(null, 0, "");
+    return out
+      .sort((a, b) => a.sort.localeCompare(b.sort))
+      .map(({ id, path }) => ({ id, path }));
+  }, [isEdit, props.categories, isEdit ? props.category : null]);
+
+  // Merge targets: same kind, not the category itself or its descendants, not
+  // a system category. Listed by full path.
+  const mergeTargets = useMemo<Array<{ id: number; path: string }>>(() => {
+    if (!isEdit) return [];
+    const self = props.category;
+    const byId = new Map(props.categories.map((c) => [c.id, c]));
+    const pathOf = (c: Category): string[] => {
+      const names: string[] = [];
+      let cur: Category | undefined = c;
+      while (cur && names.length < 16) {
+        names.unshift(cur.name);
+        cur = cur.parentId === null ? undefined : byId.get(cur.parentId);
+      }
+      return names;
+    };
+    const insideSelf = (c: Category): boolean => {
+      let cur: Category | undefined = c;
+      for (let i = 0; cur && i < 16; i++) {
+        if (cur.id === self.id) return true;
+        cur = cur.parentId === null ? undefined : byId.get(cur.parentId);
+      }
+      return false;
+    };
+    return props.categories
+      .filter((c) => c.kind === self.kind && !c.systemKey && !insideSelf(c))
+      .map((c) => ({ id: c.id, path: pathOf(c).join(" → ") }))
+      .sort((a, b) => a.path.localeCompare(b.path));
+  }, [isEdit, props.categories, isEdit ? props.category : null]);
+
+  const mergeErrorKeys: Record<string, string> = {
+    "category.merge_too_deep": "categories.merge.errorTooDeep",
+    "category.merge_descendant": "categories.merge.errorDescendant",
+    "category.merge_kind": "categories.merge.errorKind",
+    "category.system": "categories.merge.errorSystem",
+  };
+  const mergeError = (e: unknown) => {
+    const message = String(e);
+    return mergeErrorKeys[message] ? t(mergeErrorKeys[message]) : message;
+  };
+
+  async function pickMergeTarget(targetId: number | null) {
+    if (!isEdit) return;
+    setMergeTarget(targetId);
+    setMergePreview(null);
+    setError(null);
+    if (targetId === null) return;
+    setMergeBusy(true);
+    try {
+      setMergePreview(
+        await mergeCategory({ sourceId: props.category.id, targetId, dryRun: true }),
+      );
+    } catch (e) {
+      setError(mergeError(e));
+    } finally {
+      setMergeBusy(false);
+    }
+  }
+
+  async function onConfirmMerge() {
+    if (!isEdit || mergeTarget === null) return;
+    setError(null);
+    setMergeBusy(true);
+    try {
+      await mergeCategory({ sourceId: props.category.id, targetId: mergeTarget, dryRun: false });
+      props.onDeleted();
+    } catch (e) {
+      setError(mergeError(e));
+      setMergeBusy(false);
+    }
+  }
+
+  const title = isEdit
+    ? t("categories.modalEditTitle")
+    : props.parent
+      ? t("categories.modalCreateChildTitle", { parent: props.parent.name })
+      : t("categories.modalCreateTitle");
+
+  async function onSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setError(null);
+    setSubmitting(true);
+    try {
+      const trimmedDescription = description.trim();
+      const descriptionPayload =
+        trimmedDescription.length > 0 ? trimmedDescription : null;
+      if (isEdit) {
+        await updateCategory({
+          id: props.category.id,
+          name,
+          color: useAuto && autoColor ? autoColor : color,
+          description: descriptionPayload,
+          parentId,
+          colorAuto: useAuto,
+        });
+      } else {
+        await createCategory({
+          name,
+          color: useAuto && autoColor ? autoColor : color,
+          kind: props.kind,
+          parentId: props.parent?.id ?? null,
+          description: descriptionPayload,
+          colorAuto: useAuto,
+        });
+      }
+      props.onSaved();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function onConfirmDelete() {
+    if (!isEdit) return;
+    setError(null);
+    setDeleting(true);
+    try {
+      await deleteCategory(props.category.id);
+      props.onDeleted();
+    } catch (e) {
+      setError(String(e));
+      setDeleting(false);
+    }
+  }
+
+  const busy = submitting || deleting || mergeBusy;
+
+  return createPortal(
+    <div className="modal-backdrop" onClick={props.onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <header className="modal-header">
+          <h3>{title}</h3>
+          <button
+            className="icon-btn"
+            onClick={props.onClose}
+            aria-label={t("common.close")}
+            type="button"
+          >
+            ×
+          </button>
+        </header>
+        <form onSubmit={onSubmit}>
+          <div className="modal-body">
+            <div className="account-form category-form--modal">
+              <label>
+                {t("categories.fieldName")}
+                <input
+                  required
+                  autoFocus
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder={t("categories.fieldNamePlaceholder")}
+                />
+              </label>
+
+              {isEdit && props.category.systemKey && (
+                <p className="hint">{t("categories.systemHint")}</p>
+              )}
+
+              {isEdit && !props.category.systemKey && (
+                <label>
+                  {t("categories.fieldParent")}
+                  <select
+                    value={parentId === null ? "" : String(parentId)}
+                    onChange={(e) =>
+                      setParentId(
+                        e.target.value === "" ? null : Number(e.target.value),
+                      )
+                    }
+                  >
+                    <option value="">{t("categories.parentNone")}</option>
+                    {eligibleParents.map((p) => (
+                      <option key={p.id} value={String(p.id)}>
+                        {p.path}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              <label>
+                {t("categories.fieldDescription")}
+                <textarea
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  placeholder={t("categories.fieldDescriptionPlaceholder")}
+                  rows={3}
+                />
+              </label>
+
+              <div className="categories-color-field">
+                <span className="categories-color-label">
+                  {t("categories.fieldColor")}
+                </span>
+
+                {colorParent && (
+                  <div className="categories-color-mode">
+                    <button
+                      type="button"
+                      className={useAuto ? "categories-color-tab is-active" : "categories-color-tab"}
+                      onClick={() => setColorAuto(true)}
+                    >
+                      {t("categories.colorAuto")}
+                    </button>
+                    <button
+                      type="button"
+                      className={useAuto ? "categories-color-tab" : "categories-color-tab is-active"}
+                      onClick={() => {
+                        if (useAuto && autoColor) setColor(autoColor);
+                        setColorAuto(false);
+                      }}
+                    >
+                      {t("categories.colorCustom")}
+                    </button>
+                  </div>
+                )}
+
+                {useAuto && autoColor && (
+                  <div className="categories-color-auto">
+                    <span
+                      className="categories-swatch-btn is-selected"
+                      style={{ backgroundColor: autoColor }}
+                      aria-hidden
+                    />
+                    <span className="hint">
+                      {t("categories.colorAutoHint", { parent: colorParent!.name })}
+                    </span>
+                  </div>
+                )}
+
+                {!useAuto && colorParent && (
+                  <div className="categories-color-tabs">
+                    <button
+                      type="button"
+                      className={
+                        colorTab === "shades"
+                          ? "categories-color-tab is-active"
+                          : "categories-color-tab"
+                      }
+                      onClick={() => setColorTab("shades")}
+                    >
+                      {t("categories.colorTabShades")}
+                    </button>
+                    <button
+                      type="button"
+                      className={
+                        colorTab === "palette"
+                          ? "categories-color-tab is-active"
+                          : "categories-color-tab"
+                      }
+                      onClick={() => setColorTab("palette")}
+                    >
+                      {t("categories.colorTabPalette")}
+                    </button>
+                  </div>
+                )}
+
+                {!useAuto && (
+                <div className="categories-palette">
+                  {(colorParent && colorTab === "shades" ? shades : ROOT_PALETTE).map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      className={
+                        c.toLowerCase() === color.toLowerCase()
+                          ? "categories-swatch-btn is-selected"
+                          : "categories-swatch-btn"
+                      }
+                      style={{ backgroundColor: c }}
+                      onClick={() => setColor(c)}
+                      aria-label={c}
+                    />
+                  ))}
+                </div>
+                )}
+              </div>
+            </div>
+
+            {confirmingDelete && isEdit && (
+              <div className="delete-confirm">
+                {t("categories.deleteConfirm", { name: props.category.name })}
+                <div className="delete-confirm-actions">
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    onClick={() => setConfirmingDelete(false)}
+                    disabled={deleting}
+                  >
+                    {t("common.cancel")}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-danger"
+                    onClick={onConfirmDelete}
+                    disabled={deleting}
+                  >
+                    {deleting
+                      ? t("common.deleting")
+                      : t("categories.deleteConfirmYes")}
+                  </button>
+                </div>
+              </div>
+            )}
+            {merging && isEdit && (
+              <div className="merge-confirm">
+                <p>{t("categories.merge.intro", { name: props.category.name })}</p>
+                <select
+                  autoFocus
+                  value={mergeTarget === null ? "" : String(mergeTarget)}
+                  onChange={(e) =>
+                    pickMergeTarget(e.target.value === "" ? null : Number(e.target.value))
+                  }
+                  disabled={mergeBusy}
+                >
+                  <option value="">{t("categories.merge.pick")}</option>
+                  {mergeTargets.map((c) => (
+                    <option key={c.id} value={String(c.id)}>
+                      {c.path}
+                    </option>
+                  ))}
+                </select>
+                {mergePreview && (
+                  <ul className="merge-confirm-effects">
+                    <li>{t("categories.merge.transactions", { count: mergePreview.transactions })}</li>
+                    {mergePreview.movedSubcategories > 0 && (
+                      <li>{t("categories.merge.moved", { count: mergePreview.movedSubcategories })}</li>
+                    )}
+                    {mergePreview.mergedSubcategories > 0 && (
+                      <li>{t("categories.merge.folded", { count: mergePreview.mergedSubcategories })}</li>
+                    )}
+                    <li>{t("categories.merge.deleted", { name: props.category.name })}</li>
+                  </ul>
+                )}
+                <div className="delete-confirm-actions">
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    onClick={() => {
+                      setMerging(false);
+                      setMergeTarget(null);
+                      setMergePreview(null);
+                      setError(null);
+                    }}
+                    disabled={mergeBusy}
+                  >
+                    {t("common.cancel")}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    onClick={onConfirmMerge}
+                    disabled={mergeBusy || mergePreview === null}
+                  >
+                    {t("categories.merge.confirm")}
+                  </button>
+                </div>
+              </div>
+            )}
+            {error && <div className="error">{error}</div>}
+          </div>
+          <footer className="modal-footer">
+            {isEdit && !props.category.systemKey && (
+              <button
+                type="button"
+                className="btn-danger-ghost modal-footer-left"
+                onClick={() => {
+                  setMerging(false);
+                  setConfirmingDelete(true);
+                }}
+                disabled={busy || confirmingDelete}
+              >
+                {t("categories.delete")}
+              </button>
+            )}
+            {isEdit && !props.category.systemKey && (
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => {
+                  setConfirmingDelete(false);
+                  setMerging(true);
+                }}
+                disabled={busy || merging}
+                title={t("categories.merge.buttonHint")}
+              >
+                {t("categories.merge.button")}
+              </button>
+            )}
+            <button type="button" className="btn-ghost" onClick={props.onClose}>
+              {t("common.cancel")}
+            </button>
+            <button type="submit" className="btn-primary" disabled={busy}>
+              {submitting ? t("common.saving") : t("common.save")}
+            </button>
+          </footer>
+        </form>
+      </div>
+    </div>,
+    document.body,
+  );
+}

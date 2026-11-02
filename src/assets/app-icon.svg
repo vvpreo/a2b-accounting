@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F2A05E"/>
+      <stop offset="1" stop-color="#F8CB7C"/>
+    </linearGradient>
+    <linearGradient id="feather" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.55" stop-color="#C9D3DE"/>
+      <stop offset="1" stop-color="#2F3A4A"/>
+    </linearGradient>
+    <linearGradient id="bill" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8EEBD0"/>
+      <stop offset="1" stop-color="#3CC7A2"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="256" height="256" rx="56" fill="url(#bg)"/>
+
+  <!-- Wings: back wing, then front wing, rooted at the top of the bill -->
+  <g stroke="#7FB6DD" stroke-width="5" stroke-linejoin="round">
+    <g transform="translate(152 122) rotate(24) scale(0.95)">
+      <path d="M0 0 C2 -44 -30 -84 -80 -98 C-74 -84 -80 -70 -88 -60 C-76 -56 -66 -58 -60 -60 C-62 -48 -68 -38 -76 -32 C-62 -28 -52 -30 -46 -34 C-46 -24 -50 -14 -56 -8 C-40 -4 -30 -8 -24 -14 C-20 -6 -12 -2 0 0 Z" fill="url(#feather)"/>
+      <path d="M-2 -8 C0 -44 -28 -80 -72 -94" fill="none" stroke="#EE7A1E" stroke-width="6" stroke-linecap="round"/>
+    </g>
+    <g transform="translate(130 130) rotate(-2) scale(1.05)">
+      <path d="M0 0 C2 -44 -30 -84 -80 -98 C-74 -84 -80 -70 -88 -60 C-76 -56 -66 -58 -60 -60 C-62 -48 -68 -38 -76 -32 C-62 -28 -52 -30 -46 -34 C-46 -24 -50 -14 -56 -8 C-40 -4 -30 -8 -24 -14 C-20 -6 -12 -2 0 0 Z" fill="url(#feather)"/>
+      <path d="M-2 -8 C0 -44 -28 -80 -72 -94" fill="none" stroke="#EE7A1E" stroke-width="6" stroke-linecap="round"/>
+    </g>
+  </g>
+
+  <!-- Banknotes, tilted -->
+  <g transform="translate(0 -6) rotate(-14 140 170)" stroke="#1E2A33" stroke-width="6" stroke-linejoin="round">
+    <rect x="76" y="126" width="148" height="84" rx="10" fill="#2EAE8E"/>
+    <rect x="62" y="138" width="148" height="84" rx="10" fill="url(#bill)"/>
+    <rect x="76" y="151" width="120" height="58" rx="6" fill="none" stroke-width="4" opacity="0.55"/>
+    <circle cx="136" cy="180" r="24" fill="#F4FFFB" stroke-width="5"/>
+    <path d="M144 170 C140 164 128 164 127 172 C126 180 146 178 145 187 C144 196 131 196 127 189 M136 160 V200"
+          fill="none" stroke-width="5" stroke-linecap="round"/>
+  </g>
+</svg>

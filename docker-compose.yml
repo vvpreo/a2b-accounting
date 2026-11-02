@@ -1,0 +1,24 @@
+# Project compose: builds the image from the local sources (see Dockerfile)
+# and runs it. Used for local testing / the DEV stand from a repo checkout:
+#
+#   docker compose up -d --build
+#
+# The app listens on http://127.0.0.1:${FINANCES_PORT:-3700} — loopback only.
+# The DB (finances.db + WAL) lives in FINANCES_DATA_DIR on the host (default:
+# ./data next to this file); the image itself contains no data and no keys.
+#
+# For production-style use on your own machine — pulling the prebuilt image
+# from Docker Hub instead of building — see the standalone compose snippet in
+# README.md (Quick Start): it references vvpreo/a2b-accounting:dev with
+# pull_policy: always. Tags: `dev` — rolling build of every main commit,
+# `sha-<commit>` — immutable, `latest` — last stable, promoted separately.
+services:
+  app:
+    build: .
+    image: a2b-accounting:local
+    container_name: a2b-accounting
+    ports:
+      - "127.0.0.1:${FINANCES_PORT:-3700}:8080"
+    volumes:
+      - "${FINANCES_DATA_DIR:-./data}:/data"
+    restart: unless-stopped

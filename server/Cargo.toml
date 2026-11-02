@@ -1,0 +1,41 @@
+[package]
+name = "a2b-accounting"
+version = "0.1.0"
+description = "Personal finances management app — web server"
+authors = ["a2b-accounting contributors"]
+edition = "2021"
+
+[lib]
+name = "a2b_accounting_lib"
+
+[[bin]]
+name = "a2b-accounting-server"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+tower-http = { version = "0.6", features = ["fs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+rust_decimal = "1"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+sys-locale = "0.3"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+sha2 = "0.10"
+regex = "1"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+rqrr = "0.8"
+base64 = "0.22"
+# PaddleOCR on ONNX Runtime. Its own "download-binaries" feature forces
+# native TLS (system OpenSSL); instead ort is enabled directly below with the
+# same binary download over rustls. Versions must match oar-ocr's pin.
+oar-ocr = { version = "0.10.2", default-features = false, features = ["simd"] }
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "download-binaries", "tls-rustls"] }
+
+[dev-dependencies]
+tempfile = "3"

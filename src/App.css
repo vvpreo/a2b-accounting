@@ -1,0 +1,7570 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #1a1a1a;
+  background-color: #f6f6f6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+/* A desktop app: a two-finger horizontal swipe never navigates the browser
+   back / forward (see also src/lib/no-swipe-navigation.ts). */
+html,
+body {
+  overscroll-behavior-x: none;
+}
+
+body {
+  overflow: hidden;
+}
+
+.container {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.container > * {
+  flex-shrink: 0;
+}
+
+.page {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* Reserve a fixed-width gutter for the scrollbar so the layout never
+     "jumps" when content shrinks below the viewport (or when an extra
+     row is added). Standard, supported across modern WebKit. */
+  scrollbar-gutter: stable;
+}
+
+/* Thin, always-visible WebKit scrollbar (matches the reserved gutter above).
+   Required to override macOS "Always show scroll bars" with a consistent
+   thumb size and to make sure the user actually sees a scrollbar when one is
+   needed. */
+.page::-webkit-scrollbar,
+.pivot-wrap::-webkit-scrollbar,
+.txns-wrap::-webkit-scrollbar,
+.builder-tree::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.page::-webkit-scrollbar-track,
+.pivot-wrap::-webkit-scrollbar-track,
+.txns-wrap::-webkit-scrollbar-track,
+.builder-tree::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.page::-webkit-scrollbar-thumb,
+.pivot-wrap::-webkit-scrollbar-thumb,
+.txns-wrap::-webkit-scrollbar-thumb,
+.builder-tree::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.25);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  transition: background-color 0.15s ease;
+}
+
+.page::-webkit-scrollbar-thumb:hover,
+.pivot-wrap::-webkit-scrollbar-thumb:hover,
+.txns-wrap::-webkit-scrollbar-thumb:hover,
+.builder-tree::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(0, 0, 0, 0.45);
+}
+
+.page::-webkit-scrollbar-corner,
+.pivot-wrap::-webkit-scrollbar-corner,
+.txns-wrap::-webkit-scrollbar-corner,
+.builder-tree::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+:root[data-theme="dark"] .page::-webkit-scrollbar-thumb,
+:root[data-theme="dark"] .pivot-wrap::-webkit-scrollbar-thumb,
+:root[data-theme="dark"] .txns-wrap::-webkit-scrollbar-thumb,
+:root[data-theme="dark"] .builder-tree::-webkit-scrollbar-thumb {
+    background-color: rgba(255, 255, 255, 0.25);
+  }
+
+:root[data-theme="dark"] .page::-webkit-scrollbar-thumb:hover,
+:root[data-theme="dark"] .pivot-wrap::-webkit-scrollbar-thumb:hover,
+:root[data-theme="dark"] .txns-wrap::-webkit-scrollbar-thumb:hover,
+:root[data-theme="dark"] .builder-tree::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(255, 255, 255, 0.45);
+  }
+
+.page--transactions {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* The page itself never scrolls — the inner .txns-wrap does. Drop the
+     stable gutter inherited from .page so the filter bar and the table
+     align flush with the .tabs navigation above (which has no gutter). */
+  scrollbar-gutter: auto;
+}
+
+/* Accounts mirrors the transactions layout: page itself does not scroll,
+   the filter bar lives outside the scroll wrap so it always spans the
+   full width of the .tabs row above, and the per-account table scrolls
+   inside its own .accounts-wrap. */
+.page--accounts {
+  overscroll-behavior-x: none;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
+.page--accounts .accounts-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  /* Horizontal trackpad swipes at the scroll edge must not chain to the
+     browser's back/forward navigation gesture. */
+  overscroll-behavior-x: none;
+  /* Reserve the gutter on the actual scroll container so the table
+     doesn't jump horizontally when its vertical scrollbar appears. */
+  scrollbar-gutter: stable;
+}
+
+.page--transactions .txns-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  /* Reserve the gutter on the actual scroll container so the table
+     contents don't jump horizontally when a vertical scrollbar appears. */
+  scrollbar-gutter: stable;
+}
+
+.page--transactions table {
+  table-layout: auto;
+  width: 100%;
+  overflow: visible;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.page--transactions thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+/* Inside the transactions table the first 5 columns shrink to fit the widest
+ * content among the currently visible rows. The optional columns
+ * (category/comment/peer/bank_description) absorb whatever space remains. */
+.page--transactions th.col-fixed,
+.page--transactions td.col-fixed,
+.page--transactions th.col-account,
+.page--transactions td.col-account,
+.page--transactions th.col-date,
+.page--transactions td.col-date {
+  width: auto;
+  min-width: 0;
+  max-width: none;
+}
+
+/* Category gets a comfortable minimum so the colored bars stay readable;
+ * the comment column is the elastic one and absorbs the leftover width,
+ * pushing the right block to ~60-70% of the screen on typical desktops. */
+.page--transactions th.col-category,
+.page--transactions td.col-category {
+  min-width: 336px;
+}
+
+/* The three "long text" columns truncate with an ellipsis when their
+ * content doesn't fit, instead of pushing the table wider than the
+ * viewport. The `max-width: 0` trick lets the cell shrink to whatever
+ * the auto table-layout doles out; combined with `overflow: hidden`
+ * + `text-overflow: ellipsis` + `white-space: nowrap` the visible row
+ * always fits the screen. Full content is revealed via the floating
+ * tooltip wired up in Transactions.tsx. */
+.page--transactions td.col-peer,
+.page--transactions td.col-bank-description {
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The comment input lives inside its cell — it must shrink with the
+ * cell rather than asserting its own natural width. */
+
+.app-header {
+  margin-bottom: 24px;
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.page h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.page-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 7px;
+}
+
+.page-toolbar h2 {
+  flex: 1;
+}
+
+/* Buttons */
+
+.btn-primary,
+.btn-ghost,
+.btn-danger-ghost,
+.icon-btn,
+.account-form button {
+  font-family: inherit;
+  font-size: 13px;
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.btn-primary,
+.account-form button {
+  background: #1f2937;
+  color: #fff;
+  font-weight: 500;
+}
+
+.btn-primary:hover:not(:disabled),
+.account-form button:hover:not(:disabled) {
+  background: #111827;
+}
+
+.btn-primary:disabled,
+.account-form button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: inherit;
+  border-color: #d4d4d8;
+}
+
+.btn-ghost:hover {
+  background: #f1f1f4;
+}
+
+.btn-danger-ghost {
+  background: transparent;
+  color: #b91c1c;
+  border-color: #fca5a5;
+}
+
+.btn-danger-ghost:hover:not(:disabled) {
+  background: #fef2f2;
+}
+
+.btn-danger-ghost:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-danger {
+  background: #b91c1c;
+  color: #fff;
+  border-color: #b91c1c;
+  font-weight: 500;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #991b1b;
+}
+
+.btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.icon-btn {
+  background: transparent;
+  border: 0;
+  font-size: 22px;
+  line-height: 1;
+  padding: 2px 8px;
+  color: #71717a;
+}
+
+.icon-btn:hover {
+  color: #18181b;
+}
+
+.icon-btn:disabled {
+  color: #d4d4d8;
+  cursor: not-allowed;
+}
+
+/* Account form */
+
+.account-form {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  padding: 16px;
+  background: #fff;
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+  margin-bottom: 24px;
+}
+
+.account-form--modal {
+  grid-template-columns: 1fr 1fr;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  margin-bottom: 0;
+}
+
+/* Category modal form: each field is its own row — name, description,
+   color — so the textarea has room to breathe and the palette doesn't
+   compete for horizontal space. */
+.category-form--modal {
+  grid-template-columns: 1fr;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  margin-bottom: 0;
+  align-items: stretch;
+  gap: 16px;
+}
+
+.account-name-cell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.account-name-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-row-actions {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.account-edit-btn {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid #d4d4d8;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.account-edit-btn:hover {
+  background: #f1f1f4;
+}
+
+.last-txn-cell {
+  white-space: nowrap;
+}
+
+.last-txn {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.15;
+  font-size: 12px;
+}
+
+.last-txn-date {
+  color: #52525b;
+}
+
+.last-txn-amount {
+  font-variant-numeric: tabular-nums;
+}
+
+.account-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #52525b;
+}
+
+.account-form input,
+.account-form select,
+.account-form textarea {
+  padding: 6px 8px;
+  font-size: 14px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background: #fff;
+  color: inherit;
+  font-family: inherit;
+}
+
+/* Strip the native macOS/Windows chrome from form selects and replace it
+   with a custom chevron so the control matches sibling inputs. Extra
+   right padding leaves room for the chevron; line-height keeps the text
+   vertically aligned the way it sits in the surrounding inputs. */
+.account-form select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 28px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%2352525b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  cursor: pointer;
+}
+
+.account-form textarea {
+  resize: vertical;
+  min-height: 64px;
+  line-height: 1.4;
+}
+
+.account-form input:focus,
+.account-form select:focus,
+.account-form textarea:focus {
+  outline: none;
+  border-color: #6366f1;
+}
+
+.account-form .error {
+  grid-column: 1 / -1;
+}
+
+/* Cash-transaction modal form: single-column stack so each field reads as
+   its own row. The amount row is the only horizontal pairing — Приход and
+   Расход sit side-by-side because exactly one of them is filled in. */
+
+.cash-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cash-form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #52525b;
+}
+
+.cash-form-row input {
+  padding: 6px 8px;
+  font-size: 14px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background: #fff;
+  color: inherit;
+  font-family: inherit;
+}
+
+.cash-form-row input:focus {
+  outline: none;
+  border-color: #6366f1;
+}
+
+.cash-form-row input:disabled {
+  background: #f4f4f5;
+  color: #a1a1aa;
+  cursor: not-allowed;
+}
+
+.cash-form-row--amount {
+  flex-direction: row;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.cash-form-amount-cell {
+  flex: 1 1 50%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #52525b;
+}
+
+.cash-form-amount-cell input {
+  padding: 6px 8px;
+  font-size: 14px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background: #fff;
+  color: inherit;
+  font-family: inherit;
+}
+
+.cash-form-amount-cell input:focus {
+  outline: none;
+  border-color: #6366f1;
+}
+
+.cash-form-amount-cell input:disabled {
+  background: #f4f4f5;
+  color: #a1a1aa;
+  cursor: not-allowed;
+}
+
+/* Cash-transactions tab inside the account detail modal. The form itself
+   reuses .cash-form above; only the list/table needs its own styles. */
+
+.cash-tab-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+/* Records → "Entries from a description": the text step, then the preview.
+   `.modal` comes later in the file — hence the doubled class. */
+.modal.modal--cash-dictation {
+  width: min(640px, 94vw);
+  bottom: auto;
+}
+
+.cash-dictation-text {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  font: inherit;
+  line-height: 1.4;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  resize: vertical;
+}
+
+.cash-dictation-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  font-weight: 500;
+}
+
+.cash-dictation-source {
+  padding: 8px 10px;
+  border-left: 3px solid #a1a1aa;
+  border-radius: 4px;
+  background: #fafafa;
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.cash-dictation-source strong {
+  display: block;
+  margin-bottom: 2px;
+}
+
+.cash-dictation-notes {
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: #f4f4f5;
+  white-space: pre-wrap;
+}
+
+.cash-dictation-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.cash-dictation-table th,
+.cash-dictation-table td {
+  padding: 3px 4px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.cash-dictation-table input:not([type="checkbox"]),
+.cash-dictation-table select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 3px 6px;
+  font: inherit;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background: transparent;
+}
+
+.cash-dictation-table input[type="date"] {
+  width: 140px;
+}
+
+.cash-dictation-table .cash-dictation-amount {
+  width: 110px;
+  text-align: right;
+}
+
+.cash-dictation-table .is-invalid {
+  border-color: #dc2626;
+}
+
+.cash-dictation-table tr.is-excluded td:not(:first-child) {
+  opacity: 0.45;
+}
+
+.cash-dictation-category {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 26px;
+  padding: 2px 6px;
+  font: inherit;
+  text-align: left;
+  border: 1px dashed #d4d4d8;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.cash-dictation-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.cash-dictation-placeholder {
+  color: #a1a1aa;
+}
+
+.cash-dictation-marks {
+  white-space: nowrap;
+}
+
+.cash-dictation-mark {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
+  border-radius: 8px;
+  background: #e4e4e7;
+  color: #3f3f46;
+}
+
+.cash-dictation-mark.is-warn {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+:root[data-theme="dark"] .cash-dictation-text,
+:root[data-theme="dark"] .cash-dictation-table input:not([type="checkbox"]),
+:root[data-theme="dark"] .cash-dictation-table select,
+:root[data-theme="dark"] .cash-dictation-category {
+  background: #18181b;
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .cash-dictation-source {
+  background: #27272a;
+  border-left-color: #52525b;
+}
+
+:root[data-theme="dark"] .cash-dictation-notes {
+  background: #18181b;
+}
+
+:root[data-theme="dark"] .cash-dictation-mark {
+  background: #3f3f46;
+  color: #e4e4e7;
+}
+
+:root[data-theme="dark"] .cash-dictation-mark.is-warn {
+  background: #451a03;
+  color: #fcd34d;
+}
+
+.cash-tab-table {
+  width: 100%;
+}
+
+.cash-tab-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.cash-tab-actions .icon-btn + .icon-btn {
+  margin-left: 4px;
+}
+
+.icon-btn--danger {
+  color: #b91c1c;
+}
+
+.cash-tab-confirm {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/* Tables */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 4px 10px;
+  border-bottom: 1px solid #f1f1f4;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+th {
+  background: #fafafa;
+  font-weight: 600;
+  color: #52525b;
+}
+
+th.num,
+td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+th.col-fixed,
+td.col-fixed {
+  width: 200px;
+  min-width: 200px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+th.col-account,
+td.col-account {
+  width: 120px;
+  min-width: 120px;
+  max-width: 120px;
+}
+
+th.col-date,
+td.col-date {
+  width: 150px;
+  min-width: 150px;
+  max-width: 150px;
+}
+
+th.col-divider,
+td.col-divider {
+  border-right: 1px solid #f1f1f4;
+}
+
+td.cell-placeholder {
+  color: #9ca3af;
+}
+
+/* Transactions: the fixed money/date block runs together; every column from
+   Note onwards gets a vertical separator on its left (so the first line sits
+   between Balance and Note). */
+.page--transactions th.col-note,
+.page--transactions td.col-note,
+.page--transactions th.col-suggestion,
+.page--transactions td.col-suggestion,
+.page--transactions th.col-category,
+.page--transactions td.col-category,
+.page--transactions th.col-link,
+.page--transactions td.col-link,
+.page--transactions th.col-delta,
+.page--transactions td.col-delta,
+.page--transactions th.col-peer,
+.page--transactions td.col-peer,
+.page--transactions th.col-bank-description,
+.page--transactions td.col-bank-description {
+  border-left: 1px solid #f1f1f4;
+}
+
+tr.month-separator td {
+  background: #f4f4f5;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #52525b;
+  padding: 6px 10px;
+  border-top: 2px solid #d4d4d8;
+  position: sticky;
+  top: var(--thead-h, 29px);
+  z-index: 1;
+}
+
+.dow {
+  color: #9ca3af;
+  margin-left: 2px;
+}
+
+:root[data-theme="dark"] th.col-divider,
+:root[data-theme="dark"] td.col-divider {
+    border-right-color: #27272a;
+  }
+
+:root[data-theme="dark"] td.cell-placeholder {
+    color: #71717a;
+  }
+
+:root[data-theme="dark"] .page--transactions th.col-note,
+:root[data-theme="dark"] .page--transactions td.col-note,
+:root[data-theme="dark"] .page--transactions th.col-suggestion,
+:root[data-theme="dark"] .page--transactions td.col-suggestion,
+:root[data-theme="dark"] .page--transactions th.col-category,
+:root[data-theme="dark"] .page--transactions td.col-category,
+:root[data-theme="dark"] .page--transactions th.col-link,
+:root[data-theme="dark"] .page--transactions td.col-link,
+:root[data-theme="dark"] .page--transactions th.col-delta,
+:root[data-theme="dark"] .page--transactions td.col-delta,
+:root[data-theme="dark"] .page--transactions th.col-peer,
+:root[data-theme="dark"] .page--transactions td.col-peer,
+:root[data-theme="dark"] .page--transactions th.col-bank-description,
+:root[data-theme="dark"] .page--transactions td.col-bank-description {
+  border-left-color: #27272a;
+}
+
+:root[data-theme="dark"] tr.month-separator td {
+    background: #1f1f22;
+    color: #a1a1aa;
+    border-top-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .dow {
+    color: #71717a;
+  }
+
+.amount-credit {
+  color: #166534;
+}
+
+.amount-debit {
+  color: #991b1b;
+}
+
+:root[data-theme="dark"] .amount-credit {
+    color: #4ade80;
+  }
+
+:root[data-theme="dark"] .amount-debit {
+    color: #f87171;
+  }
+
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+tbody tr.invalid {
+  background: #fef2f2;
+}
+
+tbody tr.warning {
+  background: #fffbeb;
+}
+
+tbody tr.is-correcting {
+  font-style: italic;
+  color: #6b7280;
+}
+
+/* Hover cues on the transactions table:
+ *  - .is-hover-account tints every row that shares the hovered row's account
+ *    with a soft background, so the user can quickly scan the rest of that
+ *    account's history.
+ *  - .is-hover-row applies on top of that to the exact row under the cursor
+ *    with a stronger background so the focal row stays visually distinct.
+ *  Declaration order matters — .is-hover-row comes second so it wins when
+ *  both classes apply to the same row. */
+tbody tr.is-hover-account {
+  background: #f1f5f9;
+}
+tbody tr.is-hover-row {
+  background: #cbd5e1;
+}
+/* Hover-on partner row when the user is over a linked transaction:
+   the linked counterpart gets the strong "focal" tint too so the pair is
+   visually equal-weight, no matter which side the cursor is on. */
+tbody tr.is-link-partner {
+  background: #cbd5e1;
+}
+
+/* Transfer-link column ("🔗") cells. Width is fixed and minimal, mirroring
+   the col-fixed rules used for date/credit/debit. The cell itself is just a
+   small button surface; visual cues come from the inner span classes. */
+.col-link {
+  width: 36px;
+  min-width: 36px;
+  text-align: center;
+  padding: 0;
+  position: relative;
+}
+
+/* FX-conversion delta column ("Δ"). Same fixed-width treatment as the money
+   columns; only populated for rows that participate in a transfer link. The
+   header is a clickable button that toggles between percent and absolute
+   display modes — centred so it visually anchors the column the way the
+   data cells (right-aligned numbers) cannot. */
+.col-delta {
+  width: 92px;
+  min-width: 92px;
+  white-space: nowrap;
+}
+
+th.col-delta {
+  text-align: center;
+}
+
+.col-delta-toggle {
+  background: transparent;
+  border: none;
+  padding: 2px 6px;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.12s ease;
+}
+
+.col-delta-toggle:hover {
+  background: #e2e8f0;
+}
+
+.txn-delta {
+  font-variant-numeric: tabular-nums;
+  cursor: help;
+}
+
+/* Gain — green. */
+.txn-delta.is-pos {
+  color: #15803d;
+}
+
+/* Loss — red. */
+.txn-delta.is-neg {
+  color: #b91c1c;
+}
+
+/* Exact match against the dictionary rate — neutral black so it doesn't
+   compete visually with rows that actually moved. */
+.txn-delta.is-zero {
+  color: #111827;
+}
+
+/* No rate available yet (background download still pending or the currency
+   has no feed). Bold red dash matches the "something's missing here" cue
+   used elsewhere in the app. */
+.txn-delta.is-missing {
+  color: #b91c1c;
+  font-weight: 700;
+}
+
+.txn-link-btn {
+  /* Filling the cell makes the entire 🔗 column clickable, not just a
+     small button surface — important for "start pending" cells where
+     no icon is rendered. */
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  color: #94a3b8;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+/* Each link-cell state owns its own visuals AND its own :hover treatment.
+   We deliberately don't keep a generic .txn-link-btn:hover fallback any
+   more — it kept fighting the state-specific rules at equal specificity
+   and the first matching state was losing colour/background to the
+   generic hover. Now every state is self-contained. */
+
+/* Linked state outside pending mode: blue chain icon. Hovering hints
+   that a click opens the "break the link" confirmation. */
+.txn-link-btn.is-linked {
+  color: #1d4ed8;
+}
+
+.txn-link-btn.is-linked:hover {
+  background: #e0e7ff;
+}
+
+/* Valid partner during pending mode: green 🔗. Hover deepens the
+   tint so the row clearly stands out as the click target. */
+.txn-link-btn.is-candidate {
+  color: #15803d;
+}
+
+.txn-link-btn.is-candidate:hover {
+  color: #14532d;
+  background: #dcfce7;
+}
+
+/* Pre-pending hint: an unlinked row's cell hides its ChainIcon by
+   default (transparent currentColor) and reveals it in green when the
+   user hovers — same tint as the candidate step, so the user can see
+   at a glance "clicking here starts a link from this row". */
+.txn-link-btn.is-startable {
+  color: transparent;
+}
+
+.txn-link-btn.is-startable:hover {
+  color: #15803d;
+  background: #dcfce7;
+}
+
+/* Anchor (the row the user just clicked to open pending mode): dashed
+   blue outline + light blue background, visible regardless of hover. */
+.txn-link-btn.is-pending {
+  color: #1d4ed8;
+  outline: 2px dashed #1d4ed8;
+  outline-offset: -2px;
+  background: #eff6ff;
+}
+
+/* Invalid candidate during pending mode: ❌ SVG icon, muted red color,
+   not-allowed cursor. Click is a no-op (handled in the click handler);
+   hover surfaces the reason via a portal tooltip rendered above the
+   table so it can't be clipped by the scroll wrap. No background
+   change on hover — the tooltip is the feedback channel here. */
+.txn-link-btn.is-invalid {
+  color: #b91c1c;
+  cursor: not-allowed;
+}
+
+.txn-link-portal-tooltip {
+  position: fixed;
+  transform: translate(-50%, calc(-100% - 8px));
+  background: #1f2937;
+  color: #f9fafb;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+  max-width: 280px;
+  pointer-events: none;
+  z-index: 200;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  /* Linked-partner tooltips ship multi-line text via \n — preserve the
+     line breaks while still wrapping long account names. */
+  white-space: pre-line;
+}
+
+/* Bottom-of-screen toast overlay used to surface pending state and link
+   errors. Placed outside the scroll wrap so it never shifts the table
+   layout when it appears or disappears. The trailing .txn-tail-spacer
+   row guarantees the last real transaction can always be scrolled into
+   view above the overlay. */
+.txn-link-overlay {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: #1d4ed8;
+  color: #fff;
+  font-size: 13px;
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  max-width: min(560px, calc(100vw - 32px));
+}
+
+.txn-link-overlay--error {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.txn-link-overlay button {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 4px;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.txn-link-overlay button:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Bottom padding inside the txns table — three blank rows worth of height
+   so the last transaction is always reachable above the floating
+   .txn-link-overlay. Border stripped so it doesn't read as a real row. */
+.txn-tail-spacer td {
+  height: 96px;
+  border: none;
+  background: transparent;
+  padding: 0;
+}
+
+/* Inline confirm dialog for unlinking — small modal-style overlay. */
+.txn-link-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.txn-link-confirm {
+  background: #fff;
+  border-radius: 8px;
+  padding: 18px 22px;
+  max-width: 360px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+}
+
+.txn-link-confirm h3 {
+  margin: 0 0 8px 0;
+  font-size: 15px;
+}
+
+.txn-link-confirm p {
+  margin: 0 0 14px 0;
+  font-size: 13px;
+  color: #475569;
+}
+
+.txn-link-confirm-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* "Withdraw to cash" form — reuses the .txn-link-confirm shell for the
+   backdrop + panel, adds vertically-stacked labelled fields above the
+   action row. */
+.withdraw-modal {
+  min-width: 320px;
+  max-width: 420px;
+}
+
+.withdraw-modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.withdraw-modal-field > span {
+  color: #475569;
+}
+
+.withdraw-modal-field select,
+.withdraw-modal-field input {
+  padding: 6px 8px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  font: inherit;
+  background: #fff;
+  color: inherit;
+}
+
+.withdraw-modal-field input:focus,
+.withdraw-modal-field select:focus {
+  outline: none;
+  border-color: #6366f1;
+}
+
+.withdraw-modal-hint {
+  color: #b45309;
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.withdraw-modal-error {
+  color: #991b1b;
+  background: #fee2e2;
+  padding: 6px 10px;
+  border-radius: 4px;
+  margin: 0 0 12px 0;
+  font-size: 12px;
+}
+
+:root[data-theme="dark"] .withdraw-modal-field > span {
+    color: #cbd5e1;
+  }
+
+:root[data-theme="dark"] .withdraw-modal-field select,
+:root[data-theme="dark"] .withdraw-modal-field input {
+    background: #0f172a;
+    color: #f3f4f6;
+    border-color: #334155;
+  }
+
+:root[data-theme="dark"] .withdraw-modal-hint {
+    color: #fbbf24;
+  }
+
+:root[data-theme="dark"] .withdraw-modal-error {
+    background: #4c1d24;
+    color: #fecaca;
+  }
+
+.inline-edit {
+  width: 100%;
+  min-width: 120px;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 2px 6px;
+  font: inherit;
+  color: inherit;
+  border-radius: 3px;
+}
+
+.inline-edit:hover {
+  border-color: #d4d4d8;
+}
+
+.inline-edit:focus {
+  outline: none;
+  border-color: #6366f1;
+  background: #fff;
+}
+
+:root[data-theme="dark"] .inline-edit:hover {
+    border-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .inline-edit:focus {
+    background: #18181b;
+  }
+
+:root[data-theme="dark"] tbody tr.is-correcting {
+    color: #a1a1aa;
+  }
+
+:root[data-theme="dark"] tbody tr.is-hover-account {
+    background: #1f2937;
+  }
+
+:root[data-theme="dark"] tbody tr.is-hover-row {
+    background: #334155;
+  }
+
+:root[data-theme="dark"] tbody tr.is-link-partner {
+    background: #334155;
+  }
+
+:root[data-theme="dark"] .txn-link-btn {
+    color: #71717a;
+  }
+
+:root[data-theme="dark"] .txn-link-btn.is-linked {
+    color: #93c5fd;
+  }
+
+:root[data-theme="dark"] .txn-link-btn.is-linked:hover {
+    background: #1e293b;
+  }
+
+:root[data-theme="dark"] .txn-link-btn.is-candidate {
+    color: #86efac;
+  }
+
+:root[data-theme="dark"] .txn-link-btn.is-candidate:hover {
+    color: #bbf7d0;
+    background: #14532d;
+  }
+
+:root[data-theme="dark"] .txn-link-btn.is-startable:hover {
+    color: #86efac;
+    background: #14532d;
+  }
+
+:root[data-theme="dark"] .txn-link-btn.is-pending {
+    color: #93c5fd;
+    outline-color: #93c5fd;
+    background: #1e293b;
+  }
+
+:root[data-theme="dark"] .txn-link-confirm {
+    background: #1f2937;
+    color: #f3f4f6;
+  }
+
+:root[data-theme="dark"] .txn-link-confirm p {
+    color: #cbd5e1;
+  }
+
+:root[data-theme="dark"] .txn-link-overlay--error {
+    background: #4c1d24;
+    color: #fecaca;
+  }
+
+td.empty {
+  text-align: center;
+  color: #9ca3af;
+  padding: 24px;
+}
+
+/* Activity strip — last N month buckets, rendered on a sub-row beneath
+   each account row. */
+
+.account-row td {
+  /* The strip-row continues this row visually; suppress the divider. */
+  border-bottom: 0;
+}
+
+.account-strip-row td {
+  padding-top: 0;
+  padding-bottom: 8px;
+}
+
+.account-strip-row .account-strip-spacer {
+  /* Leading two columns under the account stay blank; no inner padding so
+     the strip starts cleanly under the "Bank" column header. */
+  padding: 0;
+}
+
+/* The strip cell hosts an absolute scroll viewport. Its height is set per
+   row via an inline style, computed from the number of "Сводка" rows the
+   user has enabled (see `stripCellHeightPx` in Accounts.tsx). Without an
+   explicit height the absolutely-positioned viewport would collapse the
+   td to zero height; with an inline-flex viewport it would blow up the
+   table's column widths to fit the strip's intrinsic content. */
+.account-strip-row td.account-strip-cell {
+  position: relative;
+  /* Override the 8px padding-bottom from `.account-strip-row td`: we
+     don't need a reserved gutter since the scrollbar is overlay-style. */
+  padding-bottom: 0;
+}
+
+/* Horizontal scroll viewport: every viewport in the table is kept in sync
+   by the AccountsPage scroll handler. Months are pinned to the right (see
+   the auto inline-start margin on the inner stack), and on data load the
+   viewport is parked at scrollLeft = scrollWidth so the current month is
+   always visible. */
+.activity-scroll-viewport {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 10px;
+  right: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* Scrolling the month history to its first/last month with a trackpad
+     swipe would otherwise trigger the browser's "go back" gesture. */
+  overscroll-behavior-x: none;
+  display: flex;
+  align-items: flex-start;
+  /* Reserve a gutter below the months row so the on-hover scrollbar
+     sits in this padding area instead of overlaying the cells. */
+  padding-bottom: 12px;
+  /* Firefox: completely hidden at rest; on hover we re-enable the bar. */
+  scrollbar-width: none;
+}
+
+.activity-scroll-viewport:hover {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(63, 63, 70, 0.4) transparent;
+}
+
+/* WebKit: collapse the scrollbar to zero size at rest so it consumes no
+   layout (no visible gutter beneath the months). On hover we expand it to
+   4px and colour the thumb — this overlays the bottom ~2px of the months
+   row, but only while the cursor is actually over the strip. */
+.activity-scroll-viewport::-webkit-scrollbar {
+  height: 0;
+  width: 0;
+}
+
+.activity-scroll-viewport:hover::-webkit-scrollbar {
+  height: 4px;
+  width: 4px;
+}
+
+.activity-scroll-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.activity-scroll-viewport::-webkit-scrollbar-thumb {
+  background: rgba(63, 63, 70, 0.4);
+  border-radius: 2px;
+}
+
+/* Empty-state placeholder shown in place of the month strip for accounts
+   that have no transactions yet. Sits in the same absolute slot as the
+   scroll viewport so the row height stays in sync with strips of other
+   accounts. Right-aligned to match where the months would otherwise be. */
+.activity-strip-empty {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 10px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  font-size: 12px;
+  font-style: italic;
+  color: #71717a;
+  user-select: none;
+}
+
+/* Stacks the year labels above the month strip. Inline-flex so the wrapper
+   only takes the width of its widest row (the months row). The auto
+   inline-start margin pins the stack to the right edge of the viewport
+   when content fits, and collapses to zero when content overflows so the
+   user can scroll left to reveal older months. */
+.activity-strip-stack {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  margin-inline-start: auto;
+}
+
+/* Year labels mirror the months strip: same flex gap and same year-gap
+   spacer so each label's left edge aligns with the first month cell of
+   that calendar year. */
+.activity-strip-years {
+  display: inline-flex;
+  gap: 2px;
+  align-items: flex-end;
+  flex-wrap: nowrap;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  color: #71717a;
+}
+
+.activity-strip-year-label {
+  flex-shrink: 0;
+  text-align: left;
+  white-space: nowrap;
+  /* If a year-run is only one or two months wide, the four-digit year may
+     be wider than the run; let it spill into the gap rather than truncate. */
+  overflow: visible;
+}
+
+.activity-strip {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+/* Labels column lives in the second `account-strip-spacer` td, right-
+   aligned so labels sit close to the strip cell that follows. Vertical
+   geometry mirrors the strip stack: 11px year row, 2px gap, 18px months
+   row (= "Наполненность"), then 18px per summary row. Both td's are
+   `vertical-align: top`, so without any extra padding the rows line up
+   automatically. */
+.account-strip-labels-cell {
+  position: relative;
+  text-align: right;
+  padding-right: 0;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+/* Position the stack absolutely so the labels float over the "Имя"
+   column area without forcing the table's auto-layout to widen it. The
+   stack hugs the right edge of the cell, just before the strip td. */
+.account-strip-labels-stack {
+  position: absolute;
+  top: 0;
+  right: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.account-strip-labels-spacer {
+  height: 11px;
+}
+
+.activity-strip-row-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 18px;
+  font-size: 11px;
+  color: #52525b;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.activity-strip-row-label-text {
+  /* Right-align the row text by pushing the info button against the right
+     edge of the cell — text takes whatever room is left to its left. */
+  text-align: right;
+}
+
+/* The main "Наполненность" row label is one step bolder/darker so it
+   visually anchors the section above its sub-metrics. */
+.activity-strip-row-label--main {
+  color: #18181b;
+  font-weight: 600;
+}
+
+/* Compact circular "i" button mirroring the previous filter-bar info
+   button: same hover treatment, but sized to fit on a 18px label row. */
+.activity-strip-row-info {
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid #d4d4d8;
+  border-radius: 50%;
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  font-style: italic;
+  line-height: 1;
+  color: #52525b;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+
+.activity-strip-row-info:hover {
+  background: #f1f1f4;
+  color: #18181b;
+  border-color: #a1a1aa;
+}
+
+/* Optional categorisation rows under the main strip — same column geometry,
+   but plain text in fixed-width 39px boxes instead of status fills. */
+.activity-strip--summary {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+/* Spacer between calendar years — same width as one cell so the year
+   break reads as a clear gap. */
+.activity-strip-year-gap {
+  display: inline-block;
+  width: 39px;
+  flex-shrink: 0;
+}
+
+.activity-cell {
+  width: 39px;
+  height: 18px;
+  border-radius: 3px;
+  border: 1.5px solid transparent;
+  box-sizing: border-box;
+  background: #d4d4d8;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* Reset button-tag defaults so a `<button class="activity-cell">` looks
+     identical to a `<span class="activity-cell">` — the strip mixes both
+     (clickable cells become buttons; pre_account placeholders stay spans). */
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  padding: 0;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  color: #18181b;
+  user-select: none;
+}
+
+button.activity-cell {
+  cursor: pointer;
+}
+
+button.activity-cell:hover {
+  filter: brightness(0.92);
+}
+
+button.activity-cell:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 1px;
+}
+
+/* Months strictly before the account's first transaction: render an
+   invisible placeholder so the strip keeps the same column width across
+   accounts but the cell appears absent to the user. */
+.activity-cell--pre_account {
+  background: transparent;
+  border-color: transparent;
+  color: transparent;
+  pointer-events: none;
+}
+
+.activity-cell--no_data {
+  background: #d4d4d8;
+}
+
+.activity-cell--complete {
+  background: #22c55e;
+}
+
+/* Anchor border: month is "closed" — there is later data in the chain.
+   The border encodes anchor state independently of the fill color. */
+.activity-cell--anchored {
+  border-color: #18181b;
+}
+
+/* Error fill: month contains a balance-chain break. Overrides any
+   data-completeness fill so the broken month stands out regardless of
+   how many transactions are in it. The anchor border (if present) is
+   still visible on top. White text keeps the month label legible on
+   the red background. */
+.activity-cell--error {
+  background: #dc2626;
+  color: #ffffff;
+}
+
+/* Dashed style is applied independently of color: the line can be
+   anchored-black or transparent (current month). */
+.activity-cell--dashed {
+  border-style: dashed;
+}
+
+/* Summary-row modifiers must come after the base `.activity-cell` rule
+   above so their `background: transparent` overrides the base's grey
+   fill (CSS cascades by document order at equal specificity). */
+.activity-cell--summary {
+  background: transparent;
+  border: 1px solid #e4e4e7;
+  font-size: 10px;
+  font-weight: 500;
+  color: #3f3f46;
+}
+
+/* "No transactions of this direction this month" — render as a fully
+   transparent placeholder. The user reads visibility as "there is data"
+   so showing a faint outlined slot here would falsely suggest activity. */
+.activity-cell--summary--empty {
+  color: transparent;
+  border-color: transparent;
+  background: transparent;
+}
+
+/* pre_account placeholder in summary rows: invisible but still takes up
+   the 39px column footprint, so percent cells on real months align with
+   the cell columns above. Mirrors the months row's `--pre_account` style. */
+.activity-cell--summary-pre {
+  border-color: transparent;
+  background: transparent;
+}
+
+/* Account transactions layout */
+
+.account-layout {
+  display: grid;
+  grid-template-columns: 1fr 260px;
+  gap: 20px;
+  align-items: start;
+}
+
+.txns-wrap {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.batches-panel {
+  background: #fff;
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+  padding: 12px 14px;
+}
+
+.batches-panel h3 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #52525b;
+}
+
+.export-range {
+  display: flex;
+  gap: 16px;
+  margin: 4px 0 8px;
+}
+
+.export-actions {
+  margin: 12px 0;
+}
+
+.batches-panel ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.batches-panel li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #f1f1f4;
+  font-size: 12px;
+}
+
+.batches-panel li:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.batch-time {
+  font-weight: 600;
+  color: #18181b;
+  font-size: 13px;
+}
+
+.batch-filename {
+  color: #52525b;
+  word-break: break-all;
+}
+
+.batch-meta {
+  color: #9ca3af;
+}
+
+.batches-panel button {
+  margin-top: 6px;
+  align-self: flex-start;
+  font-size: 12px;
+  padding: 3px 8px;
+}
+
+.batches-panel .empty {
+  color: #9ca3af;
+  font-size: 13px;
+}
+
+.validation-warning {
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: 4px;
+  color: #78350f;
+  font-size: 13px;
+}
+
+/* Modal */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 100;
+}
+
+.modal {
+  position: fixed;
+  top: 12px;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #fff;
+  border-radius: 6px;
+  width: min(800px, 90vw);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+  z-index: 101;
+}
+
+.modal--wide {
+  width: min(1400px, 98vw);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e4e4e7;
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.modal-body {
+  padding: 16px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.modal-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px 16px 0;
+  border-bottom: 1px solid #e4e4e7;
+}
+
+.modal-tab-button {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 8px 14px;
+  margin-bottom: -1px;
+  font: inherit;
+  color: #52525b;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.1s ease, border-color 0.1s ease;
+}
+
+.modal-tab-button:hover {
+  color: #18181b;
+}
+
+.modal-tab-button.active {
+  color: #18181b;
+  font-weight: 500;
+  border-bottom-color: #1f2937;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid #e4e4e7;
+}
+
+.modal-footer-left {
+  margin-right: auto;
+}
+
+/* Activity-strip legend modal: a how-to-read reference accessible from
+   the filter-bar info button on the Accounts page. Shows real
+   .activity-cell samples next to a description for each fill state and
+   border modifier so users can map the screenshot they're looking at
+   onto the strip in the table. */
+.modal--legend {
+  width: min(560px, 90vw);
+}
+
+.legend-intro {
+  margin: 0;
+  font-size: 13px;
+  color: #52525b;
+  line-height: 1.45;
+}
+
+.legend-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.legend-section h4 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #71717a;
+}
+
+.legend-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.legend-list li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Wraps the sample cell so the pre_account (transparent) variant still
+   has a faint outline indicating "this is a cell". Other variants
+   benefit from the wrapper too — it gives them a consistent column
+   width so descriptions align vertically. */
+.legend-cell-frame {
+  flex-shrink: 0;
+  width: 41px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed transparent;
+  border-radius: 3px;
+}
+
+.legend-list li:first-child .legend-cell-frame {
+  border-color: #d4d4d8;
+}
+
+.legend-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.legend-text strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: #18181b;
+}
+
+.legend-text span {
+  font-size: 12px;
+  color: #52525b;
+  line-height: 1.4;
+}
+
+.delete-confirm {
+  margin-top: 16px;
+  padding: 10px 12px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 4px;
+  color: #7f1d1d;
+  font-size: 13px;
+}
+
+.delete-confirm-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+:root[data-theme="dark"] .delete-confirm {
+    background: #3f1f1f;
+    border-color: #7f1d1d;
+    color: #fca5a5;
+  }
+
+.merge-confirm {
+  margin-top: 16px;
+  padding: 10px 12px;
+  background: #f4f4f5;
+  border: 1px solid #e4e4e7;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.merge-confirm p {
+  margin: 0 0 8px;
+}
+
+.merge-confirm select {
+  width: 100%;
+}
+
+.merge-confirm-effects {
+  margin: 10px 0 0;
+  padding-left: 18px;
+}
+
+:root[data-theme="dark"] .merge-confirm {
+  background: #27272a;
+  border-color: #3f3f46;
+}
+
+.import-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 16px;
+  margin-bottom: 12px;
+}
+
+.import-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.import-field span {
+  font-weight: 500;
+}
+
+.import-field select,
+.import-field input {
+  padding: 6px 8px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background: #ffffff;
+  font: inherit;
+  color: inherit;
+}
+
+/* Password-style masking for a type="text" input (see the PDF password field
+   in ImportDialog): avoids the browser's save-password prompt. */
+.masked-input {
+  -webkit-text-security: disc;
+}
+
+.import-method {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  align-items: center;
+  padding: 8px 12px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.import-method legend {
+  font-weight: 500;
+  padding: 0 4px;
+}
+
+.import-method label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.import-method-disabled {
+  color: #71717a;
+  cursor: not-allowed;
+}
+
+.import-or {
+  margin: 12px 0 6px;
+  font-weight: 500;
+  font-size: 13px;
+  color: #52525b;
+}
+
+.import-paste {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  padding: 8px 10px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background: #ffffff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  resize: none;
+}
+
+.export-section {
+  padding: 4px 0;
+}
+
+.export-section + .export-section {
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid #e4e4e7;
+}
+
+.export-section h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #52525b;
+}
+
+.update-result-breakdown {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: #52525b;
+}
+
+.file-input-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #f4f4f5;
+  border: 1px dashed #d4d4d8;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.file-input-label input {
+  display: none;
+}
+
+.preview-table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid #e4e4e7;
+  border-radius: 4px;
+}
+
+.preview-table-wrap table {
+  border: 0;
+  border-radius: 0;
+}
+
+.issue-filter-chips {
+  margin-bottom: 4px;
+}
+
+.row-issue {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.row-issue--error {
+  color: #b91c1c;
+}
+
+.row-issue--warn {
+  color: #b45309;
+}
+
+.row-issue + .row-issue {
+  margin-top: 2px;
+}
+
+:root[data-theme="dark"] .row-issue--error {
+    color: #fca5a5;
+  }
+
+:root[data-theme="dark"] .row-issue--warn {
+    color: #fcd34d;
+  }
+
+.hint {
+  font-size: 12px;
+  color: #71717a;
+  margin: 8px 0;
+}
+
+.error {
+  color: #b91c1c;
+  font-size: 13px;
+  background: #fef2f2;
+  padding: 6px 10px;
+  border-radius: 4px;
+  border: 1px solid #fecaca;
+  margin: 8px 0;
+}
+
+.ok {
+  color: #15803d;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.errors-block {
+  margin: 8px 0;
+  padding: 8px 12px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.errors-block ul {
+  margin: 6px 0 0;
+  padding-left: 20px;
+}
+
+.errors-block li {
+  margin-bottom: 2px;
+}
+
+code {
+  padding: 1px 4px;
+  background-color: rgba(0, 0, 0, 0.06);
+  border-radius: 3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+
+/* Tabs navigation */
+
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 7px;
+  background: #ffffff;
+  border: 1px solid #d4d4d8;
+  border-radius: 8px;
+}
+
+.tabs-main {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: auto;
+}
+
+.tabs-aside {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tab-button {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+
+.tab-button:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.tab-button.active {
+  background: #1f2937;
+  color: #ffffff;
+  font-weight: 500;
+}
+
+.tab-button.active:hover {
+  background: #1f2937;
+}
+
+.tab-button--report {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Per-tab toolbar (controls under the tab bar, scoped to the active tab) */
+
+.tab-toolbar {
+  padding: 10px 12px;
+  margin-bottom: 7px;
+  background: #ffffff;
+  border: 1px solid #d4d4d8;
+  border-radius: 8px;
+}
+
+.tab-toolbar > .account-form {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  margin-bottom: 0;
+}
+
+/* Transactions filter bar */
+
+.filter-bar {
+  position: relative;
+  margin-bottom: 7px;
+  background: #ffffff;
+  border: 1px solid #d4d4d8;
+  border-radius: 8px;
+}
+
+.filter-bar-handle {
+  display: block;
+  width: 100%;
+  padding: 4px 0;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  border-radius: 8px 8px 0 0;
+  transition: background 0.1s ease;
+}
+
+.filter-bar-handle:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.filter-bar--collapsed .filter-bar-handle {
+  border-radius: 8px;
+}
+
+.filter-bar-handle-grip {
+  display: block;
+  margin: 0 auto;
+  width: 36px;
+  height: 3px;
+  background: #d4d4d8;
+  border-radius: 2px;
+}
+
+.filter-bar-handle:hover .filter-bar-handle-grip {
+  background: #a1a1aa;
+}
+
+.filter-bar-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  align-items: flex-end;
+  padding: 4px 16px 12px;
+}
+
+.filter-bar-action {
+  margin-left: auto;
+  height: 32px;
+}
+
+/* The Actions menu sits at the right edge — open its popover leftwards so it
+   stays on screen. */
+.filter-bar-action .bulk-actions-popover {
+  left: auto;
+  right: 0;
+}
+
+.filter-bar-info {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid #d4d4d8;
+  border-radius: 50%;
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  font-style: italic;
+  color: #52525b;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+
+.filter-bar-info:hover {
+  background: #f1f1f4;
+  color: #18181b;
+  border-color: #a1a1aa;
+}
+
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #52525b;
+  min-width: 0;
+}
+
+.filter-field > span {
+  font-weight: 500;
+}
+
+.filter-field input[type="date"],
+.filter-field select,
+.filter-field .dropdown-button {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 32px;
+  padding: 0 28px 0 10px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background-color: #ffffff;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%2371717a' d='M5 6L0 0h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 10px 6px;
+  font: inherit;
+  font-size: 13px;
+  color: inherit;
+  min-width: 180px;
+  box-sizing: border-box;
+  text-align: left;
+  cursor: pointer;
+}
+
+.filter-field input[type="date"]:focus,
+.filter-field select:focus,
+.filter-field .dropdown-button:focus {
+  outline: none;
+  border-color: #6366f1;
+}
+
+.filter-field input[type="date"]::-webkit-calendar-picker-indicator {
+  opacity: 0;
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+
+.filter-field input[type="date"] {
+  position: relative;
+}
+
+:root[data-theme="dark"] .filter-bar {
+    background: #27272a;
+    border-color: #3f3f46;
+  }
+
+.amount-filter {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.filter-field .amount-filter select {
+  min-width: 0;
+  width: 86px;
+  padding-right: 22px;
+  background-position: right 8px center;
+}
+
+.amount-filter input {
+  height: 32px;
+  width: 92px;
+  padding: 0 8px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background: #ffffff;
+  font: inherit;
+  font-size: 13px;
+  color: inherit;
+  box-sizing: border-box;
+  font-variant-numeric: tabular-nums;
+}
+
+.amount-filter input:focus {
+  outline: none;
+  border-color: #6366f1;
+}
+
+.amount-filter-clear {
+  height: 28px;
+}
+
+:root[data-theme="dark"] .amount-filter input {
+  background: #18181b;
+  border-color: #3f3f46;
+  color: #f4f4f5;
+}
+
+:root[data-theme="dark"] .filter-field {
+    color: #a1a1aa;
+  }
+
+:root[data-theme="dark"] .filter-field input[type="date"],
+:root[data-theme="dark"] .filter-field select {
+    background: #18181b;
+    border-color: #3f3f46;
+    color: inherit;
+  }
+
+:root[data-theme="dark"] .filter-bar-info {
+    border-color: #3f3f46;
+    color: #a1a1aa;
+  }
+
+:root[data-theme="dark"] .filter-bar-info:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: #f4f4f5;
+    border-color: #52525b;
+  }
+
+/* Dropdown (used for multi-select account filter) */
+
+.dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+.dropdown-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 200px;
+  padding: 6px 10px;
+  font: inherit;
+  color: inherit;
+  background: #ffffff;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.dropdown-button:hover:not(:disabled) {
+  border-color: #a1a1aa;
+}
+
+.dropdown-button:focus {
+  outline: none;
+  border-color: #6366f1;
+}
+
+.dropdown-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.dropdown-button-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dropdown-button-caret {
+  color: #71717a;
+  font-size: 11px;
+}
+
+.dropdown-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  min-width: 100%;
+  padding: 4px;
+  background: #ffffff;
+  border: 1px solid #d4d4d8;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+}
+
+.dropdown-list {
+  /* Tall enough for the Transactions Filter (three groups) without scrolling. */
+  max-height: min(480px, 60vh);
+  overflow-y: auto;
+}
+
+.dropdown-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 4px 0;
+}
+
+.dropdown-apply {
+  font-size: 12px;
+  padding: 4px 12px;
+}
+
+.dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 13px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dropdown-item:hover {
+  background: #f4f4f5;
+}
+
+.dropdown-item input[type="checkbox"] {
+  margin: 0;
+}
+
+.dropdown-divider {
+  height: 1px;
+  background: #e4e4e7;
+  margin: 4px 0;
+}
+
+:root[data-theme="dark"] .dropdown-button {
+    background: #18181b;
+    border-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .dropdown-button:hover:not(:disabled) {
+    border-color: #71717a;
+  }
+
+:root[data-theme="dark"] .dropdown-panel {
+    background: #27272a;
+    border-color: #3f3f46;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  }
+
+:root[data-theme="dark"] .dropdown-item:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+:root[data-theme="dark"] .dropdown-divider {
+    background: #3f3f46;
+  }
+
+/* Account chips (multi-select filter on the Transactions tab) */
+
+.account-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip {
+  appearance: none;
+  background: #ffffff;
+  border: 1px solid #d4d4d8;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition: background 0.1s ease, border-color 0.1s ease;
+}
+
+.chip:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.chip.active {
+  background: #1f2937;
+  color: #ffffff;
+  border-color: #1f2937;
+}
+
+/* Settings */
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+}
+
+.settings-row label {
+  font-weight: 500;
+  min-width: 200px;
+}
+
+.settings-row select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 6px 32px 6px 10px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background-color: #ffffff;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%2352525b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.settings-section {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #e4e4e7;
+  max-width: 720px;
+}
+
+.settings-section--danger {
+  border-top-color: #fecaca;
+}
+
+.settings-section-title {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.settings-section--danger .settings-section-title {
+  color: #b91c1c;
+}
+
+.danger-confirm {
+  margin-top: 8px;
+  padding: 12px 14px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  color: #7f1d1d;
+}
+
+.danger-confirm p {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.danger-confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.danger-confirm h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.settings-actions-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-data-dir-info {
+  margin: 8px 0 12px;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 12px;
+  row-gap: 4px;
+  font-size: 13px;
+}
+
+.settings-data-dir-info dt {
+  font-weight: 600;
+  color: #4b5563;
+}
+
+.settings-data-dir-info dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+.settings-data-dir-info code {
+  background: #f3f4f6;
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 12px;
+}
+
+.settings-hint--success {
+  color: #15803d;
+}
+
+:root[data-theme="dark"] .settings-data-dir-info dt {
+    color: #d4d4d8;
+  }
+
+:root[data-theme="dark"] .settings-data-dir-info code {
+    background: #27272a;
+    color: #f4f4f5;
+  }
+
+:root[data-theme="dark"] .settings-hint--success {
+    color: #4ade80;
+  }
+
+:root[data-theme="dark"] .settings-section {
+    border-top-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .settings-section--danger {
+    border-top-color: #7f1d1d;
+  }
+
+:root[data-theme="dark"] .settings-section--danger .settings-section-title {
+    color: #fca5a5;
+  }
+
+:root[data-theme="dark"] .danger-confirm {
+    background: #3f1f1f;
+    border-color: #7f1d1d;
+    color: #fca5a5;
+  }
+
+/* Account detail batches panel — full-width inside detail view */
+
+.batches-panel--full {
+  width: 100%;
+}
+
+/* Dark mode */
+
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    color: #e4e4e7;
+    background-color: #18181b;
+  }
+
+:root[data-theme="dark"] .account-form,
+:root[data-theme="dark"] table,
+:root[data-theme="dark"] .batches-panel,
+:root[data-theme="dark"] .modal {
+    background: #27272a;
+    border-color: #3f3f46;
+  }
+
+/* Typed values must stand out from the muted labels and placeholders:
+   form fields otherwise inherit the grey label colour. */
+:root[data-theme="dark"] input,
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] textarea {
+    color: #f4f4f5;
+  }
+
+:root[data-theme="dark"] .account-form input,
+:root[data-theme="dark"] .account-form select,
+:root[data-theme="dark"] .account-form textarea {
+    background: #18181b;
+    border-color: #3f3f46;
+    color: #f4f4f5;
+  }
+
+:root[data-theme="dark"] input::placeholder,
+:root[data-theme="dark"] textarea::placeholder {
+    color: #71717a;
+  }
+
+:root[data-theme="dark"] th {
+    background: #1f1f22;
+    color: #a1a1aa;
+  }
+
+:root[data-theme="dark"] th,
+:root[data-theme="dark"] td {
+    border-bottom-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] tbody tr.invalid {
+    background: #3f1f1f;
+  }
+
+:root[data-theme="dark"] tbody tr.warning {
+    background: #3a2a06;
+  }
+
+:root[data-theme="dark"] td.empty,
+:root[data-theme="dark"] .batches-panel .empty,
+:root[data-theme="dark"] .hint {
+    color: #71717a;
+  }
+
+:root[data-theme="dark"] .btn-primary,
+:root[data-theme="dark"] .account-form button {
+    background: #3b82f6;
+  }
+
+:root[data-theme="dark"] .btn-primary:hover:not(:disabled),
+:root[data-theme="dark"] .account-form button:hover:not(:disabled) {
+    background: #2563eb;
+  }
+
+:root[data-theme="dark"] .btn-ghost {
+    border-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .btn-ghost:hover {
+    background: #27272a;
+  }
+
+:root[data-theme="dark"] .btn-danger-ghost {
+    color: #fca5a5;
+    border-color: #7f1d1d;
+  }
+
+:root[data-theme="dark"] .btn-danger-ghost:hover {
+    background: #3f1f1f;
+  }
+
+:root[data-theme="dark"] .icon-btn {
+    color: #a1a1aa;
+  }
+
+:root[data-theme="dark"] .icon-btn:hover {
+    color: #f4f4f5;
+  }
+
+:root[data-theme="dark"] .batch-time {
+    color: #f4f4f5;
+  }
+
+:root[data-theme="dark"] .batch-filename {
+    color: #a1a1aa;
+  }
+
+:root[data-theme="dark"] .batches-panel li {
+    border-bottom-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .modal-header,
+:root[data-theme="dark"] .modal-footer,
+:root[data-theme="dark"] .modal-tabs {
+    border-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .modal-tab-button {
+    color: #a1a1aa;
+  }
+
+:root[data-theme="dark"] .modal-tab-button:hover {
+    color: #f4f4f5;
+  }
+
+:root[data-theme="dark"] .modal-tab-button.active {
+    color: #f4f4f5;
+    border-bottom-color: #f4f4f5;
+  }
+
+:root[data-theme="dark"] .activity-cell--no_data {
+    background: #3f3f46;
+    color: #d4d4d8;
+  }
+
+:root[data-theme="dark"] .activity-cell--anchored {
+    border-color: #d4d4d8;
+  }
+
+:root[data-theme="dark"] .activity-strip-row-label {
+    color: #a1a1aa;
+  }
+
+:root[data-theme="dark"] .activity-strip-row-label--main {
+    color: #f4f4f5;
+  }
+
+:root[data-theme="dark"] .activity-cell--summary {
+    border-color: #3f3f46;
+    /* Filled summary cells carry the light green heat-map tint (a near-white
+       #f4f4f5 → green-300 #86efac ramp), so the percent label must stay dark
+       to read on them; empty cells render no text, so dark is always safe. */
+    color: #18181b;
+  }
+
+:root[data-theme="dark"] .activity-cell--summary--empty {
+    color: transparent;
+    border-color: transparent;
+    background: transparent;
+  }
+
+:root[data-theme="dark"] .activity-strip-years {
+    color: #a1a1aa;
+  }
+
+:root[data-theme="dark"] .activity-strip-empty {
+    color: #a1a1aa;
+  }
+
+:root[data-theme="dark"] .activity-scroll-viewport:hover {
+    scrollbar-color: rgba(212, 212, 216, 0.35) transparent;
+  }
+
+:root[data-theme="dark"] .activity-scroll-viewport::-webkit-scrollbar-thumb {
+    background: rgba(212, 212, 216, 0.35);
+  }
+
+:root[data-theme="dark"] .last-txn-date {
+    color: #a1a1aa;
+  }
+
+:root[data-theme="dark"] .file-input-label {
+    background: #18181b;
+    border-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .export-section + .export-section {
+    border-top-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .update-result-breakdown {
+    color: #a1a1aa;
+  }
+
+:root[data-theme="dark"] .preview-table-wrap {
+    border-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .validation-warning {
+    background: #422006;
+    border-color: #854d0e;
+    color: #fde68a;
+  }
+
+:root[data-theme="dark"] .error {
+    color: #fca5a5;
+    background: #3f1f1f;
+    border-color: #7f1d1d;
+  }
+
+:root[data-theme="dark"] .ok {
+    color: #86efac;
+    background: #14291a;
+    border-color: #166534;
+  }
+
+:root[data-theme="dark"] .errors-block {
+    background: #3f1f1f;
+    border-color: #7f1d1d;
+    color: #fca5a5;
+  }
+
+:root[data-theme="dark"] code {
+    background-color: rgba(255, 255, 255, 0.1);
+  }
+
+:root[data-theme="dark"] .tabs,
+:root[data-theme="dark"] .tab-toolbar {
+    background: #27272a;
+    border-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .filter-bar-handle:hover {
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+:root[data-theme="dark"] .filter-bar-handle-grip {
+    background: #3f3f46;
+  }
+
+:root[data-theme="dark"] .filter-bar-handle:hover .filter-bar-handle-grip {
+    background: #71717a;
+  }
+
+:root[data-theme="dark"] .tab-button:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+:root[data-theme="dark"] .tab-button.active {
+    background: #e4e4e7;
+    color: #18181b;
+  }
+
+:root[data-theme="dark"] .tab-button.active:hover {
+    background: #e4e4e7;
+  }
+
+:root[data-theme="dark"] .chip {
+    background: #27272a;
+    border-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .chip:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+:root[data-theme="dark"] .chip.active {
+    background: #e4e4e7;
+    color: #18181b;
+    border-color: #e4e4e7;
+  }
+
+:root[data-theme="dark"] .settings-row select {
+    background: #18181b;
+    border-color: #3f3f46;
+    color: inherit;
+  }
+
+:root[data-theme="dark"] .import-field select,
+:root[data-theme="dark"] .import-field input,
+:root[data-theme="dark"] .import-method,
+:root[data-theme="dark"] .import-paste {
+    background: #18181b;
+    border-color: #3f3f46;
+    color: inherit;
+  }
+
+:root[data-theme="dark"] .import-method-disabled {
+    color: #52525b;
+  }
+
+/* Categories */
+
+.categories-section {
+  margin-bottom: 32px;
+}
+
+.categories-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 12px;
+}
+
+.categories-section-header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.categories-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: #fff;
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.categories-tree--nested {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  margin-left: 24px;
+}
+
+.categories-node + .categories-node {
+  border-top: 1px solid #f1f1f4;
+}
+
+.categories-tree--nested .categories-node {
+  border-top: 0;
+}
+
+.categories-node-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+}
+
+.categories-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  flex-shrink: 0;
+}
+
+.categories-label {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.categories-name {
+  font-size: 14px;
+}
+
+.categories-description {
+  font-size: 12px;
+  color: #71717a;
+  line-height: 1.3;
+}
+
+.categories-actions {
+  display: flex;
+  gap: 4px;
+  margin-right: auto;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.categories-node-row:hover .categories-actions,
+.categories-action-btn:focus-visible {
+  opacity: 1;
+}
+
+.categories-action-btn {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid #d4d4d8;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.categories-action-btn:hover {
+  background: #f1f1f4;
+}
+
+.btn-sm {
+  font-size: 12px;
+  padding: 3px 8px;
+}
+
+.categories-color-field {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: #52525b;
+}
+
+.categories-color-mode {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.categories-color-auto {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.categories-color-auto .hint {
+  margin: 0;
+}
+
+.categories-color-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.categories-color-tab,
+.account-form .categories-color-tab {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.account-form .categories-color-tab:hover:not(:disabled) {
+  background: #f4f4f5;
+}
+
+.categories-color-tab.is-active,
+.account-form .categories-color-tab.is-active,
+.account-form .categories-color-tab.is-active:hover:not(:disabled) {
+  background: #1f2937;
+  color: #fff;
+  border-color: #1f2937;
+}
+
+.categories-palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.categories-swatch-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  border: 2px solid transparent;
+  padding: 0;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+
+.categories-swatch-btn.is-selected {
+  border-color: #1f2937;
+  box-shadow: 0 0 0 1px #fff inset;
+}
+
+:root[data-theme="dark"] .categories-tree {
+    background: #18181b;
+    border-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .categories-node + .categories-node {
+    border-top-color: #27272a;
+  }
+
+:root[data-theme="dark"] .categories-action-btn {
+    border-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .categories-action-btn:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+:root[data-theme="dark"] .account-edit-btn {
+    border-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .account-edit-btn:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+:root[data-theme="dark"] .legend-intro,
+:root[data-theme="dark"] .legend-text span {
+    color: #a1a1aa;
+  }
+
+:root[data-theme="dark"] .legend-section h4 {
+    color: #a1a1aa;
+  }
+
+:root[data-theme="dark"] .legend-text strong {
+    color: #f4f4f5;
+  }
+
+:root[data-theme="dark"] .legend-list li:first-child .legend-cell-frame {
+    border-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .account-form .categories-color-tab:hover:not(:disabled) {
+    background: #27272a;
+  }
+
+:root[data-theme="dark"] .categories-color-tab {
+    border-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .categories-color-tab.is-active,
+:root[data-theme="dark"] .account-form .categories-color-tab.is-active,
+:root[data-theme="dark"] .account-form .categories-color-tab.is-active:hover:not(:disabled) {
+    background: #e4e4e7;
+    color: #18181b;
+    border-color: #e4e4e7;
+  }
+
+:root[data-theme="dark"] .categories-swatch-btn {
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1);
+  }
+
+:root[data-theme="dark"] .categories-swatch-btn.is-selected {
+    border-color: #e4e4e7;
+    box-shadow: 0 0 0 1px #18181b inset;
+  }
+
+/* Transaction categories cell */
+
+.txn-categories-cell-host {
+  padding: 0;
+  vertical-align: middle;
+  position: relative;
+}
+
+.txn-categories-cell {
+  display: flex;
+  position: relative;
+  height: 28px;
+  min-height: 28px;
+  border-radius: 4px;
+  overflow: hidden;
+  cursor: pointer;
+  background: #f4f4f5;
+}
+
+.txn-categories-cell--empty {
+  justify-content: center;
+  align-items: center;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.txn-categories-empty-label {
+  user-select: none;
+}
+
+.txn-categories-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding: 0 6px;
+  font-size: 12px;
+  color: #fff;
+  text-shadow: 0 0 1px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.txn-categories-bar-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.txn-categories-bar--more {
+  background: #71717a;
+}
+
+.txn-categories-bar--uncategorized {
+  background:
+    repeating-linear-gradient(
+      45deg,
+      #d4d4d8,
+      #d4d4d8 4px,
+      #e4e4e7 4px,
+      #e4e4e7 8px
+    );
+  color: transparent;
+}
+
+.txn-categories-edit-btn {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.8);
+  font-size: 12px;
+  cursor: pointer;
+  color: #1f2937;
+  opacity: 0;
+  transition: opacity 0.1s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.txn-categories-cell:hover .txn-categories-edit-btn {
+  opacity: 1;
+}
+
+.txn-categories-tooltip {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 50;
+  background: #fff;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  padding: 8px 10px;
+  min-width: 220px;
+  max-width: 320px;
+  font-size: 12px;
+  color: #1a1a1a;
+  pointer-events: none;
+}
+
+.txn-categories-tooltip-row {
+  display: grid;
+  grid-template-columns: 14px 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 2px 0;
+}
+
+.txn-categories-tooltip-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.txn-categories-tooltip-amount {
+  font-variant-numeric: tabular-nums;
+  color: #52525b;
+}
+
+.txn-categories-tooltip-percent {
+  font-variant-numeric: tabular-nums;
+  color: #71717a;
+  min-width: 42px;
+  text-align: right;
+}
+
+.txn-categories-error {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  z-index: 60;
+}
+
+/* Category picker popover */
+
+.category-picker-popover {
+  z-index: 100;
+  background: #fff;
+  border: 1px solid #d4d4d8;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.category-picker-search {
+  padding: 8px;
+  border-bottom: 1px solid #e4e4e7;
+}
+
+.category-picker-search input {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 13px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background: #fff;
+  color: inherit;
+  font-family: inherit;
+}
+
+.category-picker-search input:focus {
+  outline: none;
+  border-color: #6366f1;
+}
+
+.category-picker-body {
+  flex: 1;
+  overflow: auto;
+  padding: 4px;
+}
+
+.category-picker-tree,
+.category-picker-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.category-picker-tree--nested {
+  margin-left: 16px;
+}
+
+.category-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 6px;
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  text-align: left;
+  cursor: pointer;
+  font-size: 13px;
+  color: inherit;
+  font-family: inherit;
+}
+
+.category-picker-row:hover:not(:disabled) {
+  background: #f4f4f5;
+}
+
+.category-picker-row.is-excluded {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.category-picker-row--clear {
+  color: #b91c1c;
+  margin: 4px 6px 0;
+  width: calc(100% - 12px);
+  border-top: 1px dashed #fecaca;
+  padding-top: 8px;
+  border-radius: 0;
+}
+
+.category-picker-row--clear:hover:not(:disabled) {
+  background: #fef2f2;
+}
+
+.categories-swatch--clear {
+  background: transparent;
+  border: 1px dashed #b91c1c;
+  position: relative;
+}
+
+.categories-swatch--clear::before,
+.categories-swatch--clear::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 7px;
+  border-top: 1.5px solid #b91c1c;
+  transform-origin: center;
+}
+
+.categories-swatch--clear::before {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.categories-swatch--clear::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+:root[data-theme="dark"] .category-picker-row--clear {
+    color: #fca5a5;
+    border-top-color: #7f1d1d;
+  }
+
+:root[data-theme="dark"] .category-picker-row--clear:hover:not(:disabled) {
+    background: #450a0a;
+  }
+
+:root[data-theme="dark"] .categories-swatch--clear {
+    border-color: #fca5a5;
+  }
+
+:root[data-theme="dark"] .categories-swatch--clear::before,
+:root[data-theme="dark"] .categories-swatch--clear::after {
+    border-top-color: #fca5a5;
+  }
+
+.category-picker-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Distribution modal */
+
+.modal--distribution {
+  width: 640px;
+  max-width: 96vw;
+}
+
+.distribution-modal-total {
+  margin-left: auto;
+  margin-right: 12px;
+  font-size: 14px;
+  color: #52525b;
+}
+
+.distribution-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.distribution-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid #e4e4e7;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.distribution-row {
+  display: grid;
+  grid-template-columns: auto 14px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+}
+
+.distribution-row + .distribution-row {
+  border-top: 1px solid #f1f1f4;
+}
+
+.distribution-row--uncategorized {
+  background: #fafafa;
+}
+
+.distribution-reorder {
+  display: flex;
+  gap: 2px;
+}
+
+.distribution-reorder--placeholder {
+  visibility: hidden;
+}
+
+.categories-swatch--uncategorized {
+  background:
+    repeating-linear-gradient(
+      45deg,
+      #d4d4d8,
+      #d4d4d8 3px,
+      #e4e4e7 3px,
+      #e4e4e7 6px
+    );
+}
+
+.distribution-name {
+  font-size: 14px;
+}
+
+.distribution-section-title {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: #52525b;
+}
+
+.distribution-sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.distribution-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid #e4e4e7;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.distribution-slider--uncategorized {
+  background: #fafafa;
+}
+
+.distribution-slider-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.distribution-slider-name {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.distribution-scale-top,
+.distribution-scale-bottom {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #71717a;
+}
+
+.distribution-range {
+  width: 100%;
+  margin: 4px 0;
+}
+
+.distribution-inputs {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.distribution-inputs label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #52525b;
+}
+
+.distribution-inputs input {
+  width: 90px;
+  padding: 4px 6px;
+  border: 1px solid #d4d4d8;
+  border-radius: 3px;
+  background: #fff;
+  font-size: 13px;
+  font-family: inherit;
+  color: inherit;
+}
+
+.distribution-inputs input:focus {
+  outline: none;
+  border-color: #6366f1;
+}
+
+:root[data-theme="dark"] .txn-categories-cell {
+    background: #27272a;
+  }
+
+:root[data-theme="dark"] .txn-categories-bar--more {
+    background: #52525b;
+  }
+
+:root[data-theme="dark"] .txn-categories-bar--uncategorized {
+    background:
+      repeating-linear-gradient(
+        45deg,
+        #3f3f46,
+        #3f3f46 4px,
+        #52525b 4px,
+        #52525b 8px
+      );
+  }
+
+:root[data-theme="dark"] .txn-categories-edit-btn {
+    background: rgba(24, 24, 27, 0.85);
+    color: #e4e4e7;
+  }
+
+:root[data-theme="dark"] .txn-categories-tooltip {
+    background: #18181b;
+    border-color: #3f3f46;
+    color: #f4f4f5;
+  }
+
+:root[data-theme="dark"] .txn-categories-tooltip-amount {
+    color: #a1a1aa;
+  }
+
+:root[data-theme="dark"] .txn-categories-tooltip-percent {
+    color: #71717a;
+  }
+
+:root[data-theme="dark"] .category-picker-popover {
+    background: #18181b;
+    border-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .category-picker-search {
+    border-bottom-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .category-picker-search input {
+    background: #18181b;
+    border-color: #3f3f46;
+    color: inherit;
+  }
+
+:root[data-theme="dark"] .category-picker-row:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+:root[data-theme="dark"] .distribution-list,
+:root[data-theme="dark"] .distribution-slider {
+    background: #18181b;
+    border-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .distribution-row + .distribution-row {
+    border-top-color: #27272a;
+  }
+
+:root[data-theme="dark"] .distribution-row--uncategorized,
+:root[data-theme="dark"] .distribution-slider--uncategorized {
+    background: #1f1f22;
+  }
+
+:root[data-theme="dark"] .distribution-inputs input {
+    background: #18181b;
+    border-color: #3f3f46;
+    color: inherit;
+  }
+
+:root[data-theme="dark"] .categories-swatch--uncategorized {
+    background:
+      repeating-linear-gradient(
+        45deg,
+        #3f3f46,
+        #3f3f46 3px,
+        #52525b 3px,
+        #52525b 6px
+      );
+  }
+
+/* ===== Report builder ===== */
+
+.builder-page {
+  max-width: none;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.builder-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.builder-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.builder-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.builder-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.builder-row > label {
+  min-width: 140px;
+  font-weight: 500;
+}
+
+.builder-row input[type="text"] {
+  flex: 1;
+  max-width: 420px;
+  padding: 6px 10px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  font: inherit;
+  color: inherit;
+  background: #fff;
+}
+
+.builder-row--checkbox {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.builder-row--checkbox label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-weight: 500;
+}
+
+.builder-sections {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+
+.builder-section {
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+  padding: 12px 14px;
+  background: #fafafa;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.builder-section-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #52525b;
+}
+
+.builder-section-empty {
+  margin: 0;
+  color: #71717a;
+  font-size: 12px;
+  font-style: italic;
+}
+
+.builder-tree {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  border: 1px solid #e4e4e7;
+  border-radius: 4px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.builder-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 13px;
+  position: relative;
+  border-radius: 3px;
+  transition: background-color 0.1s ease;
+}
+
+.builder-tree-row:hover {
+  background-color: #f4f4f5;
+}
+
+.builder-tree-row label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  flex: 1;
+  min-width: 0;
+}
+
+.builder-tree-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  margin-left: auto;
+  opacity: 0.6;
+}
+
+.builder-tree-row:hover .builder-tree-actions {
+  opacity: 1;
+}
+
+.builder-tree-arrow {
+  font-size: 14px;
+  font-weight: 700;
+  padding: 2px 10px;
+  line-height: 20px;
+}
+
+.builder-tree-arrow--off {
+  visibility: hidden;
+}
+
+/* Move preview: highlight the gap where the row will land in green. The bar
+   sits half outside the row so it visually lands "between" two rows. */
+.builder-tree-row--preview-before,
+.builder-tree-row--preview-after {
+  position: relative;
+}
+
+.builder-tree-row--preview-before::before,
+.builder-tree-row--preview-after::after {
+  content: "";
+  position: absolute;
+  left: var(--row-indent, 0);
+  right: 0;
+  height: 4px;
+  background: #16a34a;
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.builder-tree-row--preview-before::before {
+  top: -4px;
+}
+
+.builder-tree-row--preview-after::after {
+  bottom: -4px;
+}
+
+.builder-tree-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.builder-tree-swatch--uncat {
+  background:
+    repeating-linear-gradient(
+      45deg,
+      #d4d4d8,
+      #d4d4d8 2px,
+      #f4f4f5 2px,
+      #f4f4f5 4px
+    );
+  border: 1px solid #d4d4d8;
+}
+
+.builder-tree-row--uncat {
+  margin-top: 4px;
+  border-top: 1px dashed #d4d4d8;
+  padding-top: 6px;
+  font-style: italic;
+  color: #71717a;
+}
+
+.builder-tree-name {
+  flex: 1;
+}
+
+.builder-defaults {
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+  padding: 12px 14px;
+  background: #fafafa;
+}
+
+.builder-defaults h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #52525b;
+}
+
+.builder-defaults-grid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.builder-defaults-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #52525b;
+}
+
+.builder-defaults-grid select,
+.builder-defaults-grid input {
+  padding: 6px 10px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background: #fff;
+  font: inherit;
+  color: inherit;
+}
+
+.builder-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.confirm-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.confirm-inline-text {
+  color: #7f1d1d;
+  font-size: 12px;
+}
+
+.confirm-inline--actions {
+  margin-left: 8px;
+}
+
+.settings-hint {
+  margin: 0;
+  color: #71717a;
+  font-size: 12px;
+  line-height: 1.45;
+  max-width: 720px;
+}
+
+/* ===== Settings tabs ===== */
+
+.settings-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid #e4e4e7;
+}
+
+.settings-tab-button {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 8px 14px;
+  margin-bottom: -1px;
+  color: #52525b;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font: inherit;
+  transition: color 0.1s ease, border-color 0.1s ease;
+}
+
+.settings-tab-button:hover {
+  color: #18181b;
+}
+
+.settings-tab-button.active {
+  color: #18181b;
+  font-weight: 500;
+  border-bottom-color: #1f2937;
+}
+
+:root[data-theme="dark"] .settings-tabs {
+  border-bottom-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .settings-tab-button {
+  color: #a1a1aa;
+}
+
+:root[data-theme="dark"] .settings-tab-button:hover,
+:root[data-theme="dark"] .settings-tab-button.active {
+  color: #f4f4f5;
+}
+
+:root[data-theme="dark"] .settings-tab-button.active {
+  border-bottom-color: #f4f4f5;
+}
+
+/* ===== Settings → Currencies ===== */
+
+.currencies-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 24px;
+  align-items: start;
+}
+
+.currencies-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 75vh;
+  overflow-y: auto;
+}
+
+.currency-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: #ffffff;
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+  padding: 10px 12px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  transition: border-color 0.1s ease, background 0.1s ease;
+}
+
+.currency-card:hover {
+  border-color: #a1a1aa;
+}
+
+.currency-card--active {
+  border-color: #1f2937;
+  background: #f4f4f5;
+}
+
+.currency-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.currency-card-code {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.currency-card-symbol {
+  color: #71717a;
+  font-size: 13px;
+}
+
+.currency-card-name {
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+.currency-card-meta {
+  font-size: 11px;
+  color: #71717a;
+  margin-top: 2px;
+}
+
+.currencies-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.currencies-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.currencies-detail-head h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/* ===== Rate weekly table =====
+ *
+ * Grid-based instead of <table>: position:sticky on plain block elements
+ * is rock-solid in WebKit, whereas multi-stop sticky on <th>/<td> is buggy
+ * across versions. The container is the scroll context; header and year
+ * rows stick to its top edge. */
+
+.rate-weeks {
+  --rate-weeks-header-h: 30px;
+  max-height: 70vh;
+  overflow-y: auto;
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+  background: #ffffff;
+  font-size: 11px;
+  /* New stacking context so sticky z-index is contained within the table. */
+  isolation: isolate;
+}
+
+.rate-weeks-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  height: var(--rate-weeks-header-h);
+  background: #ffffff;
+  box-shadow: inset 0 -1px 0 #e4e4e7;
+}
+
+.rate-weeks-header-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-transform: uppercase;
+  font-weight: 500;
+  color: #71717a;
+}
+
+.rate-weeks-year {
+  position: sticky;
+  top: var(--rate-weeks-header-h);
+  z-index: 2;
+  background: #f4f4f5;
+  padding: 6px 8px;
+  font-weight: 600;
+  font-size: 12px;
+  color: #18181b;
+  border-top: 1px solid #d4d4d8;
+  box-shadow: inset 0 -1px 0 #d4d4d8;
+}
+
+.rate-weeks-week {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+}
+
+.rate-weeks-cell {
+  padding: 4px;
+  border-right: 1px solid #f4f4f5;
+  border-bottom: 1px solid #f4f4f5;
+  background: #ffffff;
+  color: #a1a1aa;
+  min-height: 36px;
+}
+
+.rate-weeks-cell:last-child {
+  border-right: none;
+}
+
+.rate-weeks-cell--has-data {
+  background: #ecfdf5;
+  color: #064e3b;
+}
+
+.rate-weeks-cell--off-year {
+  background: #f4f4f5;
+  color: #d4d4d8;
+}
+
+.rate-weeks-cell-date {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.rate-weeks-cell-rate {
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+/* ===== Report view (pivot) ===== */
+
+.report-page {
+  /* Stretch to full window width — pivot tables are wide by nature. */
+  max-width: none;
+  width: 100%;
+  /* Page itself does not scroll — the pivot owns its own scroll so that the
+     table header (and first column) can be sticky relative to it. */
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
+.report-page > .pivot-wrap {
+  /* Hard-bounded height so the inner scroll always activates and the sticky
+     thead has a real scroll container to anchor to. The 200px reserve covers
+     the tab bar (~50), controls block (~70), container padding (24), bottom
+     margins (~12) and the wrap's own border (~2). `height` (not max-height)
+     is intentional: it forces the element size regardless of content. */
+  height: calc(100vh - 200px);
+  overflow: auto;
+  position: relative;
+}
+
+/* The auto-save panel hosts a free-text "name" input that needs to render
+   itself as a regular input, not the date/select look used by the rest of
+   the filter-bar. */
+.report-filter-bar-row input[type="text"] {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background-color: #ffffff;
+  font: inherit;
+  font-size: 13px;
+  color: inherit;
+  min-width: 220px;
+  box-sizing: border-box;
+}
+
+.report-filter-bar-row input[type="text"]:focus {
+  outline: none;
+  border-color: #6366f1;
+}
+
+/* Inline checkbox field inside the filter-bar row — pairs the checkbox and
+   label horizontally and lines them up with the bottom edge of the selects. */
+.filter-field--checkbox {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #18181b;
+}
+
+.filter-field--checkbox input {
+  padding: 0;
+  margin: 0;
+  width: auto;
+}
+
+:root[data-theme="dark"] .filter-field--checkbox {
+    color: #e4e4e7;
+  }
+
+:root[data-theme="dark"] .report-filter-bar-row input[type="text"] {
+    background: #18181b;
+    border-color: #3f3f46;
+    color: inherit;
+  }
+
+/* Single-kind picker modal — one tree fills the body. The modal header
+   already shows the kind in its title, so the inner section's own title is
+   suppressed to avoid duplication, and the section drops its own border
+   since the modal frame already provides one. */
+.categories-picker-modal {
+  width: min(620px, 96vw);
+}
+
+.categories-picker-modal-body {
+  padding: 12px 16px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.categories-picker-modal-body > .builder-section {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.categories-picker-modal-body .builder-section-title {
+  display: none;
+}
+
+.categories-picker-modal-body .builder-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.report-loading {
+  padding: 24px;
+  text-align: center;
+  color: #71717a;
+  font-size: 13px;
+}
+
+.pivot-wrap {
+  overflow: auto;
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.pivot-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+}
+
+.pivot-table th {
+  /* A touch darker than the section header so the column legend reads as the
+     "outermost" frame of the table. */
+  background: #e4e4e7;
+  padding: 8px 12px;
+  text-align: right;
+  font-weight: 600;
+  font-size: 16px;
+  color: #18181b;
+  border-bottom: 1px solid #d4d4d8;
+  white-space: nowrap;
+  /* Sticky header — pinned to the top edge of .pivot-wrap. WebKit only
+     supports position:sticky on table cells (not on <thead>/<tr>), and
+     requires border-collapse:separate (set on .pivot-table). */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.pivot-table th.pivot-name-col {
+  text-align: left;
+  width: 1%;
+  min-width: 240px;
+  /* Top-left corner: pinned both vertically (inherits from th rule above)
+     and horizontally. */
+  left: 0;
+  z-index: 3;
+}
+
+.pivot-table th.pivot-total-col {
+  background: #d4d4d8;
+}
+
+.pivot-row td {
+  padding: 6px 12px;
+  border-bottom: 1px solid #f4f4f5;
+  background: #fff;
+}
+
+/* Highlight the whole row (incl. sticky cells) on hover so it's obvious which
+   category the cursor is over. Section headers have their own treatment, so
+   we exclude them. */
+.pivot-row:not(.pivot-row--section):hover td {
+  background-color: #f4f4f5;
+}
+
+/* First column stays visible during horizontal scroll. */
+.pivot-table tbody td.pivot-name-cell {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+
+.pivot-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+/* Fold/unfold glyphs (▸ ▾) — same size and width across section headers,
+   group rows, and the spacer placeholder so every arrow lines up vertically
+   regardless of nesting depth. Bold + bumped font-size makes them easy to
+   target by eye. */
+.pivot-fold-btn {
+  background: transparent;
+  border: 0;
+  color: #52525b;
+  cursor: pointer;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  width: 22px;
+  text-align: center;
+  padding: 0;
+}
+
+.pivot-fold-btn--section {
+  color: inherit;
+}
+
+.pivot-fold-spacer {
+  display: inline-block;
+  width: 22px;
+}
+
+.pivot-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.pivot-name-text {
+  flex: 1;
+}
+
+.pivot-value-cell {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pivot-value-cell--total {
+  background: #f8fafc;
+  font-weight: 500;
+}
+
+/* Non-zero value/Total cells open the transaction drill-down on click. */
+.pivot-value-cell--clickable {
+  cursor: pointer;
+}
+
+.pivot-value-cell--clickable:hover {
+  background: #eef2ff;
+  box-shadow: inset 0 0 0 1px #c7d2fe;
+}
+
+/* ----- Cell drill-down modal ----- */
+.cell-txns-modal {
+  width: min(1100px, 96vw);
+}
+
+.cell-txns-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.cell-txns-subtitle {
+  font-size: 13px;
+  color: #71717a;
+}
+
+.cell-txns-body {
+  padding: 0;
+}
+
+.cell-txns-empty {
+  padding: 24px 16px;
+  color: #71717a;
+  text-align: center;
+}
+
+.cell-txns-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  table-layout: fixed;
+}
+
+.cell-txns-table th,
+.cell-txns-table td {
+  padding: 6px 12px;
+  border-bottom: 1px solid #f1f5f9;
+  text-align: left;
+}
+
+.cell-txns-table thead th {
+  position: sticky;
+  top: 0;
+  background: #f8fafc;
+  font-weight: 600;
+  color: #52525b;
+  z-index: 1;
+}
+
+.cell-txns-sort {
+  all: unset;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cell-txns-sort:hover,
+.cell-txns-sort.is-active {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.cell-txns-sort:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+/* The mark's room is always reserved, so a header doesn't shift when sorted. */
+.cell-txns-sort-mark {
+  display: inline-block;
+  width: 14px;
+  font-size: 10px;
+  text-align: right;
+}
+
+/* Amount header: the mark goes on the left so the label stays over the numbers. */
+.cell-txns-amount .cell-txns-sort {
+  display: inline-flex;
+  flex-direction: row-reverse;
+  align-items: baseline;
+}
+
+.cell-txns-amount .cell-txns-sort-mark {
+  text-align: left;
+}
+
+.cell-txns-table .cell-txns-amount {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cell-txns-table .cell-txns-date {
+  white-space: nowrap;
+}
+
+.cell-txns-ellipsis {
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cell-txns-footer {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.cell-txns-total {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.cell-txns-row {
+  cursor: pointer;
+}
+
+.cell-txns-row:hover {
+  background: #eef2ff;
+}
+
+/* Category column: the chips pick one category, ✎ opens the split editor.
+   Edits stay pending (row highlighted) until Save. */
+.cell-txns-table .cell-txns-cats {
+  max-width: 0;
+  overflow: hidden;
+  cursor: default;
+}
+
+.cell-txns-table th.cell-txns-cats-col {
+  width: 280px;
+}
+
+.cell-txns-cats-inner {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cell-txns-cats-pick {
+  flex: 1;
+  min-width: 0;
+  padding: 2px;
+  border: 1px dashed transparent;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cell-txns-cats-pick:hover {
+  border-color: #a5b4fc;
+}
+
+.cell-txns-cats-pick:hover .cell-txns-chip {
+  border-color: #6366f1;
+}
+
+.cell-txns-cats-split {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background: transparent;
+  color: #52525b;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.cell-txns-cats-split:hover {
+  border-color: #6366f1;
+  color: #4338ca;
+}
+
+.cell-txns-row.is-pending,
+.cell-txns-row.is-pending:hover {
+  background: #fef9c3;
+}
+
+.cell-txns-footer-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.cell-txns-warning {
+  color: #b45309;
+  font-size: 13px;
+}
+
+.cell-txns-chips {
+  display: flex;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.cell-txns-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 1;
+  min-width: 0;
+  padding: 1px 7px;
+  border: 1px solid #d4d4d8;
+  border-radius: 10px;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cell-txns-chip--uncat {
+  color: #71717a;
+  font-style: italic;
+}
+
+.cell-txns-chip-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+/* ----- Single-transaction view/edit modal ----- */
+/* Date cell in the Transactions table doubles as the modal opener. */
+.txn-open-cell {
+  cursor: pointer;
+}
+
+.txn-open-cell:hover {
+  background: #eef2ff;
+}
+
+.txn-modal {
+  width: min(640px, 94vw);
+}
+
+.txn-modal-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.txn-modal-subtitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #71717a;
+}
+
+.txn-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.txn-badge--correcting {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.txn-badge--cash {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.txn-modal-body {
+  gap: 14px;
+}
+
+.txn-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.txn-field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #52525b;
+}
+
+.txn-field input,
+.txn-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  font: inherit;
+}
+
+.txn-field textarea {
+  resize: vertical;
+}
+
+.txn-field-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.txn-readonly-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border-radius: 6px;
+}
+
+.txn-readonly {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.txn-direction {
+  display: inline-flex;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  overflow: hidden;
+  width: fit-content;
+}
+
+.txn-dir-btn {
+  appearance: none;
+  background: #fff;
+  border: none;
+  padding: 6px 14px;
+  font: inherit;
+  cursor: pointer;
+  color: #52525b;
+}
+
+.txn-dir-btn + .txn-dir-btn {
+  border-left: 1px solid #d4d4d8;
+}
+
+.txn-dir-btn--active {
+  background: #1f2937;
+  color: #fff;
+}
+
+.txn-cats {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.txn-cats-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.txn-cats-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.txn-cat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid #d4d4d8;
+  border-radius: 12px;
+  font-size: 12px;
+}
+
+.txn-cat-chip--uncat {
+  color: #71717a;
+  font-style: italic;
+}
+
+.txn-cat-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.txn-cat-amount {
+  font-variant-numeric: tabular-nums;
+  color: #52525b;
+}
+
+.txn-modal-footer {
+  align-items: center;
+}
+
+.txn-delete-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: auto;
+  font-size: 13px;
+}
+
+.btn-small {
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+/* Sign-colored cells in the Metrics section. Default (zero) keeps the inherited
+   text color so the row reads neutral when nothing happened that period. */
+.pivot-value-cell--positive {
+  color: #16a34a;
+}
+
+.pivot-value-cell--negative {
+  color: #dc2626;
+}
+
+.pivot-row--uncat .pivot-name-text {
+  color: #71717a;
+  font-style: italic;
+}
+
+/* Synthetic group-aggregate row — bold name to make it visibly the "header"
+   for everything indented below it. Background tint distinguishes it from
+   the regular leaf/own rows so the hierarchy reads at a glance. */
+.pivot-row--group .pivot-name-text {
+  font-weight: 600;
+}
+
+.pivot-row--group td {
+  background: #fafafa;
+}
+
+.pivot-row--group:hover td {
+  background: #f4f4f5;
+}
+
+/* Section header row — bold, slightly highlighted, clickable to fold.
+   Larger than the rest of the table so the hierarchy reads at a glance. */
+.pivot-row--section td {
+  background: #f4f4f5;
+  font-weight: 600;
+  font-size: 16px;
+  color: #18181b;
+  border-bottom: 1px solid #e4e4e7;
+}
+
+.pivot-row--section .pivot-value-cell--total {
+  background: #e8edf3;
+}
+
+.pivot-name-cell--section {
+  cursor: pointer;
+  user-select: none;
+}
+
+.pivot-name-cell--section:hover {
+  background: #ececef;
+}
+
+/* Gear icon next to section title — opens the metrics-visibility modal.
+   Lives inside the section header cell, so we hard-stop click propagation in
+   JS to keep its click from also toggling the section fold. */
+.pivot-section-settings-btn {
+  margin-left: 10px;
+  padding: 2px 6px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  opacity: 0.65;
+  border-radius: 4px;
+}
+
+.pivot-section-settings-btn:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.06);
+}
+
+/* Metrics-visibility modal — narrower than the categories picker; just a
+   four-row checkbox list. */
+.metrics-settings-modal {
+  width: 360px;
+  max-width: 90vw;
+}
+
+.metrics-settings-modal-body {
+  padding: 12px 16px;
+}
+
+.metrics-settings-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.metrics-settings-row label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.metrics-settings-row label:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+:root[data-theme="dark"] .builder-section,
+:root[data-theme="dark"] .builder-defaults,
+:root[data-theme="dark"] .report-controls {
+    background: #1f1f23;
+    border-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .builder-tree,
+:root[data-theme="dark"] .builder-row input[type="text"],
+:root[data-theme="dark"] .builder-defaults-grid select,
+:root[data-theme="dark"] .builder-defaults-grid input,
+:root[data-theme="dark"] .report-controls select,
+:root[data-theme="dark"] .report-controls input,
+:root[data-theme="dark"] .pivot-wrap {
+    background: #27272a;
+    border-color: #3f3f46;
+    color: #e4e4e7;
+  }
+
+:root[data-theme="dark"] .builder-section-title,
+:root[data-theme="dark"] .builder-defaults h3,
+:root[data-theme="dark"] .builder-defaults-grid label,
+:root[data-theme="dark"] .report-controls label,
+:root[data-theme="dark"] .builder-section-empty,
+:root[data-theme="dark"] .settings-hint,
+:root[data-theme="dark"] .report-loading {
+    color: #a1a1aa;
+  }
+
+:root[data-theme="dark"] .builder-tree-row:hover {
+    background-color: #2a2a30;
+  }
+
+:root[data-theme="dark"] .builder-tree-row--uncat {
+    border-top-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .pivot-table th {
+    background: #1f1f24;
+    color: #fafafa;
+    border-bottom-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .pivot-table th.pivot-total-col {
+    background: #18181d;
+  }
+
+:root[data-theme="dark"] .pivot-row td {
+    background: #18181b;
+    border-bottom-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .pivot-row:not(.pivot-row--section):hover td {
+    background-color: #2d2d33;
+  }
+
+:root[data-theme="dark"] .pivot-value-cell--total {
+    background: #2d2d33;
+  }
+
+:root[data-theme="dark"] .pivot-row--section td {
+    background: #2d2d33;
+    color: #fafafa;
+    border-bottom-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .pivot-row--section .pivot-value-cell--total {
+    background: #353541;
+  }
+
+:root[data-theme="dark"] .pivot-name-cell--section:hover {
+    background: #353541;
+  }
+
+:root[data-theme="dark"] .pivot-section-settings-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+:root[data-theme="dark"] .metrics-settings-row label:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+:root[data-theme="dark"] .pivot-row--group td {
+    background: #1f1f24;
+  }
+
+:root[data-theme="dark"] .pivot-row--group:hover td {
+    background: #2a2a30;
+  }
+
+:root[data-theme="dark"] .pivot-value-cell--positive {
+    color: #4ade80;
+  }
+
+:root[data-theme="dark"] .pivot-value-cell--negative {
+    color: #f87171;
+  }
+
+:root[data-theme="dark"] .confirm-inline-text {
+    color: #fca5a5;
+  }
+
+/* ============================================================
+   Bulk transaction selection + bulk-categorise modal
+   ============================================================ */
+
+/* Leftmost selection column: narrow, centered, holds the per-row checkbox
+   (and the select-all checkbox in the header). */
+.page--transactions th.col-select,
+.page--transactions td.col-select {
+  width: 34px;
+  min-width: 34px;
+  max-width: 34px;
+  text-align: center;
+  padding: 0;
+}
+
+/* Custom (non-native) row checkbox so we own the pointer lifecycle and can
+   tell a short tap from a >1s hold. touch-action:none keeps a long-press from
+   turning into a scroll/gesture on touch devices (planned tablet build). */
+.txn-select-checkbox {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid #b4b4bb;
+  border-radius: 4px;
+  background: #fff;
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+  user-select: none;
+}
+.txn-select-checkbox:hover {
+  border-color: #2563eb;
+}
+.txn-select-checkbox.is-checked {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+tbody tr.is-selected {
+  background: #eff6ff;
+}
+tbody tr.is-selected td.col-select {
+  box-shadow: inset 3px 0 0 #2563eb;
+}
+
+/* "Actions ▾" dropdown in the filter bar. */
+.bulk-actions-menu {
+  position: relative;
+  display: inline-flex;
+}
+.bulk-actions-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.bulk-actions-caret {
+  font-size: 10px;
+}
+.bulk-actions-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 50;
+  min-width: 220px;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  background: #fff;
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.15);
+  padding: 4px;
+}
+.bulk-actions-item {
+  display: block;
+  width: 100%;
+  white-space: nowrap;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 8px 10px;
+  font: inherit;
+  color: inherit;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.bulk-actions-item:hover:not(:disabled) {
+  background: #f1f1f4;
+}
+.bulk-actions-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.bulk-actions-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, auto));
+  gap: 0 4px;
+}
+.bulk-actions-group + .bulk-actions-group {
+  border-left: 1px solid #e4e4e7;
+  padding-left: 4px;
+}
+.bulk-actions-group-title {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #71717a;
+  cursor: default;
+}
+@media (max-width: 560px) {
+  .bulk-actions-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .bulk-actions-group + .bulk-actions-group {
+    border-left: 0;
+    padding-left: 0;
+    border-top: 1px solid #e4e4e7;
+  }
+}
+.bulk-actions-hint {
+  margin: 4px 8px 6px;
+  font-size: 12px;
+  color: #71717a;
+}
+
+/* Secondary button — used across modals/menus; previously relied on UA
+   defaults, now given a neutral outline style consistent with .btn-ghost. */
+.btn-secondary {
+  font-family: inherit;
+  font-size: 13px;
+  padding: 6px 12px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background: #fff;
+  color: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.btn-secondary:hover:not(:disabled) {
+  background: #f1f1f4;
+}
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Bulk-categorise confirmation + progress modal. */
+.bulk-intro {
+  margin: 0;
+  color: #52525b;
+}
+.bulk-reassign {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.bulk-counts {
+  margin: 0;
+  font-size: 13px;
+  color: #52525b;
+}
+.bulk-pickers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.bulk-picker-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.bulk-picker-label {
+  font-size: 12px;
+  color: #71717a;
+}
+.bulk-picker-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.bulk-list {
+  flex: 1;
+  min-height: 120px;
+  overflow: auto;
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+}
+.bulk-list table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.bulk-list th,
+.bulk-list td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid #f1f1f4;
+}
+.bulk-list th {
+  position: sticky;
+  top: 0;
+  background: #fafafa;
+  z-index: 1;
+  font-weight: 600;
+}
+.bulk-list th.num,
+.bulk-list td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.bulk-list tr.is-skipped {
+  color: #a1a1aa;
+  text-decoration: line-through;
+}
+
+.bulk-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.progress-bar {
+  height: 10px;
+  background: #e4e4e7;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: #2563eb;
+  transition: width 0.15s ease;
+}
+.bulk-done-main {
+  margin: 0;
+  font-weight: 600;
+}
+.bulk-done-line {
+  margin: 0;
+  font-size: 13px;
+  color: #52525b;
+}
+.bulk-done-errors {
+  color: #b91c1c;
+}
+
+:root[data-theme="dark"] .txn-select-checkbox {
+    background: #1f1f22;
+    border-color: #52525b;
+  }
+
+:root[data-theme="dark"] .txn-select-checkbox.is-checked {
+    background: #2563eb;
+    border-color: #2563eb;
+  }
+
+:root[data-theme="dark"] tbody tr.is-selected {
+    background: #1e293b;
+  }
+
+:root[data-theme="dark"] .bulk-actions-popover {
+    background: #232327;
+    border-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .bulk-actions-item:hover:not(:disabled) {
+    background: #2a2a30;
+  }
+
+:root[data-theme="dark"] .bulk-actions-group + .bulk-actions-group {
+    border-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .bulk-actions-group-title {
+    color: #a1a1aa;
+  }
+
+:root[data-theme="dark"] .btn-secondary {
+    background: #232327;
+    border-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .btn-secondary:hover:not(:disabled) {
+    background: #2a2a30;
+  }
+
+:root[data-theme="dark"] .bulk-list {
+    border-color: #3f3f46;
+  }
+
+:root[data-theme="dark"] .bulk-list th {
+    background: #1f1f22;
+  }
+
+:root[data-theme="dark"] .bulk-list th,
+:root[data-theme="dark"] .bulk-list td {
+    border-bottom-color: #2a2a30;
+  }
+
+:root[data-theme="dark"] .progress-bar {
+    background: #3f3f46;
+  }
+
+/* Dark overrides for the currency cards + exchange-rate weeks calendar
+   (Settings → Currencies). Added after the original dark theme. */
+:root[data-theme="dark"] .currency-card {
+  background: #27272a;
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .currency-card:hover {
+  border-color: #71717a;
+}
+
+:root[data-theme="dark"] .currency-card--active {
+  background: #1f1f22;
+  border-color: #d4d4d8;
+}
+
+:root[data-theme="dark"] .currency-card-symbol,
+:root[data-theme="dark"] .currency-card-meta {
+  color: #a1a1aa;
+}
+
+:root[data-theme="dark"] .rate-weeks {
+  background: #18181b;
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .rate-weeks-header {
+  background: #1f1f22;
+  box-shadow: inset 0 -1px 0 #3f3f46;
+}
+
+:root[data-theme="dark"] .rate-weeks-header-cell {
+  color: #a1a1aa;
+}
+
+:root[data-theme="dark"] .rate-weeks-year {
+  background: #27272a;
+  color: #e4e4e7;
+  border-top-color: #3f3f46;
+  box-shadow: inset 0 -1px 0 #3f3f46;
+}
+
+:root[data-theme="dark"] .rate-weeks-cell {
+  background: #18181b;
+  border-right-color: #27272a;
+  border-bottom-color: #27272a;
+  color: #71717a;
+}
+
+:root[data-theme="dark"] .rate-weeks-cell--has-data {
+  background: #14291a;
+  color: #86efac;
+}
+
+:root[data-theme="dark"] .rate-weeks-cell--off-year {
+  background: #1f1f22;
+  color: #52525b;
+}
+
+/* Dark overrides for transaction-modal / cash-form bits added after the
+   original dark theme (direction segmented control, read-only grid, the
+   manual cash-entry inputs). Active pill matches the light-pill treatment
+   used by .chip.active / .tab-button.active in dark mode. */
+:root[data-theme="dark"] .txn-direction {
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .txn-dir-btn {
+  background: #27272a;
+  color: #a1a1aa;
+}
+
+:root[data-theme="dark"] .txn-dir-btn + .txn-dir-btn {
+  border-left-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .txn-dir-btn--active {
+  background: #e4e4e7;
+  color: #18181b;
+}
+
+:root[data-theme="dark"] .txn-readonly-grid {
+  background: #1f1f22;
+}
+
+:root[data-theme="dark"] .cash-form-amount-cell input {
+  background: #18181b;
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .cash-form-row input:disabled,
+:root[data-theme="dark"] .cash-form-amount-cell input:disabled {
+  background: #27272a;
+  color: #71717a;
+}
+
+/* Dark overrides: remaining post-original components with explicit light
+   backgrounds (form textarea/inputs, filter dropdown button, and the cell
+   drill-down transactions table). Native inputs without an explicit
+   background already darken via color-scheme: dark. */
+:root[data-theme="dark"] .account-form textarea,
+:root[data-theme="dark"] .cash-form-row input {
+  background: #18181b;
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .filter-field .dropdown-button {
+  background-color: #18181b;
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .cell-txns-table th,
+:root[data-theme="dark"] .cell-txns-table td {
+  border-bottom-color: #27272a;
+}
+
+:root[data-theme="dark"] .cell-txns-table thead th {
+  background: #1f1f22;
+  color: #a1a1aa;
+}
+
+:root[data-theme="dark"] .cell-txns-chip {
+  border-color: #52525b;
+}
+
+:root[data-theme="dark"] .cell-txns-row.is-pending,
+:root[data-theme="dark"] .cell-txns-row.is-pending:hover {
+  background: #3f3a1a;
+}
+
+:root[data-theme="dark"] .cell-txns-cats-split {
+  border-color: #52525b;
+  color: #d4d4d8;
+}
+
+:root[data-theme="dark"] .cell-txns-warning {
+  color: #fbbf24;
+}
+
+:root[data-theme="dark"] .cell-txns-row:hover,
+:root[data-theme="dark"] .txn-open-cell:hover {
+  background: #27272a;
+}
+
+/* Documents */
+
+.page--documents.is-drag-over {
+  outline: 2px dashed #6366f1;
+  outline-offset: -4px;
+  background: #eef2ff;
+}
+
+.documents-last-upload {
+  margin: 0;
+}
+
+.documents-progress,
+.documents-queue,
+.documents-report {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 13px;
+}
+
+.documents-queue {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.documents-queue .error {
+  margin: 0;
+}
+
+.documents-progress progress {
+  flex: 1;
+  min-width: 120px;
+}
+
+.documents-report details {
+  flex: 1;
+}
+
+.documents-report ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+}
+
+.documents-report .icon-btn {
+  margin-left: auto;
+}
+
+.documents-history,
+.documents-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  background: #fff;
+  margin-bottom: 12px;
+}
+
+.documents-history th,
+.documents-history td,
+.documents-table th,
+.documents-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid #f1f1f4;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.documents-history th,
+.documents-table thead th {
+  font-weight: 500;
+  color: #71717a;
+  background: #fafafa;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.documents-history .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.documents-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.documents-filter {
+  font: inherit;
+  font-size: 13px;
+  padding: 3px 10px;
+  border: 1px solid #d4d4d8;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.documents-filter.active {
+  background: #1f2937;
+  border-color: #1f2937;
+  color: #fff;
+}
+
+.documents-filter.active .hint {
+  color: #d4d4d8;
+}
+
+.documents-filter .hint {
+  margin: 0;
+}
+
+.documents-drop-hint {
+  margin: 0 0 0 auto;
+}
+
+.documents-group td {
+  background: #f4f4f5;
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.documents-group .hint {
+  font-weight: 400;
+}
+
+.documents-row {
+  cursor: pointer;
+}
+
+.documents-row:hover {
+  background: #f8fafc;
+}
+
+.documents-row.is-selected {
+  background: #eef2ff;
+}
+
+.documents-table .col-select {
+  width: 28px;
+  cursor: pointer;
+}
+
+.documents-table .col-select input {
+  pointer-events: none;
+}
+
+.documents-table thead .col-select input {
+  pointer-events: auto;
+}
+
+.documents-selection {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.documents-selection .danger-confirm {
+  flex-basis: 100%;
+}
+
+.documents-table .col-thumb {
+  width: 44px;
+}
+
+.documents-table .col-thumb img {
+  display: block;
+  width: 32px;
+  height: 44px;
+  object-fit: cover;
+  object-position: top;
+  border-radius: 3px;
+  border: 1px solid #e4e4e7;
+}
+
+.documents-thumb-pdf {
+  display: inline-block;
+  width: 32px;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 600;
+  color: #b91c1c;
+}
+
+.documents-table .col-file {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.documents-table .col-memo {
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.documents-status {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: #f4f4f5;
+  color: #52525b;
+}
+
+.documents-status--done {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.documents-status--partial {
+  background: #fef9c3;
+  color: #854d0e;
+}
+
+.documents-status--failed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.documents-dropzone {
+  margin-top: 24px;
+  padding: 48px 24px;
+  border: 2px dashed #d4d4d8;
+  border-radius: 8px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.documents-dropzone p:first-child {
+  font-size: 15px;
+  font-weight: 500;
+  margin: 0 0 6px;
+}
+
+.document-view {
+  flex-direction: row;
+  align-items: stretch;
+  gap: 20px;
+}
+
+.document-view-file {
+  flex: 1 1 55%;
+  min-width: 0;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  background: #f4f4f5;
+  border-radius: 6px;
+}
+
+/* The whole slip fits the viewer; click opens the original for zooming. */
+.document-view-file a {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
+.document-view-file img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  cursor: zoom-in;
+}
+
+.document-view-file iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.document-view-info {
+  flex: 1 1 45%;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.document-view-info h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.document-view-info h4:not(:first-child) {
+  margin-top: 20px;
+}
+
+.document-fields {
+  margin: 0;
+}
+
+.document-field {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid #f1f1f4;
+}
+
+.document-field dt {
+  color: #71717a;
+}
+
+.document-field dd {
+  margin: 0;
+}
+
+.document-field-source {
+  margin-left: 8px;
+  font-size: 11px;
+  color: #a1a1aa;
+}
+
+.document-break {
+  word-break: break-all;
+}
+
+.document-ocr {
+  white-space: pre-wrap;
+  font-size: 12px;
+  background: #f4f4f5;
+  padding: 8px;
+  border-radius: 4px;
+  max-height: 300px;
+  overflow: auto;
+}
+
+a.btn-ghost {
+  text-decoration: none;
+}
+
+:root[data-theme="dark"] .page--documents.is-drag-over {
+  outline-color: #818cf8;
+  background: #1e1b4b;
+}
+
+:root[data-theme="dark"] .documents-progress,
+:root[data-theme="dark"] .documents-queue,
+:root[data-theme="dark"] .documents-report,
+:root[data-theme="dark"] .documents-history,
+:root[data-theme="dark"] .documents-table {
+  background: #18181b;
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .documents-history th,
+:root[data-theme="dark"] .documents-history td,
+:root[data-theme="dark"] .documents-table th,
+:root[data-theme="dark"] .documents-table td,
+:root[data-theme="dark"] .document-field {
+  border-bottom-color: #27272a;
+}
+
+:root[data-theme="dark"] .documents-history th,
+:root[data-theme="dark"] .documents-table thead th {
+  background: #1f1f22;
+  color: #a1a1aa;
+}
+
+:root[data-theme="dark"] .documents-group td {
+  background: #27272a;
+}
+
+:root[data-theme="dark"] .documents-row:hover {
+  background: #27272a;
+}
+
+:root[data-theme="dark"] .documents-row.is-selected {
+  background: #1e1b4b;
+}
+
+:root[data-theme="dark"] .documents-filter {
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .documents-filter.active {
+  background: #e4e4e7;
+  border-color: #e4e4e7;
+  color: #18181b;
+}
+
+:root[data-theme="dark"] .documents-filter.active .hint {
+  color: #52525b;
+}
+
+:root[data-theme="dark"] .documents-table .col-thumb img {
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .documents-status {
+  background: #27272a;
+  color: #d4d4d8;
+}
+
+:root[data-theme="dark"] .documents-status--done {
+  background: #14532d;
+  color: #bbf7d0;
+}
+
+:root[data-theme="dark"] .documents-status--partial {
+  background: #713f12;
+  color: #fef08a;
+}
+
+:root[data-theme="dark"] .documents-status--failed {
+  background: #7f1d1d;
+  color: #fecaca;
+}
+
+:root[data-theme="dark"] .documents-dropzone {
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .document-view-file,
+:root[data-theme="dark"] .document-ocr {
+  background: #27272a;
+}
+
+/* Transactions: linked-document column + transaction modal documents block */
+
+/* The button fills the whole cell (like .txn-link-btn) so the entire 📎
+   column is a click target, including empty cells. */
+
+/* Linked: blue paperclip; hover hints that a click opens the document. */
+
+/* Not linked: hidden paperclip revealed in green on hover — same cue as the
+   🔗 column's "start a link here". */
+
+.modal--link-doc {
+  width: min(860px, 94vw);
+  bottom: auto;
+  max-height: calc(100vh - 24px);
+}
+
+/* Title on top, the transaction's facts (date · amount · peer) below it. */
+.modal--link-doc .txn-modal-title {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+
+.modal--link-doc .txn-modal-title h3 {
+  white-space: nowrap;
+}
+
+.link-doc-facts .document-field dd {
+  overflow-wrap: anywhere;
+}
+
+.document-cell-count {
+  font-size: 10px;
+  vertical-align: super;
+  color: #71717a;
+}
+
+.document-link-state {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.txn-docs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.txn-doc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.txn-doc {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.txn-doc-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 6px;
+  border: 1px solid #e4e4e7;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.txn-doc-open:hover {
+  background: #f8fafc;
+}
+
+.txn-doc-open .hint {
+  margin: 0;
+}
+
+.txn-doc-thumb {
+  flex-shrink: 0;
+  width: 36px;
+  height: 52px;
+  object-fit: cover;
+  object-position: top;
+  border-radius: 3px;
+  border: 1px solid #e4e4e7;
+}
+
+.txn-doc-thumb--pdf {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 600;
+  color: #b91c1c;
+}
+
+.txn-doc-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.txn-doc-memo {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: italic;
+}
+
+.txn-doc-delta {
+  flex-shrink: 0;
+  min-width: 72px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.txn-doc-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #fef9c3;
+  color: #854d0e;
+}
+
+.txn-doc-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px dashed #d4d4d8;
+  border-radius: 6px;
+}
+
+.txn-doc-picker-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.txn-doc-picker-option {
+  margin: 8px 0 4px;
+  font-size: 13px;
+}
+
+:root[data-theme="dark"] .txn-doc-open,
+:root[data-theme="dark"] .txn-doc-thumb {
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .txn-doc-open:hover {
+  background: #27272a;
+}
+
+:root[data-theme="dark"] .txn-doc-picker {
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .txn-doc-badge {
+  background: #713f12;
+  color: #fef08a;
+}
+
+/* AI column: the note recognised on the linked slip */
+
+.modal--bulk-docs {
+  width: min(620px, 94vw);
+  bottom: auto;
+}
+
+/* Group heading inside a multi-select dropdown (Filter: kinds / document). */
+.dropdown-group {
+  padding: 4px 8px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #71717a;
+}
+
+/* Period dropdown: presets + custom from/to. */
+.period-panel {
+  min-width: 260px;
+}
+
+.period-item {
+  width: 100%;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  color: inherit;
+  text-align: left;
+}
+
+.period-item.is-active {
+  font-weight: 600;
+}
+
+.period-check {
+  display: inline-block;
+  width: 14px;
+}
+
+/* Month grid in the Period dropdown: click a month, click another to make
+   a continuous range. */
+.period-months {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 8px;
+}
+
+.period-months-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.period-months-year {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.period-months-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
+.period-month {
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 0;
+  border: 1px solid #e4e4e7;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.period-month:hover {
+  border-color: #a1a1aa;
+}
+
+.period-month.is-in-range {
+  background: #dbeafe;
+  border-color: #93c5fd;
+}
+
+.period-month.is-anchor {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+
+.period-months-hint {
+  margin: 0;
+  font-size: 11px;
+}
+
+:root[data-theme="dark"] .period-month {
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .period-month.is-in-range {
+  background: #1e3a5f;
+  border-color: #2563eb;
+}
+
+.period-custom {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
+.period-custom-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #71717a;
+}
+
+.period-custom label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.period-custom input[type="date"] {
+  font: inherit;
+  padding: 3px 6px;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+}
+
+:root[data-theme="dark"] .period-custom input[type="date"] {
+  border-color: #3f3f46;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* 📎 column: the user's own comment (sticker) outranks a linked document. */
+
+/* "Document & comment" dialog: slip preview on the left when one is linked. */
+.modal--link-doc-wide {
+  width: min(1200px, 96vw);
+}
+
+.link-doc-body {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.link-doc-preview {
+  flex: 0 0 38%;
+  max-height: calc(100vh - 140px);
+  padding: 0;
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+  background: #f4f4f5;
+  overflow: hidden;
+  cursor: zoom-in;
+}
+
+.link-doc-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: calc(100vh - 140px);
+  object-fit: contain;
+}
+
+.link-doc-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.link-doc-save-state {
+  margin-left: 8px;
+  font-weight: 400;
+  color: #71717a;
+}
+
+:root[data-theme="dark"] .link-doc-preview {
+  border-color: #3f3f46;
+  background: #27272a;
+}
+
+/* Note column: icon (sticker / paperclip) + the comment or slip note, one
+   line; the whole cell is a button opening the "Document & comment" dialog. */
+.page--transactions th.col-note,
+.page--transactions td.col-note {
+  min-width: 260px;
+  max-width: 420px;
+}
+
+.page--transactions td.col-note {
+  position: relative;
+  padding: 0;
+}
+
+.note-cell {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: none;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  transition: background 0.12s ease;
+}
+
+.note-cell-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  width: 20px;
+}
+
+.note-cell-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.note-cell.is-linked .note-cell-icon {
+  color: #1d4ed8;
+}
+
+.note-cell.is-linked:hover {
+  background: #eef2ff;
+}
+
+.note-cell.is-comment:hover {
+  background: #fef3c7;
+}
+
+/* Empty: the paperclip is hidden until hover — the 🔗-column cue for
+   "click to add". */
+.note-cell.is-startable .note-cell-icon {
+  color: transparent;
+}
+
+.note-cell.is-startable:hover {
+  background: #dcfce7;
+}
+
+.note-cell.is-startable:hover .note-cell-icon {
+  color: #15803d;
+}
+
+:root[data-theme="dark"] .note-cell.is-linked .note-cell-icon {
+  color: #93c5fd;
+}
+
+:root[data-theme="dark"] .note-cell.is-linked:hover {
+  background: #1e293b;
+}
+
+:root[data-theme="dark"] .note-cell.is-comment:hover {
+  background: #3f2f12;
+}
+
+:root[data-theme="dark"] .note-cell.is-startable:hover {
+  background: #14532d;
+}
+
+:root[data-theme="dark"] .note-cell.is-startable:hover .note-cell-icon {
+  color: #86efac;
+}
+
+/* Suggestion column: the main pending suggestion as a one-line chip (icon,
+   target, confidence); a click opens the Suggestions dialog. */
+.page--transactions th.col-suggestion,
+.page--transactions td.col-suggestion {
+  min-width: 180px;
+  max-width: 280px;
+}
+
+.page--transactions td.col-suggestion {
+  position: relative;
+  padding: 0;
+}
+
+/* Suggestion | Category split (both columns shown): fixed widths from the
+   table's CSS variables, the border between the headers is draggable. */
+.page--transactions table.has-col-split th.col-suggestion,
+.page--transactions table.has-col-split td.col-suggestion {
+  width: var(--split-suggestion);
+  min-width: var(--split-suggestion);
+  max-width: var(--split-suggestion);
+}
+
+.page--transactions table.has-col-split th.col-category,
+.page--transactions table.has-col-split td.col-category {
+  width: var(--split-category);
+  min-width: var(--split-category);
+  max-width: var(--split-category);
+}
+
+/* Entirely inside the Suggestion header: the next (sticky) header would
+   otherwise sit on top of any part that sticks out. */
+.col-split-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 8px;
+  z-index: 3;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.col-split-handle::after {
+  content: "";
+  position: absolute;
+  top: 25%;
+  bottom: 25%;
+  right: 0;
+  width: 2px;
+  border-radius: 1px;
+  background: #d4d4d8;
+}
+
+.col-split-handle:hover::after,
+.col-split-handle:active::after {
+  background: #2563eb;
+}
+
+:root[data-theme="dark"] .col-split-handle::after {
+  background: #52525b;
+}
+
+:root[data-theme="dark"] .col-split-handle:hover::after,
+:root[data-theme="dark"] .col-split-handle:active::after {
+  background: #60a5fa;
+}
+
+.suggestion-cell {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.suggestion-cell:hover {
+  background: #f5f3ff;
+}
+
+.suggestion-cell-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.suggestion-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.suggestion-confidence {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.suggestion-confidence.is-high {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.suggestion-confidence.is-mid {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.suggestion-confidence.is-low {
+  background: #f4f4f5;
+  color: #71717a;
+}
+
+.suggestion-more {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: #71717a;
+}
+
+.modal--suggestions {
+  width: min(680px, 94vw);
+  bottom: auto;
+  max-height: calc(100vh - 24px);
+}
+
+.suggestion-card {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid #e4e4e7;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.suggestion-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.suggestion-card-kind {
+  font-weight: 600;
+}
+
+.suggestion-card-target {
+  flex: 1;
+  min-width: 0;
+  color: #52525b;
+}
+
+.suggestion-rationale {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.suggestion-partner {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.suggestion-details pre {
+  margin: 6px 0 0;
+  padding: 8px;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 12px;
+  background: #f4f4f5;
+  border-radius: 6px;
+}
+
+.suggestion-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.suggestion-skips {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  color: #52525b;
+}
+
+:root[data-theme="dark"] .suggestion-cell:hover {
+  background: #2e1065;
+}
+
+:root[data-theme="dark"] .suggestion-confidence.is-high {
+  background: #14532d;
+  color: #86efac;
+}
+
+:root[data-theme="dark"] .suggestion-confidence.is-mid {
+  background: #451a03;
+  color: #fcd34d;
+}
+
+:root[data-theme="dark"] .suggestion-confidence.is-low {
+  background: #27272a;
+  color: #a1a1aa;
+}
+
+:root[data-theme="dark"] .suggestion-card {
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .suggestion-card-target,
+:root[data-theme="dark"] .suggestion-skips {
+  color: #a1a1aa;
+}
+
+:root[data-theme="dark"] .suggestion-details pre {
+  background: #18181b;
+}
+
+/* Accounts: user-defined order — drag an account by its ⠿ handle; the drop
+   position is marked by a line above (before) or below (after) the account's
+   two rows. */
+.account-id-cell {
+  white-space: nowrap;
+}
+
+.account-drag-handle {
+  display: inline-block;
+  margin-right: 6px;
+  color: #a1a1aa;
+  cursor: grab;
+  user-select: none;
+}
+
+.account-drag-handle:hover {
+  color: #3f3f46;
+}
+
+.account-drag-handle:active {
+  cursor: grabbing;
+}
+
+tr.is-dragging td {
+  opacity: 0.4;
+}
+
+tr.account-row.drop-before td {
+  box-shadow: inset 0 2px 0 #2563eb;
+}
+
+tr.account-strip-row.drop-after td {
+  box-shadow: inset 0 -2px 0 #2563eb;
+}
+
+:root[data-theme="dark"] .account-drag-handle {
+  color: #71717a;
+}
+
+:root[data-theme="dark"] .account-drag-handle:hover {
+  color: #e4e4e7;
+}
+
+:root[data-theme="dark"] tr.account-row.drop-before td {
+  box-shadow: inset 0 2px 0 #60a5fa;
+}
+
+:root[data-theme="dark"] tr.account-strip-row.drop-after td {
+  box-shadow: inset 0 -2px 0 #60a5fa;
+}
+
+/* Context screen: date intervals of what was going on in life. */
+.contexts-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+}
+
+.contexts-table th,
+.contexts-table td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid #f1f1f4;
+}
+
+.contexts-table th.num,
+.contexts-table td.num {
+  text-align: right;
+}
+
+.context-row {
+  cursor: pointer;
+}
+
+.context-row:hover td {
+  background: #f4f4f5;
+}
+
+.context-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+
+.context-title {
+  font-weight: 500;
+}
+
+.context-period {
+  white-space: nowrap;
+}
+
+.context-note {
+  color: #52525b;
+}
+
+.context-dates {
+  display: flex;
+  gap: 12px;
+}
+
+.context-dates label {
+  flex: 1;
+}
+
+/* Context column on the Transactions screen — right after the checkbox. */
+.page--transactions th.col-example,
+.page--transactions td.col-example {
+  width: 30px;
+  min-width: 30px;
+  max-width: 30px;
+  padding: 0;
+  text-align: center;
+}
+
+.txn-example-btn {
+  border: 0;
+  background: none;
+  padding: 2px;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  filter: grayscale(1);
+  opacity: 0;
+}
+
+tr:hover .txn-example-btn,
+.txn-example-btn:focus-visible {
+  opacity: 0.35;
+}
+
+.txn-example-btn.is-example,
+tr:hover .txn-example-btn.is-example {
+  filter: none;
+  opacity: 1;
+}
+
+/* ✨ for agent examples: the yellow emoji fades on a light background, so
+   in the light theme a marked one gets a thin dark-amber outline and an
+   unmarked one is less transparent. The dark theme needs neither. */
+:root:not([data-theme="dark"]) .txn-example-btn.is-example,
+:root:not([data-theme="dark"]) .agent-example.is-marked .agent-example-star,
+:root:not([data-theme="dark"]) .col-example-icon {
+  filter: drop-shadow(0 0 0.6px #78350f) drop-shadow(0 0 0.6px #78350f);
+}
+
+:root:not([data-theme="dark"]) tr:hover .txn-example-btn:not(.is-example),
+:root:not([data-theme="dark"]) .agent-example:not(.is-marked) .agent-example-star {
+  filter: grayscale(1) brightness(0.55);
+  opacity: 0.55;
+}
+
+:root:not([data-theme="dark"]) .agent-example:not(.is-marked) .agent-example-star:hover {
+  opacity: 0.8;
+}
+
+.page--transactions th.col-context,
+.page--transactions td.col-context {
+  max-width: 220px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.context-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 4px;
+  padding: 0 6px;
+  border: 1px solid;
+  border-radius: 8px;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  color: inherit;
+  cursor: pointer;
+}
+
+.context-chip:hover {
+  filter: brightness(0.95);
+  text-decoration: underline;
+}
+
+/* The Context cell is clickable: an empty spot adds an event on the
+   transaction's day; a chip edits its event. "+" shows on hover. */
+.page--transactions td.col-context--editable {
+  cursor: pointer;
+}
+
+.context-add {
+  display: none;
+  color: #a1a1aa;
+  font-size: 13px;
+  padding: 0 4px;
+}
+
+.page--transactions td.col-context--editable:hover .context-add {
+  display: inline;
+}
+
+.context-chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+:root[data-theme="dark"] .contexts-table th,
+:root[data-theme="dark"] .contexts-table td {
+  border-bottom-color: #27272a;
+}
+
+:root[data-theme="dark"] .context-row:hover td {
+  background: #27272a;
+}
+
+:root[data-theme="dark"] .context-note {
+  color: #a1a1aa;
+}
+
+/* Documents: four filter groups (AND) and the Pause / Resume button of the
+   background recognition queue. */
+.documents-filter-group {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-right: 12px;
+}
+
+.documents-filter-label {
+  font-size: 12px;
+  color: #71717a;
+  margin-right: 2px;
+}
+
+.documents-queue-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+:root[data-theme="dark"] .documents-filter-label {
+  color: #a1a1aa;
+}
+
+/* ---- Category agent: settings, examples ---- */
+
+.ai-connections {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0 12px;
+}
+
+.ai-connections td {
+  padding: 8px 4px;
+  border-bottom: 1px solid #e4e4e7;
+  vertical-align: top;
+}
+
+.ai-connection-actions {
+  white-space: nowrap;
+  text-align: right;
+}
+
+.ai-connection-actions button + button {
+  margin-left: 6px;
+}
+
+.ai-agent-badge {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: #e0e7ff;
+  color: #3730a3;
+  font-size: 11px;
+}
+
+.ai-connection-form {
+  border: 1px solid #e4e4e7;
+  border-radius: 6px;
+  padding: 8px 12px 4px;
+  margin: 8px 0;
+}
+
+.ai-connection-form h4 {
+  margin: 4px 0 8px;
+}
+
+.agent-instructions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.agent-instructions textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  padding: 6px 8px;
+  resize: vertical;
+}
+
+.agent-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.ai-usage {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.ai-usage th,
+.ai-usage td {
+  padding: 4px 6px;
+  border-bottom: 1px solid #e4e4e7;
+  text-align: left;
+}
+
+.ai-usage .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.suggestion-cell--unsure {
+  color: #71717a;
+  font-style: italic;
+}
+
+.suggestion-unsure-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px dashed #a1a1aa;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 600;
+  color: #71717a;
+  flex: none;
+}
+
+:root[data-theme="dark"] .suggestion-cell--unsure,
+:root[data-theme="dark"] .suggestion-unsure-icon {
+  color: #a1a1aa;
+  border-color: #71717a;
+}
+
+.life-description {
+  max-width: 860px;
+}
+
+.life-description textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 8px 0 10px;
+  padding: 10px 12px;
+  border: 1px solid #d4d4d8;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+:root[data-theme="dark"] .life-description textarea {
+  background: #18181b;
+  border-color: #3f3f46;
+  color: #f4f4f5;
+}
+
+.accept-breakdown {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0 12px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.accept-breakdown th,
+.accept-breakdown td {
+  padding: 4px 8px;
+  border-bottom: 1px solid #e4e4e7;
+  text-align: left;
+}
+
+.accept-breakdown .num {
+  text-align: right;
+}
+
+.accept-breakdown tbody tr {
+  cursor: pointer;
+}
+
+.accept-breakdown tbody tr.is-chosen {
+  background: #eff6ff;
+}
+
+.accept-level {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.accept-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-bottom: 8px;
+}
+
+:root[data-theme="dark"] .accept-breakdown th,
+:root[data-theme="dark"] .accept-breakdown td {
+  border-bottom-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .accept-breakdown tbody tr.is-chosen {
+  background: #1e293b;
+}
+
+.agent-progress {
+  width: 100%;
+}
+
+.agent-examples .link-btn {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.agent-examples-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 20px;
+  margin: 12px 0;
+  font-size: 13px;
+}
+
+.agent-examples-head,
+.agent-examples-row {
+  display: grid;
+  grid-template-columns: minmax(200px, 2fr) 150px 140px 110px minmax(160px, 2fr);
+  gap: 12px;
+  align-items: baseline;
+  padding: 6px 4px;
+  font-size: 13px;
+}
+
+.agent-examples-head {
+  color: #71717a;
+  border-bottom: 1px solid #e4e4e7;
+}
+
+.agent-examples-row {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid #f4f4f5;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-examples-row:hover {
+  background: #fafafa;
+}
+
+.agent-examples-row > span {
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-examples-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.agent-examples-caret {
+  width: 12px;
+  color: #a1a1aa;
+}
+
+.agent-examples-issues {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.agent-issue {
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.agent-issue.is-no_examples,
+.agent-issue.is-agent_misses {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.agent-issue.is-ok {
+  background: none;
+  color: #16a34a;
+}
+
+.agent-examples-details {
+  padding: 4px 4px 14px 22px;
+  max-width: 960px;
+  border-bottom: 1px solid #e4e4e7;
+}
+
+.agent-examples-details h4 {
+  margin: 10px 0 4px;
+  font-size: 13px;
+}
+
+.agent-examples-details ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.agent-issue-help {
+  margin: 6px 0;
+}
+
+.agent-conflict {
+  margin: 6px 0 10px;
+}
+
+.agent-conflict-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.agent-conflict.is-resolved {
+  opacity: 0.7;
+}
+
+.agent-example-note {
+  margin-left: auto;
+  padding-left: 8px;
+  color: #71717a;
+  white-space: nowrap;
+}
+
+.agent-example {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0;
+  padding: 1px 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.agent-example-star {
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: 13px;
+  filter: grayscale(1);
+  opacity: 0.35;
+}
+
+.agent-example-star:hover {
+  opacity: 0.7;
+}
+
+.agent-example.is-marked .agent-example-star {
+  filter: none;
+  opacity: 1;
+}
+
+.agent-example-date,
+.agent-example-amount {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.agent-example-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+:root[data-theme="dark"] .ai-connections td,
+:root[data-theme="dark"] .ai-usage th,
+:root[data-theme="dark"] .ai-usage td {
+  border-bottom-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .ai-connection-form {
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .ai-agent-badge {
+  background: #312e81;
+  color: #e0e7ff;
+}
+
+:root[data-theme="dark"] .agent-instructions textarea {
+  background: #18181b;
+  border: 1px solid #3f3f46;
+  color: #f4f4f5;
+}
+
+:root[data-theme="dark"] .agent-examples-head,
+:root[data-theme="dark"] .agent-examples-details {
+  border-bottom-color: #3f3f46;
+}
+
+:root[data-theme="dark"] .agent-examples-row {
+  border-bottom-color: #27272a;
+}
+
+:root[data-theme="dark"] .agent-examples-row:hover {
+  background: #27272a;
+}
+
+:root[data-theme="dark"] .agent-issue {
+  background: #422006;
+  color: #fcd34d;
+}
+
+:root[data-theme="dark"] .agent-issue.is-no_examples,
+:root[data-theme="dark"] .agent-issue.is-agent_misses {
+  background: #450a0a;
+  color: #fca5a5;
+}
+
+:root[data-theme="dark"] .agent-issue.is-ok {
+  background: none;
+  color: #4ade80;
+}
+
+:root[data-theme="dark"] .agent-example-note {
+  color: #a1a1aa;
+}

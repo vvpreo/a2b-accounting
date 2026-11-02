@@ -1,0 +1,41 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "A2B Accounting",
+  "version": "0.1.0",
+  "identifier": "net.vvpreo.a2b-accounting",
+  "build": {
+    "frontendDist": "stub"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "createUpdaterArtifacts": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../dist/": "static/",
+      "../ocr-models/": "ocr-models/",
+      "../server/ocr/": "ocr-dicts/"
+    },
+    "macOS": {
+      "signingIdentity": "-",
+      "minimumSystemVersion": "11.0"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDgxOUM3RDkxRThBQzc3QjYKUldTMmQ2em9rWDJjZ1h5ZVA3bXZmZ2JmNTR1cVB0SU1wK0p2RDJrMjNvN3BEWEg5WHlvREdGVi8K"
+    }
+  }
+}
