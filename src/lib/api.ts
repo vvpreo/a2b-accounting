@@ -1102,6 +1102,8 @@ export interface ReportConfig {
   // Optional; missing field defaults to `false` (hide zero rows), which is
   // the default UX.
   showZeroRows?: boolean;
+  /** Show the "Cash remaining" sum as a row of the expense section. */
+  showUnenteredCash?: boolean;
   /**
    * @deprecated Legacy field — superseded by `showZeroRows` (inverted
    * meaning). Reader inverts and falls back when `showZeroRows` is absent;
@@ -1153,6 +1155,8 @@ export interface PeriodColumn {
 
 export interface ReportRow {
   categoryId: number | null;
+  /** Added on the client, see `withUnenteredCash`: no transactions behind it. */
+  unenteredCash?: boolean;
   name: string;
   color: string;
   depth: number;

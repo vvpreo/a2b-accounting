@@ -33,6 +33,7 @@ import { formatMinorAsMoney, formatMoney, parseMoneyToMinor } from "../lib/money
 import { CategoryPickerModal, computeInitialOrder } from "./report/CategoryPicker";
 import { CellTransactionsModal } from "./report/CellTransactionsModal";
 import { PeriodDropdown, periodPresets } from "./transactions/PeriodDropdown";
+import { withUnenteredCash } from "../lib/report-unentered-cash";
 import { useViewState } from "../lib/view-state";
 
 // Everything the drill-down modal needs about a clicked cell: the backend
@@ -208,6 +209,7 @@ export function ReportViewPage({ view, onSaved }: Props) {
   const [showZeroRows, setShowZeroRows] = useState(() =>
     resolveShowZeroRows(initialConfig),
   );
+  const [showUnenteredCash, setShowUnenteredCash] = useState(initialConfig.showUnenteredCash ?? false);
   const [visibleMetrics, setVisibleMetrics] = useState<MetricKey[]>(() =>
     normalizeVisibleMetrics(initialConfig.visibleMetrics, initialConfig.knownMetrics),
   );
@@ -413,6 +415,7 @@ export function ReportViewPage({ view, onSaved }: Props) {
         expandedCategoryIds: initialConfig.expandedCategoryIds,
         showTotalColumn: showTotal,
         showZeroRows,
+        showUnenteredCash,
         visibleMetrics,
         knownMetrics: ALL_METRIC_KEYS,
       };
@@ -434,6 +437,7 @@ export function ReportViewPage({ view, onSaved }: Props) {
       expandedCategoryIds: initialConfig.expandedCategoryIds,
       showTotalColumn: showTotal,
       showZeroRows,
+      showUnenteredCash,
       visibleMetrics,
       knownMetrics: ALL_METRIC_KEYS,
     };
@@ -479,6 +483,7 @@ export function ReportViewPage({ view, onSaved }: Props) {
     granularity,
     showTotal,
     showZeroRows,
+    showUnenteredCash,
     visibleMetrics,
     expenseOrder,
     expenseSelected,
@@ -534,10 +539,12 @@ export function ReportViewPage({ view, onSaved }: Props) {
   const displayItems = [
     { id: "totalColumn", label: t("report.showTotalColumn") },
     { id: "zeroRows", label: t("report.showZeroRows") },
+    { id: "unenteredCash", label: t("report.showUnenteredCash") },
   ];
   const displaySelected: string[] = [];
   if (showTotal) displaySelected.push("totalColumn");
   if (showZeroRows) displaySelected.push("zeroRows");
+  if (showUnenteredCash) displaySelected.push("unenteredCash");
 
   return (
     <section className="page report-page">
@@ -612,6 +619,7 @@ export function ReportViewPage({ view, onSaved }: Props) {
                 onApply={(next) => {
                   setShowTotal(next.includes("totalColumn"));
                   setShowZeroRows(next.includes("zeroRows"));
+                  setShowUnenteredCash(next.includes("unenteredCash"));
                 }}
                 allLabel={t("report.displayAll")}
                 noneLabel={t("report.displayNone")}
@@ -674,6 +682,7 @@ export function ReportViewPage({ view, onSaved }: Props) {
           initialExpanded={initialConfig.expandedCategoryIds}
           showTotal={showTotal}
           showZeroRows={showZeroRows}
+          showUnenteredCash={showUnenteredCash}
           visibleMetrics={visibleMetrics}
           onOpenMetricsSettings={() => setMetricsSettingsOpen(true)}
           onOpenIncomeSettings={() => setIncomePickerOpen(true)}
@@ -717,6 +726,8 @@ interface PivotProps {
   // (even with all-zero totals) so the gear icon stays accessible. Metrics
   // rows are unaffected.
   showZeroRows: boolean;
+  // Count cash not entered as transactions as an expense row (a view only).
+  showUnenteredCash: boolean;
   visibleMetrics: MetricKey[];
   onOpenMetricsSettings: () => void;
   // Open per-kind category picker modals — wired into the gear button in
@@ -745,6 +756,7 @@ function PivotTable({
   initialExpanded,
   showTotal,
   showZeroRows,
+  showUnenteredCash,
   visibleMetrics,
   onOpenMetricsSettings,
   onOpenIncomeSettings,
@@ -752,7 +764,10 @@ function PivotTable({
   onCellClick,
 }: PivotProps) {
   const t = useT();
-  const { periods, expense, income, balances, internalTransfers, cash } = response;
+  const { periods, income, balances, internalTransfers, cash } = response;
+  const expense = showUnenteredCash
+    ? withUnenteredCash(response.expense, cash, t("report.unenteredCash"))
+    : response.expense;
   // Collapse state survives switching tabs and recomputes (lib/view-state.ts),
   // per report.
   const [collapseState, setCollapseState] = useViewState<CollapseState>(
@@ -844,6 +859,7 @@ function PivotTable({
     settingsLabel: t("report.expenseCategoriesSettings"),
     onCellClick,
     totalLabel,
+    unenteredCashHint: t("report.unenteredCashHint"),
   });
 
   const metricsRows = renderMetricsSection({
@@ -939,6 +955,8 @@ interface RenderSectionArgs {
   // Label for the rightmost "Итого" column, echoed in the modal header when a
   // Total cell is clicked.
   totalLabel: string;
+  // Tooltip of the "unentered cash" row, in the section that can have one.
+  unenteredCashHint?: string;
 }
 
 // One row in the visual plan. A backend row that has selected descendants is
@@ -947,7 +965,7 @@ interface RenderSectionArgs {
 // category. That way every group's number on screen equals the sum of the
 // nested visible rows below it — no rolled-up "magic" amounts.
 interface PlanRow {
-  kind: "group" | "own" | "leaf" | "uncat";
+  kind: "group" | "own" | "leaf" | "uncat" | "cash";
   // The original backend row index this plan entry was derived from. Used by
   // the collapse logic to look up the category id and fold state.
   sourceIdx: number;
@@ -967,6 +985,10 @@ function buildPlan(
   const out: PlanRow[] = [];
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
+    if (row.unenteredCash) {
+      out.push({ kind: "cash", sourceIdx: i, depth: 0, values: row.values, total: row.total, collapsible: false });
+      continue;
+    }
     if (row.categoryId === null) {
       out.push({ kind: "uncat", sourceIdx: i, depth: 0, values: row.values, total: row.total, collapsible: false });
       continue;
@@ -1027,6 +1049,7 @@ function renderSection({
   settingsLabel,
   onCellClick,
   totalLabel,
+  unenteredCashHint,
 }: RenderSectionArgs): React.ReactElement[] {
   const { rows } = section;
   const { parents, hasDescendants, subtreeValues, subtreeMinor, subtreeTotal, subtreeTotalMinor } =
@@ -1109,7 +1132,8 @@ function renderSection({
       if (d >= entry.depth) collapsedAtDepth.delete(d);
     }
     const ancestorCollapsed = collapsedAtDepth.size > 0;
-    if (ancestorCollapsed && entry.kind !== "uncat") continue;
+    const isCash = entry.kind === "cash";
+    if (ancestorCollapsed && entry.kind !== "uncat" && !isCash) continue;
 
     // Drop rows whose displayed total is zero unless the user has opted in
     // to seeing them. For "group" entries this is the subtree total —
@@ -1117,7 +1141,11 @@ function renderSection({
     // that's fine: every descendant inherits a zero total (income/expense
     // values are non-negative), so each one is tested independently and
     // skipped on its own merits.
-    if (!showZeroRows && (parseMoneyToMinor(entry.total) ?? 0) === 0) {
+    // Cash can be negative, so its periods can cancel out to a zero total.
+    const nothingToShow = isCash
+      ? entry.values.every((v) => (parseMoneyToMinor(v) ?? 0) === 0)
+      : (parseMoneyToMinor(entry.total) ?? 0) === 0;
+    if (!showZeroRows && nothingToShow) {
       continue;
     }
 
@@ -1128,12 +1156,14 @@ function renderSection({
     const isCollapsed = isGroup && id != null && rowCollapsed.has(id);
 
     const rowClasses = ["pivot-row"];
-    if (isUncat) rowClasses.push("pivot-row--uncat");
+    if (isUncat || isCash) rowClasses.push("pivot-row--uncat");
     if (isGroup) rowClasses.push("pivot-row--group");
     if (entry.kind === "own") rowClasses.push("pivot-row--own");
 
     const displayName = isUncat
       ? uncategorizedLabel
+      : isCash
+      ? sourceRow.name
       : isGroup
       ? groupNameTemplate.replace("{name}", sourceRow.name)
       : sourceRow.name;
@@ -1167,6 +1197,7 @@ function renderSection({
         <td
           className="pivot-name-cell"
           style={{ paddingLeft: `${12 + entry.depth * 22}px` }}
+          title={isCash ? unenteredCashHint : undefined}
         >
           {entry.collapsible && id != null ? (
             <button
@@ -1180,7 +1211,7 @@ function renderSection({
           ) : (
             <span className="pivot-fold-spacer" aria-hidden />
           )}
-          {!isUncat && (
+          {!isUncat && !isCash && (
             <span
               className="pivot-swatch"
               style={{ background: sourceRow.color || "#999" }}
@@ -1190,7 +1221,8 @@ function renderSection({
           <span className="pivot-name-text">{displayName}</span>
         </td>
         {entry.values.map((v, idx) => {
-          const clickable = (parseMoneyToMinor(v) ?? 0) !== 0;
+          // There are no transactions behind the cash row to drill down to.
+          const clickable = !isCash && (parseMoneyToMinor(v) ?? 0) !== 0;
           const period = periods[idx];
           return (
             <td
@@ -1215,7 +1247,7 @@ function renderSection({
         })}
         {showTotal &&
           (() => {
-            const clickable = (parseMoneyToMinor(entry.total) ?? 0) !== 0;
+            const clickable = !isCash && (parseMoneyToMinor(entry.total) ?? 0) !== 0;
             return (
               <td
                 className={

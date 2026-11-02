@@ -824,7 +824,10 @@
       "colPeer": "Peer",
       "colDescription": "Description",
       "colComment": "Comment"
-    }
+    },
+    "showUnenteredCash": "Unentered cash in expenses",
+    "unenteredCash": "Unentered cash",
+    "unenteredCashHint": "The sum from the Cash remaining metric: cash received in the period but not entered as spending. It counts towards the expense total and the net result on this screen only, with no transactions behind it. Negative means older cash was spent."
   },
   "transaction": {
     "title": "Transaction",
