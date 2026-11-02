@@ -3636,6 +3636,7 @@ code {
   font-family: inherit;
 }
 
+.category-picker-row.is-active,
 .category-picker-row:hover:not(:disabled) {
   background: #f4f4f5;
 }
@@ -3910,6 +3911,7 @@ code {
     color: inherit;
   }
 
+:root[data-theme="dark"] .category-picker-row.is-active,
 :root[data-theme="dark"] .category-picker-row:hover:not(:disabled) {
     background: rgba(255, 255, 255, 0.05);
   }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { useT } from "../i18n";
@@ -115,6 +115,17 @@ export function TransactionModal({ transactionId, onClose, onChanged }: Props) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transactionId]);
+
+  // Opening a transaction is usually about writing a note: the cursor waits at
+  // the end of the comment. Only on opening, not after a save reloads the row.
+  const commentInput = useRef<HTMLTextAreaElement>(null);
+  const loadedId = txn?.id;
+  useEffect(() => {
+    const input = commentInput.current;
+    if (!input) return;
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  }, [loadedId]);
 
   // ESC closes the modal (only when no nested modal is open).
   useEffect(() => {
@@ -349,6 +360,7 @@ export function TransactionModal({ transactionId, onClose, onChanged }: Props) {
                   {t("transaction.fieldComment")}
                 </span>
                 <textarea
+                  ref={commentInput}
                   rows={2}
                   value={comment}
                   onChange={(e) => setComment(e.target.value)}

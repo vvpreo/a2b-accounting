@@ -35,6 +35,8 @@ export function CategoryPickerPopover({
   const t = useT();
   const [categories, setCategories] = useState<Category[] | null>(null);
   const [filter, setFilter] = useState("");
+  // Row chosen with the arrow keys; -1 while focus is only in the text field.
+  const [activeIndex, setActiveIndex] = useState(-1);
   const ref = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -90,6 +92,37 @@ export function CategoryPickerPopover({
     );
   }, [tree, filterLower]);
 
+  // Rows the arrows walk through, in the order they are shown.
+  const selectable = useMemo(
+    () => (flatMatches ?? flattenTree(tree)).map((n) => n.category).filter((c) => !excluded.has(c.id)),
+    [flatMatches, tree, excluded],
+  );
+  const activeId = selectable[activeIndex]?.id ?? null;
+
+  useEffect(() => {
+    if (activeId === null) return;
+    ref.current?.querySelector(".category-picker-row.is-active")?.scrollIntoView({ block: "nearest" });
+  }, [activeId]);
+
+  function onSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (selectable.length === 0) return;
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      setActiveIndex((i) => {
+        if (i < 0) return step > 0 ? 0 : selectable.length - 1;
+        return (i + step + selectable.length) % selectable.length;
+      });
+    } else if (e.key === "Enter") {
+      // Without a chosen row, Enter takes the best match of what was typed.
+      const target = selectable[activeIndex] ?? (filterLower !== "" ? selectable[0] : undefined);
+      if (target) {
+        e.preventDefault();
+        onPick(target);
+      }
+    }
+  }
+
   const style = useMemo(() => {
     const top = anchorRect.bottom + 4;
     const wouldOverflowBottom =
@@ -128,7 +161,11 @@ export function CategoryPickerPopover({
         <input
           autoFocus
           value={filter}
-          onChange={(e) => setFilter(e.target.value)}
+          onChange={(e) => {
+            setFilter(e.target.value);
+            setActiveIndex(-1);
+          }}
+          onKeyDown={onSearchKeyDown}
           placeholder={t("transactions.categories.pickerSearchPlaceholder")}
         />
       </div>
@@ -168,6 +205,7 @@ export function CategoryPickerPopover({
                   key={n.category.id}
                   node={n}
                   excluded={excluded.has(n.category.id)}
+                  active={n.category.id === activeId}
                   onPick={() => pickIfAllowed(n.category)}
                 />
               ))}
@@ -180,6 +218,7 @@ export function CategoryPickerPopover({
                 key={n.category.id}
                 node={n}
                 excluded={excluded}
+                activeId={activeId}
                 onPick={pickIfAllowed}
               />
             ))}
@@ -194,10 +233,12 @@ export function CategoryPickerPopover({
 function PickerNode({
   node,
   excluded,
+  activeId,
   onPick,
 }: {
   node: CategoryNode;
   excluded: Set<number>;
+  activeId: number | null;
   onPick: (c: Category) => void;
 }) {
   const isExcluded = excluded.has(node.category.id);
@@ -208,7 +249,9 @@ function PickerNode({
         className={
           isExcluded
             ? "category-picker-row is-excluded"
-            : "category-picker-row"
+            : node.category.id === activeId
+              ? "category-picker-row is-active"
+              : "category-picker-row"
         }
         disabled={isExcluded}
         onClick={() => onPick(node.category)}
@@ -227,6 +270,7 @@ function PickerNode({
               key={child.category.id}
               node={child}
               excluded={excluded}
+              activeId={activeId}
               onPick={onPick}
             />
           ))}
@@ -239,10 +283,12 @@ function PickerNode({
 function PickerItem({
   node,
   excluded,
+  active,
   onPick,
 }: {
   node: CategoryNode;
   excluded: boolean;
+  active: boolean;
   onPick: () => void;
 }) {
   return (
@@ -252,7 +298,9 @@ function PickerItem({
         className={
           excluded
             ? "category-picker-row is-excluded"
-            : "category-picker-row"
+            : active
+              ? "category-picker-row is-active"
+              : "category-picker-row"
         }
         disabled={excluded}
         onClick={onPick}

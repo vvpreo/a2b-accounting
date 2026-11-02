@@ -302,9 +302,9 @@ a2b-accounting/
 │   ├── fetch-ocr-models.sh           downloads the PaddleOCR ONNX models (SHA-256 checked); used by the Dockerfile and dev runs
 │   ├── dev.sh                        dev run (axum on :3701 + Vite on :3700)
 │   └── build.sh                      release build without Docker (dist/ + release binary)
-├── samples/                          example statements (for manual import testing)
-│                                     layout: samples/<preset-id>/<format-id>/<filename>
-│                                     — real bank statements are never committed (PII)
+├── samples/                          synthetic example statements (for manual import testing)
+├── _localonly/                       git-ignored development files; real statements go to
+│                                     _localonly/samples/<preset-id>/<format-id>/<filename> (PII)
 ├── docs/plans/                       plans for major features
 ├── TODO.md                           task queue
 └── .envrc                            FINANCES_DATA_DIR="$(pwd)/data" (direnv)
@@ -340,10 +340,10 @@ cd server && cargo test --lib
 ```
 196 unit tests cover: money parsing/formatting, migration idempotency, FK cascades, CHECK constraints, balance-chain validation, category behaviour (kind CHECK, sibling UNIQUE, cascading deletes) and transaction-category links (kind matching, sum invariant, atomic replacement, both cascades).
 
-Frontend — `npm test` (Vitest) + a tsc check via `npm run build`. Bank-statement parser tests keep their fixtures **inline** in the test code: real statements are never committed, so tests must not depend on files in `samples/`.
+Frontend — `npm test` (Vitest) + a tsc check via `npm run build`. Bank-statement parser tests keep their fixtures **inline** in the test code: real statements are never committed, so tests must not depend on files in `_localonly/`.
 
 ### Manual import testing
-The `samples/` folder holds examples — a valid chain / a balance gap for the generic format, plus a subfolder per bank preset (`samples/<preset-id>/<format-id>/`). Real bank statements are **never committed** to the repository (they contain PII) — keep yours locally; they must not end up in a commit.
+The `samples/` folder holds synthetic examples — a valid chain / a balance gap for the generic format. Real bank statements are **never committed** to the repository (they contain PII): keep yours in the git-ignored `_localonly/samples/<preset-id>/<format-id>/`.
 
 ### Supported statement formats
 

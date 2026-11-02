@@ -14,6 +14,7 @@ desktop
 ocr-models
 docs
 samples
+_localonly
 scripts
 # …except the icon stand-badging step the frontend build runs and the OCR
 # model download
