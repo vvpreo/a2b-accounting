@@ -856,6 +856,21 @@ button.select-dropdown.is-open {
   margin: 0;
 }
 
+.telegram-bulk {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.telegram-table tr.is-checked td {
+  background: #eef2ff;
+}
+
+:root[data-theme="dark"] .telegram-table tr.is-checked td {
+  background: #312e81;
+}
+
 .telegram-when {
   display: flex;
   gap: 4px;

@@ -348,6 +348,12 @@ pub fn commit_telegram_import(
             params![account_id, p.message_id, p.text, p.date, p.time, p.rows_json],
         )
         .map_err(|e| e.to_string())?;
+        // Ignored earlier and taken back for review: that decision no longer stands.
+        tx.execute(
+            "DELETE FROM telegram_messages WHERE account_id = ?1 AND message_id = ?2 AND status = ?3",
+            params![account_id, p.message_id, STATUS_SKIPPED],
+        )
+        .map_err(|e| e.to_string())?;
     }
 
     for e in &edited {
@@ -699,6 +705,16 @@ mod tests {
         let st = state_of(&f);
         assert!(st.pending.is_empty());
         assert_eq!(st.messages.len(), 2);
+    }
+
+    #[test]
+    fn an_ignored_message_taken_back_for_review_is_no_longer_ignored() {
+        let f = fixture();
+        commit_pending(&f, vec![decision(1, vec![])], vec![]).unwrap();
+        commit_pending(&f, vec![], vec![pending(1, "[]")]).unwrap();
+        let st = state_of(&f);
+        assert!(st.messages.is_empty());
+        assert_eq!(st.pending.len(), 1);
     }
 
     #[test]

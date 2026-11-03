@@ -8,6 +8,7 @@ import { parseMoneyToMinor } from "./money";
  * - otherwise a single number in the text reads the same way;
  * - several amounts, or an amount not written plainly, go to "review";
  * - no number: "ignore".
+ * A message ignored earlier comes back on "ignore" and can be moved from there.
  * The owner checks the first file by eye and sticks to `[+]amount[ ]comment`
  * after that. See docs/plans/telegram-cash-import.md.
  */
@@ -99,7 +100,7 @@ export function parseTelegramExport(files: string[]): ParsedExport {
 
 export type Bucket = "out" | "in" | "review" | "ignore";
 
-export type Reason = "looseAmount" | "severalNumbers" | "possibleDuplicate";
+export type Reason = "looseAmount" | "severalNumbers" | "possibleDuplicate" | "ignoredEarlier";
 
 export interface Classified {
   bucket: Bucket;
@@ -263,13 +264,15 @@ export interface SortedExport {
   /** Imported earlier and changed since: only shown, the entry stays as it is. */
   edited: EditedMessage[];
   alreadyImported: number;
+  /** Ignored earlier: among `rows`, waiting on "ignore" with a mark. */
   alreadySkipped: number;
   /** Left for review earlier, with the same text: restored by `restorePending`. */
   alreadyPending: number;
 }
 
-/** Leave out what has been decided on; a skipped message whose text has
- *  changed since is decided again, as nothing was created from it. */
+/** Leave out what has been imported. A message ignored earlier stays visible on
+ *  "ignore", so the decision can be changed; if its text has changed since, it
+ *  is sorted anew, as nothing was created from it. */
 export function sortExport(
   messages: ExportMessage[],
   known: KnownMessage[],
@@ -290,15 +293,17 @@ export function sortExport(
       if (prior.text !== m.text) edited.push({ messageId: m.id, before: prior.text, after: m.text });
       continue;
     }
-    if (prior && prior.text === m.text) {
-      alreadySkipped += 1;
-      continue;
-    }
     if (waiting.get(m.id)?.text === m.text) {
       alreadyPending += 1;
       continue;
     }
-    rows.push(newRow(rows.length, m, currency));
+    const row = newRow(rows.length, m, currency);
+    if (prior && prior.text === m.text) {
+      alreadySkipped += 1;
+      rows.push({ ...row, bucket: "ignore", reasons: ["ignoredEarlier"] });
+      continue;
+    }
+    rows.push(row);
   }
   return { rows, edited, alreadyImported, alreadySkipped, alreadyPending };
 }
@@ -393,6 +398,14 @@ export function markDuplicates(rows: WizardRow[], existing: Transaction[], offse
   });
 }
 
+/** The keys from one row to another in the order shown, for a Shift-click. */
+export function keysBetween(keys: number[], from: number, to: number): number[] {
+  const a = keys.indexOf(from);
+  const b = keys.indexOf(to);
+  if (a < 0 || b < 0) return [to];
+  return keys.slice(Math.min(a, b), Math.max(a, b) + 1);
+}
+
 export function isInvalid(r: WizardRow): boolean {
   if (r.bucket !== "in" && r.bucket !== "out") return false;
   return !r.date || !r.time || !((parseMoneyToMinor(r.amount) ?? 0) > 0);
@@ -435,6 +448,8 @@ export function planImport(rows: WizardRow[], offset: string): Plan {
       pending.push({ messageId, text, date, time, rowsJson: JSON.stringify(group) });
       continue;
     }
+    // Ignored earlier and still ignored: nothing to write, the old decision stands.
+    if (group.every((r) => r.bucket === "ignore" && r.reasons.includes("ignoredEarlier"))) continue;
     decisions.push({
       messageId,
       text: group[0].text,

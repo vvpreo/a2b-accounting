@@ -5,6 +5,7 @@ import {
   ExportMessage,
   WizardRow,
   isInvalid,
+  keysBetween,
   classifyMessage,
   markDuplicates,
   parseTelegramExport,
@@ -138,7 +139,7 @@ describe("splitList", () => {
 const msg = (id: number, text: string, date = "2026-01-10"): ExportMessage => ({ id, date, time: "12:00:00", text });
 
 describe("sortExport", () => {
-  it("leaves out what is decided and reports edits of imported messages", () => {
+  it("leaves out imported messages and reports their edits", () => {
     const sorted = sortExport(
       [msg(1, "100 вода"), msg(2, "заметка"), msg(3, "200 чай"), msg(4, "300 новое"), msg(5, "теперь 400 кеш")],
       [
@@ -153,7 +154,44 @@ describe("sortExport", () => {
     expect(sorted.alreadyImported).toBe(2);
     expect(sorted.alreadySkipped).toBe(1);
     expect(sorted.edited).toEqual([{ messageId: 3, before: "150 чай", after: "200 чай" }]);
-    expect(sorted.rows.map((r) => r.messageId)).toEqual([4, 5]);
+    expect(sorted.rows.map((r) => r.messageId)).toEqual([2, 4, 5]);
+  });
+});
+
+describe("a message ignored earlier", () => {
+  const known = [{ messageId: 1, status: "skipped", text: "100 вода" }];
+
+  it("comes back on the ignore tab with a mark, its amount read", () => {
+    const { rows, alreadySkipped } = sortExport([msg(1, "100 вода")], known, [], THB);
+    expect(alreadySkipped).toBe(1);
+    expect(rows[0]).toMatchObject({ bucket: "ignore", amount: "100", comment: "вода", reasons: ["ignoredEarlier"] });
+  });
+
+  it("left there, writes nothing", () => {
+    const { rows } = sortExport([msg(1, "100 вода")], known, [], THB);
+    expect(planImport(rows, "+07:00")).toEqual({ decisions: [], pending: [] });
+  });
+
+  it("moved to expenses, is imported", () => {
+    const { rows } = sortExport([msg(1, "100 вода")], known, [], THB);
+    const plan = planImport([{ ...rows[0], bucket: "out" }], "+07:00");
+    expect(plan.decisions[0].entries).toHaveLength(1);
+    expect(plan.decisions[0].entries[0]).toMatchObject({ direction: "out", amount: "100" });
+  });
+
+  it("moved to review, is saved for later", () => {
+    const { rows } = sortExport([msg(1, "100 вода")], known, [], THB);
+    const left = planImport([{ ...rows[0], bucket: "review" }], "+07:00").pending;
+    expect(left.map((p) => p.messageId)).toEqual([1]);
+    const again = sortExport([msg(1, "100 вода")], known, left, THB);
+    expect(again.rows).toEqual([]);
+    expect(again.alreadyPending).toBe(1);
+  });
+
+  it("with another text, is sorted anew", () => {
+    const { rows, alreadySkipped } = sortExport([msg(1, "150 вода")], known, [], THB);
+    expect(alreadySkipped).toBe(0);
+    expect(rows[0]).toMatchObject({ bucket: "out", amount: "150", reasons: [] });
   });
 });
 
@@ -243,6 +281,18 @@ describe("left for review", () => {
   it("an unreadable draft falls back to the message itself", () => {
     const broken = { ...left(1, "100 вода"), rowsJson: "{" };
     expect(restorePending([broken], [], THB, 0)[0]).toMatchObject({ messageId: 1, amount: "100", bucket: "out" });
+  });
+});
+
+describe("keysBetween", () => {
+  it("takes the range in the order shown, either way", () => {
+    expect(keysBetween([5, 3, 9, 1], 3, 1)).toEqual([3, 9, 1]);
+    expect(keysBetween([5, 3, 9, 1], 1, 3)).toEqual([3, 9, 1]);
+    expect(keysBetween([5, 3], 3, 3)).toEqual([3]);
+  });
+
+  it("a row no longer shown gives just the clicked one", () => {
+    expect(keysBetween([5, 3], 7, 3)).toEqual([3]);
   });
 });
 

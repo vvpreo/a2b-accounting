@@ -20,6 +20,7 @@ import {
   ParsedExport,
   WizardRow,
   isInvalid,
+  keysBetween,
   markDuplicates,
   parseTelegramExport,
   planImport,
@@ -54,9 +55,11 @@ function moved(r: WizardRow, bucket: Bucket): WizardRow {
 
 interface RowViewProps {
   row: WizardRow;
+  checked: boolean;
   categoryPath: string | null;
   categoryColor: string | undefined;
   removable: boolean;
+  onToggle: (key: number, checked: boolean, range: boolean) => void;
   onUpdate: (key: number, patch: Partial<WizardRow>) => void;
   onMove: (key: number, bucket: Bucket) => void;
   onSplit: (key: number) => void;
@@ -68,9 +71,11 @@ interface RowViewProps {
 /// not render the others.
 const RowView = memo(function RowView({
   row: r,
+  checked,
   categoryPath,
   categoryColor,
   removable,
+  onToggle,
   onUpdate,
   onMove,
   onSplit,
@@ -81,7 +86,15 @@ const RowView = memo(function RowView({
   const invalid = isInvalid(r);
   const entry = r.bucket === "in" || r.bucket === "out";
   return (
-    <tr>
+    <tr className={checked ? "is-checked" : undefined}>
+      <td>
+        <input
+          type="checkbox"
+          checked={checked}
+          aria-label={t("accounts.cash.telegram.selectRow")}
+          onChange={(e) => onToggle(r.key, e.target.checked, (e.nativeEvent as MouseEvent).shiftKey)}
+        />
+      </td>
       <td>
         <span className="telegram-when">
           <input
@@ -215,6 +228,10 @@ export function TelegramImportModal({ account, onClose, onChanged }: Props) {
   // What the rows were built from: going back and forth keeps the corrections.
   const builtFor = useRef<string | null>(null);
   const nextKey = useRef(1_000_000);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  // For a Shift-click: the last row clicked and the rows shown now.
+  const lastToggled = useRef<number | null>(null);
+  const shownKeys = useRef<number[]>([]);
 
   const showError = useCallback(
     (e: unknown) => {
@@ -370,6 +387,25 @@ export function TelegramImportModal({ account, onClose, onChanged }: Props) {
     setRows((rs) => rs.filter((r) => r.key !== key));
   }, []);
 
+  const toggle = useCallback((key: number, checked: boolean, range: boolean) => {
+    const keys = range && lastToggled.current !== null ? keysBetween(shownKeys.current, lastToggled.current, key) : [key];
+    lastToggled.current = key;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const k of keys) {
+        if (checked) next.add(k);
+        else next.delete(k);
+      }
+      return next;
+    });
+  }, []);
+
+  function openTab(next: Tab) {
+    setTab(next);
+    setSelected(new Set());
+    lastToggled.current = null;
+  }
+
   const pickCategory = useCallback((key: number, rect: DOMRect) => {
     setPicker({ key, rect });
   }, []);
@@ -451,6 +487,10 @@ export function TelegramImportModal({ account, onClose, onChanged }: Props) {
     title.trim().length > 0;
 
   const visible = tab === "edited" ? [] : rows.filter((r) => r.bucket === tab);
+  shownKeys.current = visible.map((r) => r.key);
+  // A row moved on its own has left the tab, and the selection with it.
+  const selectedCount = visible.filter((r) => selected.has(r.key)).length;
+  const allSelected = visible.length > 0 && selectedCount === visible.length;
   const pickerRow = picker ? rows.find((r) => r.key === picker.key) : undefined;
   const period =
     parsed && parsed.messages.length > 0
@@ -543,7 +583,7 @@ export function TelegramImportModal({ account, onClose, onChanged }: Props) {
               {preview && period && (
                 <div className="cash-dictation-summary telegram-file-stats">
                   <span>{t("accounts.cash.telegram.statsPeriod", period)}</span>
-                  <span>{t("accounts.cash.telegram.statsNew", { count: preview.rows.length })}</span>
+                  <span>{t("accounts.cash.telegram.statsNew", { count: preview.rows.length - preview.alreadySkipped })}</span>
                   <span>{t("accounts.cash.telegram.statsImported", { count: preview.alreadyImported })}</span>
                   <span>{t("accounts.cash.telegram.statsSkipped", { count: preview.alreadySkipped })}</span>
                   <span>{t("accounts.cash.telegram.statsPending", { count: preview.alreadyPending })}</span>
@@ -605,7 +645,7 @@ export function TelegramImportModal({ account, onClose, onChanged }: Props) {
                     key={b}
                     type="button"
                     className={`modal-tab-button${tab === b ? " active" : ""}`}
-                    onClick={() => setTab(b)}
+                    onClick={() => openTab(b)}
                   >
                     {t(`accounts.cash.telegram.bucket.${b}`)} ({countOf(b)})
                   </button>
@@ -614,7 +654,7 @@ export function TelegramImportModal({ account, onClose, onChanged }: Props) {
                   <button
                     type="button"
                     className={`modal-tab-button${tab === "edited" ? " active" : ""}`}
-                    onClick={() => setTab("edited")}
+                    onClick={() => openTab("edited")}
                   >
                     {t("accounts.cash.telegram.editedTab")} ({edited.length})
                   </button>
@@ -644,26 +684,36 @@ export function TelegramImportModal({ account, onClose, onChanged }: Props) {
                 <>
                   <div className="telegram-tab-tools">
                     <p className="hint">{t(`accounts.cash.telegram.bucketHint.${tab}`)}</p>
-                    {visible.length > 0 && (
-                      <label>
-                        {t("accounts.cash.telegram.moveAll")}{" "}
-                        <select
-                          value=""
-                          onChange={(e) => {
-                            const bucket = e.target.value as Bucket;
-                            setRows((rs) => rs.map((r) => (r.bucket === tab ? moved(r, bucket) : r)));
-                          }}
-                        >
-                          <option value="" disabled>
-                            {t("accounts.cash.telegram.moveAllPlaceholder")}
-                          </option>
-                          {BUCKETS.filter((b) => b !== tab).map((b) => (
-                            <option key={b} value={b}>
-                              {t(`accounts.cash.telegram.bucket.${b}`)}
+                    {selectedCount > 0 && (
+                      <span className="telegram-bulk">
+                        <span>{t("accounts.cash.telegram.selectedCount", { count: selectedCount })}</span>
+                        <label>
+                          {t("accounts.cash.telegram.moveTo")}{" "}
+                          <select
+                            value=""
+                            onChange={(e) => {
+                              const bucket = e.target.value as Bucket;
+                              setRows((rs) =>
+                                rs.map((r) => (r.bucket === tab && selected.has(r.key) ? moved(r, bucket) : r)),
+                              );
+                              setSelected(new Set());
+                              lastToggled.current = null;
+                            }}
+                          >
+                            <option value="" disabled>
+                              {t("accounts.cash.telegram.moveToPlaceholder")}
                             </option>
-                          ))}
-                        </select>
-                      </label>
+                            {BUCKETS.filter((b) => b !== tab).map((b) => (
+                              <option key={b} value={b}>
+                                {t(`accounts.cash.telegram.bucket.${b}`)}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <button type="button" className="btn-ghost" onClick={() => setSelected(new Set())}>
+                          {t("accounts.cash.telegram.clearSelection")}
+                        </button>
+                      </span>
                     )}
                   </div>
                   {visible.length === 0 ? (
@@ -672,6 +722,18 @@ export function TelegramImportModal({ account, onClose, onChanged }: Props) {
                     <table className="cash-dictation-table telegram-table">
                       <thead>
                         <tr>
+                          <th>
+                            <input
+                              type="checkbox"
+                              checked={allSelected}
+                              aria-label={t("accounts.cash.telegram.selectAll")}
+                              title={t("accounts.cash.telegram.selectHint")}
+                              onChange={(e) => {
+                                setSelected(new Set(e.target.checked ? visible.map((r) => r.key) : []));
+                                lastToggled.current = null;
+                              }}
+                            />
+                          </th>
                           <th>{t("accounts.cash.telegram.colWhen")}</th>
                           <th>{t("accounts.cash.colAmount")}</th>
                           <th>{t("accounts.cash.colComment")}</th>
@@ -686,9 +748,11 @@ export function TelegramImportModal({ account, onClose, onChanged }: Props) {
                           <RowView
                             key={r.key}
                             row={r}
+                            checked={selected.has(r.key)}
                             categoryPath={r.categoryId !== null ? pathOf(r.categoryId) : null}
                             categoryColor={r.categoryId !== null ? colorOf.get(r.categoryId) : undefined}
                             removable={(partsByMessage.get(r.messageId) ?? 0) > 1}
+                            onToggle={toggle}
                             onUpdate={update}
                             onMove={move}
                             onSplit={split}

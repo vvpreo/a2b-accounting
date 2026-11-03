@@ -164,7 +164,7 @@
         "button": "Import from Telegram…",
         "buttonHint": "Load expenses and income from a Telegram channel export: everything is checked before the import",
         "title": "Import from Telegram · {account}",
-        "intro": "Choose the channel's HTML export: Export Chat in Telegram, without media. You can check and correct every message before the import. Messages already decided on will not come back.",
+        "intro": "Choose the channel's HTML export: Export Chat in Telegram, without media. You can check and correct every message before the import. Imported messages will not come back; ignored ones wait on the Ignore tab.",
         "notation": "Rules: a number at the start is the amount of an expense, with a plus of income. “145 stationery”, “+1300 bank withdrawal”. A single number elsewhere reads the same way. Several numbers, or an amount not in plain digits (1.000, 8k), go to review; messages without numbers are ignored, messages with attachments are not counted.",
         "file": "Export file",
         "channel": "Channel name",
@@ -179,7 +179,7 @@
         "statsPeriod": "Period: {from} — {to}",
         "statsNew": "New messages: {count}",
         "statsImported": "Imported earlier: {count}",
-        "statsSkipped": "Skipped earlier: {count}",
+        "statsSkipped": "Ignored earlier, on the Ignore tab: {count}",
         "statsPending": "Left for review earlier: {count}",
         "pendingSaved": "Saved for review: {count}.",
         "pendingOpen": "Sort out",
@@ -196,8 +196,6 @@
         "colTime": "Time",
         "colGroup": "Group",
         "colSource": "Message",
-        "moveAll": "Move everything on this tab to:",
-        "moveAllPlaceholder": "choose a group",
         "emptyTab": "Nothing on this tab.",
         "split": "Split",
         "splitHint": "Make several entries from the message. A list of amounts is split by line, otherwise an empty row is added.",
@@ -226,13 +224,21 @@
           "review": "Not imported until you move the row to another group. What remains is saved with all corrections: you can sort it out later, no file needed.",
           "out": "Imported as expenses.",
           "in": "Imported as income.",
-          "ignore": "Not imported and will not come back."
+          "ignore": "Not imported. To import one, move it to another group; with the next file they will be here again."
         },
         "reason": {
           "looseAmount": "amount not in plain digits",
           "severalNumbers": "several numbers",
-          "possibleDuplicate": "may already be entered"
-        }
+          "possibleDuplicate": "may already be entered",
+          "ignoredEarlier": "ignored earlier"
+        },
+        "selectRow": "Select the row",
+        "selectAll": "Select everything on the tab",
+        "selectHint": "For a range: Shift-click a checkbox",
+        "selectedCount": "Selected: {count}",
+        "moveTo": "Move to:",
+        "moveToPlaceholder": "choose a group",
+        "clearSelection": "Clear selection"
       },
       "dictation": {
         "button": "Entries from a description…",
