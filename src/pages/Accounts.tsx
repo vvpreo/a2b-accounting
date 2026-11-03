@@ -366,6 +366,7 @@ export function AccountsPage({
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [detailAccountId, setDetailAccountId] = useState<number | null>(null);
+  const [detailInitialTab, setDetailInitialTab] = useState<DetailTab>("general");
   // Drag & drop reordering: the account being dragged by its ⠿ handle and
   // where it would land (before or after the hovered account).
   const [dragId, setDragId] = useState<number | null>(null);
@@ -762,18 +763,33 @@ export function AccountsPage({
                       {a.kind !== "cash" && onImportAccount && (
                         <button
                           type="button"
-                          className="account-edit-btn"
+                          className="btn-primary account-import-btn"
                           onClick={() => onImportAccount(a.id)}
-                          aria-label={t("accounts.actionImport")}
                           title={t("accounts.actionImport")}
                         >
-                          ⤓
+                          ⤓ {t("accounts.actionImportShort")}
+                        </button>
+                      )}
+                      {a.kind === "cash" && (
+                        <button
+                          type="button"
+                          className="btn-primary account-import-btn"
+                          onClick={() => {
+                            setDetailInitialTab("cash");
+                            setDetailAccountId(a.id);
+                          }}
+                          title={t("accounts.actionEntries")}
+                        >
+                          {t("accounts.detailsTabCash")}
                         </button>
                       )}
                       <button
                         type="button"
                         className="account-edit-btn"
-                        onClick={() => setDetailAccountId(a.id)}
+                        onClick={() => {
+                          setDetailInitialTab("general");
+                          setDetailAccountId(a.id);
+                        }}
                         aria-label={t("accounts.actionDetails")}
                         title={t("accounts.actionDetails")}
                       >
@@ -840,6 +856,7 @@ export function AccountsPage({
       {detailAccount && (
         <AccountDetailModal
           account={detailAccount}
+          initialTab={detailInitialTab}
           onClose={() => setDetailAccountId(null)}
           onSaved={async () => {
             await refresh();
@@ -1013,11 +1030,13 @@ type DetailTab = "general" | "batches" | "cash" | "export";
 
 function AccountDetailModal({
   account,
+  initialTab,
   onClose,
   onSaved,
   onDeleted,
 }: {
   account: Account;
+  initialTab: DetailTab;
   onClose: () => void;
   onSaved: () => Promise<void>;
   onDeleted: () => Promise<void>;
@@ -1026,7 +1045,7 @@ function AccountDetailModal({
   const isCash = account.kind === "cash";
   // Cash accounts have no import batches — the second tab is replaced with
   // the manual-entry list. Bank accounts keep the historical layout.
-  const [tab, setTab] = useState<DetailTab>("general");
+  const [tab, setTab] = useState<DetailTab>(initialTab);
 
   const [form, setForm] = useState<AccountFormValues>({
     presetId: presetIdForAccount(account),

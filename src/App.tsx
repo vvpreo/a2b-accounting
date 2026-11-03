@@ -39,12 +39,10 @@ function App() {
     yearMonth: string;
   } | null>(null);
   const [creatingAccount, setCreatingAccount] = useState(false);
-  // null = import dialog closed. Otherwise the dialog is open, optionally with
-  // an account preselected: `accountId` is set when opened from the Accounts
-  // tab's per-row Import button, and null when opened from the Transactions
-  // toolbar (the user picks the account inside the dialog).
+  // null = import dialog closed. Otherwise the dialog is open with the account
+  // of the Accounts tab's per-row Import button preselected.
   const [importState, setImportState] = useState<{
-    accountId: number | null;
+    accountId: number;
   } | null>(null);
   const [accountsVersion, setAccountsVersion] = useState(0);
 
@@ -128,7 +126,6 @@ function App() {
           selectedAccountIds={txnFilterAccountIds}
           onChangeSelectedAccountIds={setTxnFilterAccountIds}
           version={accountsVersion}
-          onImportTransactions={() => setImportState({ accountId: null })}
           pendingMonthFilter={txnPendingMonth}
           onPendingMonthFilterApplied={() => setTxnPendingMonth(null)}
         />

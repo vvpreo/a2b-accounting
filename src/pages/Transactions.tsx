@@ -273,7 +273,6 @@ interface Props {
   selectedAccountIds: number[];
   onChangeSelectedAccountIds: (ids: number[]) => void;
   version: number;
-  onImportTransactions: () => void;
   /// One-shot navigation hint. When set (typically right after the user clicks
   /// a month cell on the Accounts tab), the page snaps its date filter to that
   /// calendar month and then asks the host to clear the hint so the user can
@@ -306,7 +305,6 @@ export function TransactionsPage({
   selectedAccountIds,
   onChangeSelectedAccountIds,
   version,
-  onImportTransactions,
   pendingMonthFilter,
   onPendingMonthFilterApplied,
 }: Props) {
@@ -1378,7 +1376,6 @@ export function TransactionsPage({
             <div className="filter-bar-action">
               <BulkActionsMenu
                 selectedCount={bulkTargets.length}
-                onImportTransactions={onImportTransactions}
                 onAnalyzeDocuments={() => setBulkDocsOpen(true)}
                 onDetectCashWithdrawals={() => setBulkDetect("cash_withdrawal")}
                 onDetectTransfers={() => setBulkDetect("transfer")}

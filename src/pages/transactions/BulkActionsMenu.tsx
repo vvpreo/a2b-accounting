@@ -8,7 +8,6 @@ interface Props {
   /// running a bulk action against an implicit "everything" set.
   selectedCount: number;
   /// Not a bulk action — always enabled; listed last.
-  onImportTransactions: () => void;
   onAnalyzeDocuments: () => void;
   onDetectCashWithdrawals: () => void;
   onDetectTransfers: () => void;
@@ -28,10 +27,8 @@ interface Props {
 /// confidence) — and manual — done as
 /// told (assign a category, mark / unmark examples, export a reference set,
 /// delete cash-account rows).
-/// Below both, "Import transactions", which needs no selection.
 export function BulkActionsMenu({
   selectedCount,
-  onImportTransactions,
   onAnalyzeDocuments,
   onDetectCashWithdrawals,
   onDetectTransfers,
@@ -138,18 +135,6 @@ export function BulkActionsMenu({
               {t("transactions.bulk.selectFirstHint")}
             </p>
           )}
-          <div className="dropdown-divider" />
-          <button
-            type="button"
-            role="menuitem"
-            className="bulk-actions-item"
-            onClick={() => {
-              setOpen(false);
-              onImportTransactions();
-            }}
-          >
-            {t("toolbar.importTransactions")}
-          </button>
         </div>
       )}
     </div>

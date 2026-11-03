@@ -408,6 +408,14 @@ body {
   background: #f1f1f4;
 }
 
+.account-import-btn {
+  height: 22px;
+  padding: 0 10px;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
 .last-txn-cell {
   white-space: nowrap;
 }
