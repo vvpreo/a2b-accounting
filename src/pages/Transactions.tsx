@@ -47,6 +47,7 @@ import {
   unlinkTransaction,
   updateTransactionComment,
 } from "../lib/api";
+import { bankLabel } from "../lib/account-presets";
 import { defaultCashAccountKey, preselectCashAccount } from "../lib/default-cash-account";
 import { formatMoney, parseMoneyToMinor } from "../lib/money";
 import { useViewState } from "../lib/view-state";
@@ -2577,7 +2578,7 @@ function buildAccountTooltip(
 ): string {
   const lines: string[] = [];
   if (acc.name) lines.push(`${t("accounts.fieldName")}: ${acc.name}`);
-  if (acc.bank) lines.push(`${t("accounts.fieldBank")}: ${acc.bank}`);
+  if (acc.bank) lines.push(`${t("accounts.fieldBank")}: ${bankLabel(acc.bank, t)}`);
   lines.push(`${t("accounts.fieldCurrency")}: ${acc.currency}`);
   if (acc.accountNumber)
     lines.push(`${t("accounts.fieldAccountNumber")}: ${acc.accountNumber}`);

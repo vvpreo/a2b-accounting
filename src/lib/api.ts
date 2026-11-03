@@ -584,6 +584,77 @@ export function createRegularCashEntries(args: {
   return invoke<number>("create_regular_cash_entries", { ...args });
 }
 
+export interface TelegramPending {
+  messageId: number;
+  text: string;
+  date: string;
+  time: string;
+  /** The wizard's own draft of the message's rows. */
+  rowsJson: string;
+}
+
+export interface TelegramImportState {
+  channel: { title: string; timezoneOffset: string } | null;
+  messages: { messageId: number; status: string; text: string }[];
+  /** Left for review earlier. */
+  pending: TelegramPending[];
+  /** Earlier imports, newest first. */
+  batches: {
+    id: number;
+    importedAt: string;
+    sourceFilename: string | null;
+    imported: number;
+    skipped: number;
+  }[];
+  /** Channels bound to other cash accounts. */
+  otherChannels: { accountName: string; title: string }[];
+}
+
+export function getTelegramImportState(accountId: number): Promise<TelegramImportState> {
+  return invoke<TelegramImportState>("get_telegram_import_state", { accountId });
+}
+
+/** Rename the channel bound to the account. */
+export function setTelegramChannel(args: {
+  accountId: number;
+  title: string;
+  timezoneOffset: string;
+}): Promise<void> {
+  return invoke<void>("set_telegram_channel", { ...args });
+}
+
+export interface TelegramDecisionInput {
+  messageId: number;
+  text: string;
+  /** Empty when the message is skipped. */
+  entries: {
+    occurredAtUtc: string;
+    direction: CashDirection;
+    amount: string;
+    categoryId: number | null;
+    comment: string | null;
+  }[];
+}
+
+/** Write the decisions at once; returns the number of entries created. Error
+ *  code: `telegram_import.already_imported`. */
+export function commitTelegramImport(args: {
+  accountId: number;
+  title: string;
+  timezoneOffset: string;
+  sourceFilename: string | null;
+  decisions: TelegramDecisionInput[];
+  pending: TelegramPending[];
+  edited: { messageId: number; text: string }[];
+}): Promise<number> {
+  return invoke<number>("commit_telegram_import", { ...args });
+}
+
+/** Roll one import back; its messages will be offered again. */
+export function deleteTelegramImport(accountId: number, batchId: number): Promise<number> {
+  return invoke<number>("delete_telegram_import", { accountId, batchId });
+}
+
 // Stable error codes from `create_cash_withdrawal` and friends. The
 // `link.*` codes reuse the existing pairing errors when a withdrawal
 // hits the same invariants (already linked, same account).

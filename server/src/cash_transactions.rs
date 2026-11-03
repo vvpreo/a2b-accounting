@@ -307,7 +307,7 @@ pub fn delete_cash_transaction(state: State<'_, DbState>, id: i64) -> Result<(),
 /// goes with it by cascade; the partner on the other account is then no
 /// longer linked, so it loses the `<<--->>` transfer category the same way an
 /// unlink takes it off (`transfer_categories::clear_on_unlink`).
-fn delete_row(tx: &Connection, id: i64) -> Result<(), String> {
+pub(crate) fn delete_row(tx: &Connection, id: i64) -> Result<(), String> {
     let partner: Option<i64> = tx
         .query_row(
             "SELECT CASE WHEN txn_a_id = ?1 THEN txn_b_id ELSE txn_a_id END

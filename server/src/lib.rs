@@ -28,6 +28,7 @@ mod seed;
 mod settings;
 mod slip_extract;
 mod suggestions;
+mod telegram_import;
 mod transaction_categories;
 mod transaction_links;
 mod transactions;

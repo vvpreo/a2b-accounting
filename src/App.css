@@ -470,6 +470,61 @@ body {
   cursor: pointer;
 }
 
+button.select-dropdown,
+button.select-dropdown:hover:not(:disabled) {
+  padding: 6px 28px 6px 8px;
+  font-size: 14px;
+  font-family: inherit;
+  text-align: left;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  color: #18181b;
+  cursor: pointer;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%2352525b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 10px center;
+}
+
+button.select-dropdown:focus,
+button.select-dropdown.is-open {
+  outline: none;
+  border-color: #6366f1;
+}
+
+.select-dropdown-label {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.select-dropdown-list {
+  z-index: 100;
+  padding: 4px;
+  overflow-y: auto;
+  font-size: 14px;
+  color: #18181b;
+  background: #fff;
+  border: 1px solid #d4d4d8;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.select-dropdown-option {
+  padding: 6px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.select-dropdown-option.is-active {
+  background: #f4f4f5;
+}
+
+.select-dropdown-option.is-selected {
+  font-weight: 600;
+}
+
 .account-form textarea {
   resize: vertical;
   min-height: 64px;
@@ -748,6 +803,114 @@ body {
 .cash-dictation-mark.is-warn {
   background: #fef3c7;
   color: #92400e;
+}
+
+.telegram-file-step .import-field {
+  margin-bottom: 10px;
+}
+
+.telegram-title-row {
+  display: flex;
+  gap: 8px;
+}
+
+.telegram-title-row input {
+  flex: 1;
+}
+
+.telegram-file-stats {
+  flex-wrap: wrap;
+}
+
+.telegram-batches-title {
+  margin: 16px 0 6px;
+}
+
+.telegram-batches {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.telegram-batches li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 13px;
+  border-top: 1px solid #e4e4e7;
+}
+
+.telegram-tab-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 10px 0;
+  font-size: 13px;
+}
+
+.telegram-tab-tools .hint {
+  margin: 0;
+}
+
+.telegram-when {
+  display: flex;
+  gap: 4px;
+}
+
+.cash-dictation-table .telegram-when input[type="time"] {
+  width: 132px;
+}
+
+.telegram-source {
+  min-width: 240px;
+  max-width: 380px;
+}
+
+.telegram-source-text {
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #52525b;
+}
+
+.telegram-source-marks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.telegram-source-marks .cash-dictation-mark {
+  margin-left: 0;
+}
+
+.telegram-suggest {
+  padding: 1px 6px;
+  font-size: 11px;
+  border: 1px solid #a1a1aa;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.telegram-summary {
+  margin: 0;
+  padding-left: 18px;
+  line-height: 1.8;
+}
+
+:root[data-theme="dark"] .telegram-source-text {
+  color: #a1a1aa;
+}
+
+:root[data-theme="dark"] .telegram-batches li {
+  border-top-color: #3f3f46;
 }
 
 :root[data-theme="dark"] .regular-month-select select,
@@ -3002,6 +3165,26 @@ code {
 :root[data-theme="dark"] .account-form button:hover:not(:disabled) {
     background: #2563eb;
   }
+
+/* After the form buttons above: same specificity, so the order decides. */
+:root[data-theme="dark"] button.select-dropdown,
+:root[data-theme="dark"] button.select-dropdown:hover:not(:disabled),
+:root[data-theme="dark"] .select-dropdown-list {
+  color: #e4e4e7;
+  background-color: #27272a;
+  border-color: #3f3f46;
+}
+
+:root[data-theme="dark"] button.select-dropdown,
+:root[data-theme="dark"] button.select-dropdown:hover:not(:disabled) {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23a1a1aa' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+
+:root[data-theme="dark"] .select-dropdown-option.is-active {
+  background: #3f3f46;
+}
 
 :root[data-theme="dark"] .btn-ghost {
     border-color: #3f3f46;

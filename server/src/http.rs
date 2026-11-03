@@ -367,6 +367,18 @@ async fn rpc(
             log_id: Option<i64>, proposed: usize, edited: usize]),
         "create_regular_cash_entries" => run!(state crate::cash_regular::create_regular_cash_entries, [
             account_id: i64, entries: Vec<crate::cash_regular::RegularEntryInput>]),
+        "get_telegram_import_state" => run!(state crate::telegram_import::get_telegram_import_state, [
+            account_id: i64]),
+        "set_telegram_channel" => run!(state crate::telegram_import::set_telegram_channel, [
+            account_id: i64, title: String, timezone_offset: String]),
+        "commit_telegram_import" => run!(state crate::telegram_import::commit_telegram_import, [
+            account_id: i64, title: String, timezone_offset: String,
+            source_filename: Option<String>,
+            decisions: Vec<crate::telegram_import::TelegramDecisionInput>,
+            pending: Vec<crate::telegram_import::TelegramPending>,
+            edited: Vec<crate::telegram_import::TelegramEditedInput>]),
+        "delete_telegram_import" => run!(state crate::telegram_import::delete_telegram_import, [
+            account_id: i64, batch_id: i64]),
         "create_cash_withdrawal" => run!(state crate::cash_withdrawals::create_cash_withdrawal, [
             source_txn_id: i64, cash_account_id: i64, amount: String]),
 

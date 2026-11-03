@@ -93,6 +93,12 @@ export const ACCOUNT_PRESETS: AccountPreset[] = [
   },
 ];
 
+/** The cash preset's name is stored in `accounts.bank` and identifies it, so it
+ *  stays as it is; only what is shown is translated. Other names are brands. */
+export function bankLabel(bank: string, t: (key: string) => string): string {
+  return findPresetByName(bank)?.kind === "cash" ? t("accounts.presetCash") : bank;
+}
+
 export function findPresetByName(name: string): AccountPreset | undefined {
   return ACCOUNT_PRESETS.find((p) => p.name === name);
 }

@@ -51,10 +51,12 @@ import {
 import type { BulkUpdateResult } from "../lib/api";
 import { CashDictationModal } from "../components/CashDictationModal";
 import { RegularPaymentsModal } from "../components/RegularPaymentsModal";
+import { SelectDropdown } from "../components/SelectDropdown";
+import { TelegramImportModal } from "../components/TelegramImportModal";
 import { RegularToggle } from "../components/RegularToggle";
 import { buildAccountCsv } from "../lib/csv-export";
 import { parseByFormat } from "../lib/import-formats";
-import { ACCOUNT_PRESETS, findPresetByName } from "../lib/account-presets";
+import { ACCOUNT_PRESETS, bankLabel, findPresetByName } from "../lib/account-presets";
 import {
   MultiSelectDropdown,
   MultiSelectItem,
@@ -268,47 +270,36 @@ function AccountFields({
     <>
       <label>
         {t("accounts.fieldPreset")}
-        <select
-          required
+        <SelectDropdown
           value={value.presetId}
-          onChange={(e) => {
-            const preset = ACCOUNT_PRESETS.find((p) => p.id === e.target.value);
+          options={ACCOUNT_PRESETS.map((p) => ({ value: p.id, label: bankLabel(p.name, t) }))}
+          onChange={(presetId) => {
+            const preset = ACCOUNT_PRESETS.find((p) => p.id === presetId);
             // Switching to a cash preset wipes the bank-only fields so a
             // stale account number doesn't get re-submitted on save.
             const nextIsCash = preset?.kind === "cash";
             onChange({
               ...value,
-              presetId: e.target.value,
+              presetId,
               currency: preset?.defaultCurrency ?? value.currency,
               accountNumber: nextIsCash ? "" : value.accountNumber,
               ownerName: nextIsCash ? "" : value.ownerName,
             });
           }}
-        >
-          {ACCOUNT_PRESETS.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
+        />
       </label>
       <label>
         {t("accounts.fieldCurrency")}
-        <select
-          required
+        <SelectDropdown
           value={value.currency}
-          onChange={(e) => onChange({ ...value, currency: e.target.value })}
-        >
-          {value.currency &&
-            !currencies.some((c) => c.code === value.currency) && (
-              <option value={value.currency}>{value.currency}</option>
-            )}
-          {currencies.map((c) => (
-            <option key={c.code} value={c.code}>
-              {c.code} — {c.name}
-            </option>
-          ))}
-        </select>
+          options={[
+            ...(value.currency && !currencies.some((c) => c.code === value.currency)
+              ? [{ value: value.currency, label: value.currency }]
+              : []),
+            ...currencies.map((c) => ({ value: c.code, label: `${c.code} — ${c.name}` })),
+          ]}
+          onChange={(currency) => onChange({ ...value, currency })}
+        />
       </label>
       <label>
         {t("accounts.fieldName")}
@@ -797,7 +788,7 @@ export function AccountsPage({
                       </button>
                     </span>
                   </td>
-                  <td>{a.bank}</td>
+                  <td>{bankLabel(a.bank, t)}</td>
                   <td>{a.currency}</td>
                   <td>{a.accountNumber ?? ""}</td>
                   <td>{a.ownerName ?? ""}</td>
@@ -857,7 +848,12 @@ export function AccountsPage({
         <AccountDetailModal
           account={detailAccount}
           initialTab={detailInitialTab}
-          onClose={() => setDetailAccountId(null)}
+          // The tabs change entries and batches on their own: whatever they
+          // did, this page catches up once the card is closed.
+          onClose={() => {
+            setDetailAccountId(null);
+            void refresh();
+          }}
           onSaved={async () => {
             await refresh();
           }}
@@ -1093,7 +1089,7 @@ function AccountDetailModal({
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <header className="modal-header">
           <h3>
-            {account.name} — {account.bank}
+            {account.name} — {bankLabel(account.bank, t)}
             {account.accountNumber ? ` · ${account.accountNumber}` : ""} (
             {account.currency})
           </h3>
@@ -1647,6 +1643,7 @@ function CashTransactionsTab({ account }: { account: Account }) {
   const [editing, setEditing] = useState<Transaction | null>(null);
   const [creating, setCreating] = useState(false);
   const [dictating, setDictating] = useState(false);
+  const [telegramOpen, setTelegramOpen] = useState(false);
   const [regularOpen, setRegularOpen] = useState(false);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<number | null>(
     null,
@@ -1763,6 +1760,14 @@ function CashTransactionsTab({ account }: { account: Account }) {
         </button>
         <button
           type="button"
+          className="btn-ghost"
+          onClick={() => setTelegramOpen(true)}
+          title={t("accounts.cash.telegram.buttonHint")}
+        >
+          {t("accounts.cash.telegram.button")}
+        </button>
+        <button
+          type="button"
           className="btn-primary"
           onClick={() => setCreating(true)}
         >
@@ -1855,6 +1860,13 @@ function CashTransactionsTab({ account }: { account: Account }) {
             setRegularOpen(false);
             await refresh();
           }}
+        />
+      )}
+      {telegramOpen && (
+        <TelegramImportModal
+          account={account}
+          onClose={() => setTelegramOpen(false)}
+          onChanged={refresh}
         />
       )}
       {dictating && (

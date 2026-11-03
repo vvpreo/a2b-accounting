@@ -190,6 +190,9 @@ fn open_main_window(app: &AppHandle, token: &str) {
         .inner_size(1400.0, 900.0)
         .min_inner_size(1000.0, 650.0)
         .initialization_script(zoom::HOTKEYS_SCRIPT)
+        // The native handler can swallow HTML5 drag and drop in the page: account
+        // reordering and dropping files on Documents.
+        .disable_drag_drop_handler()
         .build();
     match built {
         Ok(window) => zoom::restore(&window),

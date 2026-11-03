@@ -132,6 +132,16 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "026_add_category_color_auto",
         include_str!("../migrations/026_add_category_color_auto.sql"),
     ),
+    (
+        27,
+        "027_add_telegram_import",
+        include_str!("../migrations/027_add_telegram_import.sql"),
+    ),
+    (
+        28,
+        "028_add_telegram_pending",
+        include_str!("../migrations/028_add_telegram_pending.sql"),
+    ),
 ];
 
 pub fn open(data_dir: &Path) -> rusqlite::Result<Connection> {

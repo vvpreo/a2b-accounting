@@ -134,6 +134,7 @@ Principles:
 - Transaction-to-category links: `transaction_categories(transaction_id, category_id, share_minor, position)`. The sum of shares is `≤` the transaction amount; the remainder is a virtual "Uncategorized" computed on the fly. Atomic replacement via `set_transaction_categories`.
 - Transfer links between own accounts: `transaction_links(txn_a_id, txn_b_id)`. Stored as the canonical pair `txn_a_id < txn_b_id`; each transaction participates in at most one link. The backend (`link_transactions`) validates: different accounts, opposite directions (one credit, one debit), no other existing links. The linked transaction's categories stay as they are. The report excludes transactions from aggregation only when *both sides* of a link fall into its account selection and date range — otherwise the visible side is counted normally.
 - Import is built on top of a **universal CSV** (`occurred_at,credit,debit,balance,peer,bank_description,comment`). Each bank preset registers a plugin in [src/lib/import-formats/](src/lib/import-formats/) that converts its export (CSV/XLS/PDF) into the universal CSV — from there the shared validation/preview pipeline takes over. This keeps all duplicate detection and balance-chain checking in one place and makes parser tests a trivial string comparison.
+- Cash accounts can import a Telegram channel's HTML export (Records → *Import from Telegram…*): [src/lib/telegram-export.ts](src/lib/telegram-export.ts) parses and sorts the messages by the notation `[+]amount[ ]comment`, the owner checks every group before anything is written, and [server/src/telegram_import.rs](server/src/telegram_import.rs) remembers each decision by account + message id. See [docs/plans/telegram-cash-import.md](docs/plans/telegram-cash-import.md).
 - i18n: a custom React Context + JSON files in [src/i18n/locales/](src/i18n/locales/). Initial languages: `ru`, `en`. Default = system language via `navigator.language`, fallback — `en`. A new language = a new JSON file + an entry in `LANGUAGES`.
 
 ## Data Model
@@ -178,6 +179,15 @@ agent_log                (id, created_at, event ∈ {llm_call, suggestion_applie
                           suggested/chosen_category_id, connection, model, prompt_hash,
                           request, response, result, error, tokens, duration_ms, details)
                           — no FKs on purpose: the log outlives what it mentions
+telegram_channels        (account_id PK → accounts, title, timezone_offset) — the channel
+                          bound to a cash account; prefills the Telegram import wizard
+telegram_messages        (account_id → accounts, message_id, status ∈ {imported, skipped},
+                          text, batch_id → import_batches)
+                          PRIMARY KEY (account_id, message_id) — every decision on a
+                          message, so it is not offered again; forgotten on rollback
+telegram_pending         (account_id → accounts, message_id, text, date, time, rows_json)
+                          PRIMARY KEY (account_id, message_id) — messages left for review,
+                          with the wizard's draft, to be sorted out later without the file
 transaction_links        (id, txn_a_id → transactions, txn_b_id → transactions,
                           created_at)
                           CHECK (txn_a_id < txn_b_id)
