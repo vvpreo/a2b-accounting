@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 
 import {
+  Account,
   clearAllData,
   DataDirInfo,
   dataDirInfo,
   fetchBackupBlob,
   getSetting,
+  listAccounts,
   listReportViews,
   ReportView,
   restoreFromZip,
@@ -13,6 +15,7 @@ import {
   setSetting,
   triggerDownload,
 } from "../lib/api";
+import { currenciesWithSeveralCashAccounts, defaultCashAccountKey } from "../lib/default-cash-account";
 import { reportLabel } from "../lib/report-name";
 import {
   DEFAULT_START_SCREEN,
@@ -102,6 +105,7 @@ export function SettingsPage() {
           </div>
 
           <StartScreenRow />
+          <DefaultCashAccountRows />
 
           <BackupSection />
           <DataDirSection />
@@ -116,6 +120,78 @@ export function SettingsPage() {
 
       {tab === "recognition" && <RecognitionTab />}
     </section>
+  );
+}
+
+/// One select per currency that has several cash accounts: where withdrawals
+/// in that currency go. Nothing to show otherwise.
+function DefaultCashAccountRows() {
+  const t = useT();
+  const [groups, setGroups] = useState<[string, Account[]][]>([]);
+  const [chosen, setChosen] = useState<Record<string, string>>({});
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    listAccounts()
+      .then(async (accounts) => {
+        const several = currenciesWithSeveralCashAccounts(accounts);
+        const stored = await Promise.all(several.map(([c]) => getSetting(defaultCashAccountKey(c))));
+        if (cancelled) return;
+        setGroups(several);
+        setChosen(
+          Object.fromEntries(
+            several.map(([c, list], i) => [
+              c,
+              // An account that is gone behaves as no choice — show that.
+              list.some((a) => String(a.id) === stored[i]) ? (stored[i] as string) : "",
+            ]),
+          ),
+        );
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function onChange(currency: string, value: string) {
+    const prev = chosen[currency] ?? "";
+    setChosen((c) => ({ ...c, [currency]: value }));
+    setError(null);
+    try {
+      await setSetting(defaultCashAccountKey(currency), value);
+    } catch (e) {
+      setChosen((c) => ({ ...c, [currency]: prev }));
+      setError(String(e));
+    }
+  }
+
+  return (
+    <>
+      {groups.map(([currency, list]) => (
+        <div className="settings-row" key={currency}>
+          <label htmlFor={`settings-default-cash-${currency}`} title={t("settings.defaultCash.hint")}>
+            {t("settings.defaultCash.label", { currency })}
+          </label>
+          <select
+            id={`settings-default-cash-${currency}`}
+            value={chosen[currency] ?? ""}
+            onChange={(e) => onChange(currency, e.target.value)}
+          >
+            <option value="">{t("settings.defaultCash.auto")}</option>
+            {list.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name || a.currency}
+              </option>
+            ))}
+          </select>
+        </div>
+      ))}
+      {error && <div className="error">{error}</div>}
+    </>
   );
 }
 

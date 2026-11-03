@@ -190,6 +190,38 @@
         "errorNoConnection": "No connection is chosen for the agent — Settings → AI.",
         "errorEmpty": "Describe the entries you need.",
         "errorTooMany": "That makes more than 1000 entries — narrow the period."
+      },
+      "regular": {
+        "mark": "🔄 Make regular",
+        "markHint": "Mark as a monthly payment: 🔄 goes in front of the comment",
+        "unmark": "🔄 Remove regular",
+        "unmarkHint": "Take 🔄 off the comment",
+        "button": "Regular payments…",
+        "buttonHint": "Enter the 🔄 entries of a month the way another month has them",
+        "title": "Regular payments · {account}",
+        "step": "Step {step} of 3",
+        "targetQuestion": "Which month are the regular payments for?",
+        "sourceQuestion": "Which month is the template?",
+        "selectMonth": "Month",
+        "selectYear": "Year",
+        "existingIn": "{month} — already entered: {count}",
+        "sourceIn": "{month} (template) — regular payments: {count}",
+        "noneYet": "No 🔄 entries yet.",
+        "sameMonth": "The template is the month being filled in — choose another one.",
+        "noneInSource": "This month has no 🔄 entries — choose another one.",
+        "dateForAll": "Date for all new entries",
+        "toCreate": "To be added: {count}",
+        "allThere": "Every payment of the template is already entered — nothing to add.",
+        "summary": "{count} of {total} selected",
+        "inSource": "template: {amount}",
+        "inSourceHint": "The template's amount differs; the entry already exists, so it stays as it is and no new one is created",
+        "sameText": "{count} with this text in the template",
+        "sameTextHint": "A text gives one payment in the result — the template's first entry is taken",
+        "dateOutOfMonth": "The date must be in the chosen month",
+        "next": "Next →",
+        "back": "← Back",
+        "create": "Create entries: {count}",
+        "noCategory": "no category"
       }
     }
   },
@@ -586,6 +618,11 @@
     "startScreen": "Start screen",
     "startScreenAuto": "Auto: Transactions if any, otherwise Accounts",
     "startScreenReports": "Reports",
+    "defaultCash": {
+      "label": "Default cash account, {currency}",
+      "auto": "Automatic: where withdrawals went most often",
+      "hint": "Cash withdrawals from bank accounts in this currency are suggested to this account"
+    },
     "demo": {
       "title": "Demo data",
       "hint": "Replaces all current data with a demo set: a single USD account, a family budget category tree, ~800 transactions over 3 years, and a saved \"Cash Flow\" report.",

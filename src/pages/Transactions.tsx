@@ -47,6 +47,7 @@ import {
   unlinkTransaction,
   updateTransactionComment,
 } from "../lib/api";
+import { defaultCashAccountKey, preselectCashAccount } from "../lib/default-cash-account";
 import { formatMoney, parseMoneyToMinor } from "../lib/money";
 import { useViewState } from "../lib/view-state";
 import { buildTree, flattenTree } from "../lib/category-tree";
@@ -2198,7 +2199,7 @@ function WithdrawToCashModal({
 }) {
   const t = useT();
   const [cashAccountId, setCashAccountId] = useState<number | null>(
-    cashAccounts[0]?.id ?? null,
+    preselectCashAccount(cashAccounts, sourceAccount.currency, null)?.id ?? null,
   );
   const [amount, setAmount] = useState("");
   const [rateLoading, setRateLoading] = useState(false);
@@ -2210,6 +2211,20 @@ function WithdrawToCashModal({
     () => cashAccounts.find((a) => a.id === cashAccountId) ?? null,
     [cashAccounts, cashAccountId],
   );
+
+  // The currency's assigned default, once the setting is read.
+  useEffect(() => {
+    let cancelled = false;
+    getSetting(defaultCashAccountKey(sourceAccount.currency))
+      .then((stored) => {
+        const account = preselectCashAccount(cashAccounts, sourceAccount.currency, stored);
+        if (!cancelled && account) setCashAccountId(account.id);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [cashAccounts, sourceAccount.currency]);
 
   // Prefill / refresh the amount whenever the selected cash account changes
   // (and on first open). Same-currency case skips the network round-trip

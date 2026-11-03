@@ -365,6 +365,8 @@ async fn rpc(
         "create_cash_entries" => run!(state crate::cash_dictation::create_cash_entries, [
             account_id: i64, entries: Vec<crate::cash_dictation::CashEntryInput>,
             log_id: Option<i64>, proposed: usize, edited: usize]),
+        "create_regular_cash_entries" => run!(state crate::cash_regular::create_regular_cash_entries, [
+            account_id: i64, entries: Vec<crate::cash_regular::RegularEntryInput>]),
         "create_cash_withdrawal" => run!(state crate::cash_withdrawals::create_cash_withdrawal, [
             source_txn_id: i64, cash_account_id: i64, amount: String]),
 

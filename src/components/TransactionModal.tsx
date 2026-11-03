@@ -17,6 +17,7 @@ import {
 } from "../lib/api";
 import { formatMinorAsMoney, formatMoney, parseMoneyToMinor } from "../lib/money";
 import { CategoryDistributionModal } from "./CategoryDistributionModal";
+import { RegularToggle } from "./RegularToggle";
 import { TransactionDocuments } from "./TransactionDocuments";
 
 interface Props {
@@ -367,6 +368,7 @@ export function TransactionModal({ transactionId, onClose, onChanged }: Props) {
                   placeholder={t("transaction.commentPlaceholder")}
                 />
               </label>
+              {isCash && <RegularToggle comment={comment} onChange={setComment} />}
 
               {/* Category breakdown + edit launcher. */}
               <div className="txn-cats">

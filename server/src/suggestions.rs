@@ -374,10 +374,16 @@ struct CashAccountPick {
     used: i64,
     /// How many cash accounts in this currency exist.
     of: usize,
+    /// The owner assigned it as this currency's default.
+    is_default: bool,
 }
 
-/// The cash account in this currency; with several, the one earlier
-/// withdrawals went to most often.
+/// The owner's default cash account per currency in `app_settings`; an empty
+/// value or an account that is gone means no choice.
+const DEFAULT_CASH_ACCOUNT_PREFIX: &str = "default_cash_account.";
+
+/// The cash account in this currency; with several, the one the owner assigned
+/// as the default, otherwise the one earlier withdrawals went to most often.
 fn pick_cash_account(conn: &Connection, currency: &str) -> Result<Option<CashAccountPick>, String> {
     let mut stmt = conn
         .prepare(
@@ -396,10 +402,27 @@ fn pick_cash_account(conn: &Connection, currency: &str) -> Result<Option<CashAcc
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| e.to_string())?;
     let of = rows.len();
-    Ok(rows
-        .into_iter()
-        .next()
-        .map(|(id, name, used)| CashAccountPick { id, name, used, of }))
+    let assigned: Option<i64> = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            [format!("{DEFAULT_CASH_ACCOUNT_PREFIX}{currency}")],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .and_then(|v| v.parse().ok());
+    let picked = rows
+        .iter()
+        .find(|(id, ..)| Some(*id) == assigned)
+        .or(rows.first())
+        .cloned();
+    Ok(picked.map(|(id, name, used)| CashAccountPick {
+        id,
+        name,
+        used,
+        of,
+        is_default: Some(id) == assigned,
+    }))
 }
 
 fn cash_rationale(lang: Lang, matched: &str, cash: &CashAccountPick, currency: &str) -> String {
@@ -410,6 +433,8 @@ fn cash_rationale(lang: Lang, matched: &str, cash: &CashAccountPick, currency: &
     let account = match (lang, cash.of, cash.used) {
         (Lang::Ru, 1, _) => format!("кассовый счёт «{}» — единственный в {currency}", cash.name),
         (Lang::En, 1, _) => format!("“{}” is the only cash account in {currency}", cash.name),
+        (Lang::Ru, ..) if cash.is_default => format!("кассовый счёт «{}» — назначен по умолчанию для {currency}", cash.name),
+        (Lang::En, ..) if cash.is_default => format!("“{}” is the default cash account for {currency}", cash.name),
         (Lang::Ru, n, used) if used > 0 => format!(
             "кассовый счёт «{}» — на него чаще всего выводили раньше ({used} раз из {n} кассовых счетов в {currency})",
             cash.name
@@ -1338,6 +1363,31 @@ mod tests {
         let summary = detect_cash_withdrawals(&fx.state, vec![atm], false, false).unwrap();
         assert_eq!(summary.suggested, 0);
         assert_eq!(summary.skipped.get("no_cash_account"), Some(&1));
+    }
+
+    #[test]
+    fn the_assigned_default_cash_account_beats_past_withdrawals() {
+        let fx = Fx::new();
+        let bank = fx.account("KBank", "bank", "THB", None);
+        let first = fx.account("Wallet", "cash", "THB", None);
+        let second = fx.account("Safe", "cash", "THB", None);
+        let atm = fx.txn(bank, "2026-05-01T03:00:00.000Z", 0, 100, "ATM withdrawal");
+        let suggested = |force| {
+            detect_cash_withdrawals(&fx.state, vec![atm], force, false).unwrap();
+            fx.pending()[0].cash_account_id
+        };
+        assert_eq!(suggested(false), Some(first));
+
+        let assign = |value: String| {
+            crate::settings::set_setting(&fx.state, "default_cash_account.THB".to_string(), value).unwrap();
+        };
+        assign(second.to_string());
+        assert_eq!(suggested(true), Some(second));
+        // Cleared, or an account that is gone: back to the app's own choice.
+        assign(String::new());
+        assert_eq!(suggested(true), Some(first));
+        assign("99999".to_string());
+        assert_eq!(suggested(true), Some(first));
     }
 
     #[test]

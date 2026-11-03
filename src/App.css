@@ -571,6 +571,51 @@ body {
   bottom: auto;
 }
 
+.modal.modal--regular-preview {
+  width: min(1100px, 96vw);
+}
+
+.regular-toggle {
+  align-self: flex-start;
+  width: fit-content;
+}
+
+.regular-question {
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+
+.regular-month-select {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.regular-month-select select,
+.regular-date-all input {
+  padding: 4px 6px;
+  font: inherit;
+  border: 1px solid #d4d4d8;
+  border-radius: 4px;
+  background: transparent;
+}
+
+.regular-heading {
+  margin: 16px 0 6px;
+}
+
+.regular-amount {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.regular-date-all {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
 .cash-dictation-text {
   width: 100%;
   box-sizing: border-box;
@@ -697,6 +742,8 @@ body {
   color: #92400e;
 }
 
+:root[data-theme="dark"] .regular-month-select select,
+:root[data-theme="dark"] .regular-date-all input,
 :root[data-theme="dark"] .cash-dictation-text,
 :root[data-theme="dark"] .cash-dictation-table input:not([type="checkbox"]),
 :root[data-theme="dark"] .cash-dictation-table select,

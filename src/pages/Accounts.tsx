@@ -50,6 +50,8 @@ import {
 } from "../lib/api";
 import type { BulkUpdateResult } from "../lib/api";
 import { CashDictationModal } from "../components/CashDictationModal";
+import { RegularPaymentsModal } from "../components/RegularPaymentsModal";
+import { RegularToggle } from "../components/RegularToggle";
 import { buildAccountCsv } from "../lib/csv-export";
 import { parseByFormat } from "../lib/import-formats";
 import { ACCOUNT_PRESETS, findPresetByName } from "../lib/account-presets";
@@ -1626,6 +1628,7 @@ function CashTransactionsTab({ account }: { account: Account }) {
   const [editing, setEditing] = useState<Transaction | null>(null);
   const [creating, setCreating] = useState(false);
   const [dictating, setDictating] = useState(false);
+  const [regularOpen, setRegularOpen] = useState(false);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<number | null>(
     null,
   );
@@ -1726,6 +1729,14 @@ function CashTransactionsTab({ account }: { account: Account }) {
         <button
           type="button"
           className="btn-ghost"
+          onClick={() => setRegularOpen(true)}
+          title={t("accounts.cash.regular.buttonHint")}
+        >
+          {t("accounts.cash.regular.button")}
+        </button>
+        <button
+          type="button"
+          className="btn-ghost"
           onClick={() => setDictating(true)}
           title={t("accounts.cash.dictation.buttonHint")}
         >
@@ -1817,6 +1828,16 @@ function CashTransactionsTab({ account }: { account: Account }) {
         </table>
       )}
 
+      {regularOpen && (
+        <RegularPaymentsModal
+          account={account}
+          onClose={() => setRegularOpen(false)}
+          onCreated={async () => {
+            setRegularOpen(false);
+            await refresh();
+          }}
+        />
+      )}
       {dictating && (
         <CashDictationModal
           account={account}
@@ -2007,6 +2028,10 @@ function CashTransactionModal({
                   }
                 />
               </label>
+              <RegularToggle
+                comment={form.comment}
+                onChange={(comment) => setForm({ ...form, comment })}
+              />
             </div>
             {error && <div className="error">{error}</div>}
           </div>

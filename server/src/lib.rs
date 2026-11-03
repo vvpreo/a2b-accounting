@@ -4,6 +4,7 @@ mod ai;
 mod attachments;
 mod backup;
 mod cash_dictation;
+mod cash_regular;
 mod cash_transactions;
 mod cash_withdrawals;
 mod categories;

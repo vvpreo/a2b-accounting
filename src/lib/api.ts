@@ -566,6 +566,24 @@ export function createCashEntries(args: {
   return invoke<number>("create_cash_entries", { ...args });
 }
 
+export interface RegularEntryInput {
+  occurredAtUtc: string;
+  direction: CashDirection;
+  amount: string;
+  categories: TransactionCategoryItem[];
+  peer: string | null;
+  comment: string | null;
+}
+
+/** Create the entries the "Regular payments" wizard copied from another month,
+ *  with their category shares. */
+export function createRegularCashEntries(args: {
+  accountId: number;
+  entries: RegularEntryInput[];
+}): Promise<number> {
+  return invoke<number>("create_regular_cash_entries", { ...args });
+}
+
 // Stable error codes from `create_cash_withdrawal` and friends. The
 // `link.*` codes reuse the existing pairing errors when a withdrawal
 // hits the same invariants (already linked, same account).
