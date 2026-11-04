@@ -6,18 +6,20 @@ import {
   WizardRow,
   isInvalid,
   keysBetween,
+  classifyLine,
   classifyMessage,
+  duplicateRow,
   markDuplicates,
   parseTelegramExport,
+  newestFirst,
   planImport,
   restorePending,
   sortExport,
-  splitList,
   toUtc,
 } from "./telegram-export";
 
 const THB = "THB";
-const cl = (text: string) => classifyMessage(text, THB);
+const cl = (text: string) => classifyLine(text, THB);
 
 function message(id: number, body: string, title = "16 November 2024, 12:34:56"): string {
   return `<div class="message default clearfix" id="message${id}">
@@ -64,7 +66,7 @@ describe("parseTelegramExport", () => {
   });
 });
 
-describe("classifyMessage", () => {
+describe("classifyLine", () => {
   it("a number first is an expense, with a plus an income", () => {
     expect(cl("135 скрепки")).toMatchObject({ bucket: "out", amount: "135", comment: "скрепки", reasons: [] });
     expect(cl("+515 от соседа")).toMatchObject({ bucket: "in", amount: "515", comment: "от соседа", reasons: [] });
@@ -94,13 +96,11 @@ describe("classifyMessage", () => {
     expect(cl("#кеш 65 чернила")).toMatchObject({ bucket: "out", amount: "65", comment: "чернила" });
     expect(cl("Кеш 77 булочка")).toMatchObject({ bucket: "out", amount: "77", comment: "булочка" });
     expect(cl("Зонт 130 кеш")).toMatchObject({ bucket: "out", amount: "130", comment: "Зонт" });
-    expect(classifyMessage("15 долларов подписка", "USD")).toMatchObject({ bucket: "out", comment: "подписка" });
+    expect(classifyLine("15 долларов подписка", "USD")).toMatchObject({ bucket: "out", comment: "подписка" });
   });
 
   it("several numbers go to review", () => {
     expect(cl("Скрепки 12 и зонт 30")).toMatchObject({ bucket: "review", amount: "12", reasons: ["severalNumbers"] });
-    expect(cl("Прогулка кеш:\n\n41 зонт\n52 чернила").reasons).toEqual(["severalNumbers"]);
-    expect(cl("41 зонт\n52 чернила")).toMatchObject({ bucket: "review", amount: "41", reasons: ["severalNumbers"] });
   });
 
   it("an amount not written plainly is read, and goes to review", () => {
@@ -123,16 +123,34 @@ describe("classifyMessage", () => {
   });
 });
 
-describe("splitList", () => {
-  it("takes the lines that start with an amount", () => {
-    expect(splitList("Прогулка кеш:\n\n41 зонт\n52 бат чернила", THB)).toEqual([
-      { amount: "41", comment: "зонт" },
-      { amount: "52", comment: "чернила" },
+describe("classifyMessage", () => {
+  const sort = (text: string) => classifyMessage(text, THB);
+
+  it("each line with a number is an entry of its own", () => {
+    expect(sort("41 зонт\n+52 от соседа\nЧернила 63")).toEqual([
+      { bucket: "out", amount: "41", comment: "зонт", reasons: [] },
+      { bucket: "in", amount: "52", comment: "от соседа", reasons: [] },
+      { bucket: "out", amount: "63", comment: "Чернила", reasons: [] },
     ]);
   });
 
-  it("one such line is not a list", () => {
-    expect(splitList("Прогулка\n41 зонт", THB)).toEqual([]);
+  it("a heading and empty lines give no entry", () => {
+    expect(sort("Прогулка кеш:\n\n41 зонт\n52 бат чернила").map((c) => [c.amount, c.comment])).toEqual([
+      ["41", "зонт"],
+      ["52", "чернила"],
+    ]);
+  });
+
+  it("each line is judged alone", () => {
+    expect(sort("41 зонт\n1.100 ремонт\nСкрепки 12 и зонт 30").map((c) => c.bucket)).toEqual(["out", "review", "review"]);
+  });
+
+  it("next to a single entry, the other lines stay in the comment", () => {
+    expect(sort("Прогулка\n41 зонт\nдождь")).toEqual([{ bucket: "out", amount: "41", comment: "Прогулка зонт дождь", reasons: [] }]);
+  });
+
+  it("no number anywhere: one row to ignore", () => {
+    expect(sort("Просто\nзаметка")).toEqual([{ bucket: "ignore", amount: "", comment: "Просто заметка", reasons: [] }]);
   });
 });
 
@@ -188,10 +206,59 @@ describe("a message ignored earlier", () => {
     expect(again.alreadyPending).toBe(1);
   });
 
+  it("of several lines, every line waits there and writes nothing", () => {
+    const text = "41 зонт\n52 чернила";
+    const { rows, alreadySkipped, newMessages } = sortExport([msg(1, text)], [{ messageId: 1, status: "skipped", text }], [], THB);
+    expect([rows.length, alreadySkipped, newMessages]).toEqual([2, 1, 0]);
+    expect(rows.every((r) => r.bucket === "ignore")).toBe(true);
+    expect(planImport(rows, "+07:00").decisions).toEqual([]);
+  });
+
   it("with another text, is sorted anew", () => {
     const { rows, alreadySkipped } = sortExport([msg(1, "150 вода")], known, [], THB);
     expect(alreadySkipped).toBe(0);
     expect(rows[0]).toMatchObject({ bucket: "out", amount: "150", reasons: [] });
+  });
+});
+
+describe("sortExport counts messages, not rows", () => {
+  it("a message of two lines is one new message with two rows", () => {
+    const sorted = sortExport([msg(1, "41 зонт\n52 чернила"), msg(2, "заметка")], [], [], THB);
+    expect(sorted.newMessages).toBe(2);
+    expect(sorted.rows.map((r) => [r.key, r.messageId, r.amount])).toEqual([
+      [0, 1, "41"],
+      [1, 1, "52"],
+      [2, 2, ""],
+    ]);
+  });
+});
+
+describe("newestFirst", () => {
+  it("puts the latest message on top and keeps the order inside a message", () => {
+    const rows = rowsOf(msg(1, "10 а"), msg(2, "41 зонт\n52 чернила"), msg(3, "30 в"));
+    expect(newestFirst(rows).map((r) => r.amount)).toEqual(["30", "41", "52", "10"]);
+  });
+});
+
+describe("duplicateRow", () => {
+  const rows = rowsOf(msg(1, "10 а"), msg(2, "20 б"));
+
+  it("puts a copy right after the row, with its message, date and time", () => {
+    const next = duplicateRow(rows, 0, 100);
+    expect(next.map((r) => r.key)).toEqual([0, 100, 1]);
+    expect(next[1]).toMatchObject({ messageId: 1, date: rows[0].date, time: rows[0].time, amount: "10", comment: "а" });
+  });
+
+  it("the copy is not a possible duplicate of a typed entry", () => {
+    const flagged: WizardRow = { ...rows[0], reasons: ["possibleDuplicate"], duplicateOf: { date: "2026-01-10", amount: "10.00" } };
+    expect(duplicateRow([flagged], 0, 100)[1]).toMatchObject({ reasons: [], duplicateOf: null });
+  });
+
+  it("both rows become entries of the message", () => {
+    const next = duplicateRow(rows, 0, 100).map((r) => (r.key === 100 ? { ...r, amount: "3", comment: "часть" } : r));
+    const plan = planImport(next, "+07:00");
+    expect(plan.decisions[0].entries.map((e) => [e.amount, e.comment])).toEqual([["10", "а"], ["3", "часть"]]);
+    expect(plan.decisions[0].entries[0].occurredAtUtc).toBe(plan.decisions[0].entries[1].occurredAtUtc);
   });
 });
 
@@ -312,6 +379,11 @@ describe("isInvalid", () => {
 });
 
 describe("planImport", () => {
+  it("an entry with an empty date does not break the plan", () => {
+    const [row] = rowsOf(msg(1, "100 вода"));
+    expect(planImport([{ ...row, date: "" }], "+07:00").decisions[0].entries[0].occurredAtUtc).toBe("");
+  });
+
   it("turns rows into decisions, skipped messages included", () => {
     const plan = planImport(rowsOf(msg(1, "100 вода"), msg(2, "+500 снял"), msg(3, "заметка")), "+07:00");
     expect(plan.pending).toEqual([]);
@@ -340,10 +412,7 @@ describe("planImport", () => {
 
   it("a message with a part in review waits as a whole", () => {
     const [first] = rowsOf(msg(1, "100 вода"));
-    const plan = planImport(
-      [first, { ...first, key: 1, isPart: true, bucket: "review" }],
-      "+07:00",
-    );
+    const plan = planImport([first, { ...first, key: 1, bucket: "review" }], "+07:00");
     expect(plan.decisions).toEqual([]);
     expect(plan.pending.map((p) => p.messageId)).toEqual([1]);
     expect(JSON.parse(plan.pending[0].rowsJson)).toHaveLength(2);
@@ -351,7 +420,7 @@ describe("planImport", () => {
 
   it("parts of a message become its entries", () => {
     const [first] = rowsOf(msg(1, "100 вода"));
-    const plan = planImport([first, { ...first, key: 1, amount: "25", comment: "чай", isPart: true }], "+07:00");
+    const plan = planImport([first, { ...first, key: 1, amount: "25", comment: "чай" }], "+07:00");
     expect(plan.decisions).toHaveLength(1);
     expect(plan.decisions[0].entries.map((e) => e.amount)).toEqual(["100", "25"]);
   });

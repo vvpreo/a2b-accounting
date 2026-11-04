@@ -19,14 +19,15 @@ import {
   EditedMessage,
   ParsedExport,
   WizardRow,
+  duplicateRow,
   isInvalid,
   keysBetween,
   markDuplicates,
+  newestFirst,
   parseTelegramExport,
   planImport,
   restorePending,
   sortExport,
-  splitList,
 } from "../lib/telegram-export";
 import { UTC_OFFSETS, systemUtcOffset } from "../lib/utc-offsets";
 import { CategoryPickerPopover } from "./CategoryPickerPopover";
@@ -62,7 +63,7 @@ interface RowViewProps {
   onToggle: (key: number, checked: boolean, range: boolean) => void;
   onUpdate: (key: number, patch: Partial<WizardRow>) => void;
   onMove: (key: number, bucket: Bucket) => void;
-  onSplit: (key: number) => void;
+  onDuplicate: (key: number) => void;
   onRemove: (key: number) => void;
   onPickCategory: (key: number, rect: DOMRect) => void;
 }
@@ -78,7 +79,7 @@ const RowView = memo(function RowView({
   onToggle,
   onUpdate,
   onMove,
-  onSplit,
+  onDuplicate,
   onRemove,
   onPickCategory,
 }: RowViewProps) {
@@ -187,8 +188,8 @@ const RowView = memo(function RowView({
         )}
       </td>
       <td className="cash-dictation-marks">
-        <button type="button" className="btn-ghost" onClick={() => onSplit(r.key)} title={t("accounts.cash.telegram.splitHint")}>
-          {t("accounts.cash.telegram.split")}
+        <button type="button" className="btn-ghost" onClick={() => onDuplicate(r.key)} title={t("accounts.cash.telegram.duplicateHint")}>
+          {t("accounts.cash.telegram.duplicate")}
         </button>
         {removable && (
           <button type="button" className="icon-btn" onClick={() => onRemove(r.key)} aria-label={t("common.delete")}>
@@ -327,11 +328,9 @@ export function TelegramImportModal({ account, onClose, onChanged }: Props) {
     try {
       const sorted = sortExport(parsed?.messages ?? [], known.messages, known.pending, account.currency);
       const existing = await listTransactions([account.id]);
-      const next = [
-        ...restorePending(known.pending, sorted.rows, account.currency, nextKey.current),
-        ...markDuplicates(sorted.rows, existing, offset),
-      ];
-      nextKey.current += known.pending.length * 100;
+      const restored = restorePending(known.pending, sorted.rows, account.currency, nextKey.current);
+      nextKey.current += restored.length;
+      const next = [...restored, ...markDuplicates(sorted.rows, existing, offset)];
       setRows(next);
       setEdited(sorted.edited);
       setBalanceMinor(
@@ -355,33 +354,9 @@ export function TelegramImportModal({ account, onClose, onChanged }: Props) {
     setRows((rs) => rs.map((r) => (r.key === key ? moved(r, bucket) : r)));
   }, []);
 
-  const split = useCallback(
-    (key: number) => {
-      setRows((rs) => {
-        const index = rs.findIndex((r) => r.key === key);
-        if (index < 0) return rs;
-        const row = rs[index];
-        const part = (over: Partial<WizardRow>): WizardRow => ({
-          ...row,
-          key: nextKey.current++,
-          amount: "",
-          comment: "",
-          categoryId: null,
-          reasons: [],
-          duplicateOf: null,
-          isPart: true,
-          ...over,
-        });
-        const lines = row.isPart ? [] : splitList(row.text, account.currency);
-        const inserted =
-          lines.length > 0
-            ? lines.map((line) => part({ ...line, bucket: row.bucket === "review" ? "out" : row.bucket }))
-            : [row, part({})];
-        return [...rs.slice(0, index), ...inserted, ...rs.slice(index + 1)];
-      });
-    },
-    [account.currency],
-  );
+  const duplicate = useCallback((key: number) => {
+    setRows((rs) => duplicateRow(rs, key, nextKey.current++));
+  }, []);
 
   const remove = useCallback((key: number) => {
     setRows((rs) => rs.filter((r) => r.key !== key));
@@ -417,11 +392,16 @@ export function TelegramImportModal({ account, onClose, onChanged }: Props) {
   }, [rows]);
 
   const countOf = (b: Bucket) => rows.filter((r) => r.bucket === b).length;
-  const totalOf = (b: "in" | "out") =>
-    rows.filter((r) => r.bucket === b).reduce((sum, r) => sum + (parseMoneyToMinor(r.amount) ?? 0), 0);
-  const invalidCount = rows.filter(isInvalid).length;
   const plan = useMemo(() => (step === "summary" ? planImport(rows, offset) : null), [step, rows, offset]);
-  const entryCount = plan ? plan.decisions.reduce((sum, d) => sum + d.entries.length, 0) : 0;
+  // What will really be written: a message with a line left in review waits as
+  // a whole, so its other rows do not count, valid or not.
+  const planned = plan ? plan.decisions.flatMap((d) => d.entries) : [];
+  const waiting = new Set(plan?.pending.map((p) => p.messageId));
+  const invalidCount = rows.filter((r) => isInvalid(r) && !waiting.has(r.messageId)).length;
+  const entryCount = planned.length;
+  const plannedCount = (direction: "in" | "out") => planned.filter((e) => e.direction === direction).length;
+  const totalOf = (direction: "in" | "out") =>
+    planned.filter((e) => e.direction === direction).reduce((sum, e) => sum + (parseMoneyToMinor(e.amount) ?? 0), 0);
   const skipCount = plan ? plan.decisions.filter((d) => d.entries.length === 0).length : 0;
 
   async function commit() {
@@ -486,7 +466,7 @@ export function TelegramImportModal({ account, onClose, onChanged }: Props) {
     !boundElsewhere &&
     title.trim().length > 0;
 
-  const visible = tab === "edited" ? [] : rows.filter((r) => r.bucket === tab);
+  const visible = tab === "edited" ? [] : newestFirst(rows.filter((r) => r.bucket === tab));
   shownKeys.current = visible.map((r) => r.key);
   // A row moved on its own has left the tab, and the selection with it.
   const selectedCount = visible.filter((r) => selected.has(r.key)).length;
@@ -583,7 +563,7 @@ export function TelegramImportModal({ account, onClose, onChanged }: Props) {
               {preview && period && (
                 <div className="cash-dictation-summary telegram-file-stats">
                   <span>{t("accounts.cash.telegram.statsPeriod", period)}</span>
-                  <span>{t("accounts.cash.telegram.statsNew", { count: preview.rows.length - preview.alreadySkipped })}</span>
+                  <span>{t("accounts.cash.telegram.statsNew", { count: preview.newMessages })}</span>
                   <span>{t("accounts.cash.telegram.statsImported", { count: preview.alreadyImported })}</span>
                   <span>{t("accounts.cash.telegram.statsSkipped", { count: preview.alreadySkipped })}</span>
                   <span>{t("accounts.cash.telegram.statsPending", { count: preview.alreadyPending })}</span>
@@ -671,7 +651,7 @@ export function TelegramImportModal({ account, onClose, onChanged }: Props) {
                       </tr>
                     </thead>
                     <tbody>
-                      {edited.map((e) => (
+                      {newestFirst(edited).map((e) => (
                         <tr key={e.messageId}>
                           <td className="telegram-source-text">{e.before}</td>
                           <td className="telegram-source-text">{e.after}</td>
@@ -755,7 +735,7 @@ export function TelegramImportModal({ account, onClose, onChanged }: Props) {
                             onToggle={toggle}
                             onUpdate={update}
                             onMove={move}
-                            onSplit={split}
+                            onDuplicate={duplicate}
                             onRemove={remove}
                             onPickCategory={pickCategory}
                           />
@@ -772,8 +752,8 @@ export function TelegramImportModal({ account, onClose, onChanged }: Props) {
           {step === "summary" && plan && (
             <div className="modal-body">
               <ul className="telegram-summary">
-                <li>{t("accounts.cash.telegram.summaryOut", { count: countOf("out"), amount: money(totalOf("out")) })}</li>
-                <li>{t("accounts.cash.telegram.summaryIn", { count: countOf("in"), amount: money(totalOf("in")) })}</li>
+                <li>{t("accounts.cash.telegram.summaryOut", { count: plannedCount("out"), amount: money(totalOf("out")) })}</li>
+                <li>{t("accounts.cash.telegram.summaryIn", { count: plannedCount("in"), amount: money(totalOf("in")) })}</li>
                 <li>{t("accounts.cash.telegram.summarySkipped", { count: skipCount })}</li>
                 <li>{t("accounts.cash.telegram.summaryDeferred", { count: plan.pending.length })}</li>
                 <li>

@@ -4,10 +4,11 @@ import { parseMoneyToMinor } from "./money";
 /**
  * A Telegram channel export (HTML) as cash entries, by plain rules:
  * - a message with an attachment or without text is not counted;
- * - a number at the start is the amount: an expense, with a plus an income;
- * - otherwise a single number in the text reads the same way;
- * - several amounts, or an amount not written plainly, go to "review";
- * - no number: "ignore".
+ * - each line stands on its own, so one message can give several entries;
+ * - a number at the start of a line is the amount: an expense, with a plus an
+ *   income; otherwise a single number in the line reads the same way;
+ * - several numbers in a line, or an amount not written plainly, go to "review";
+ * - no number in the whole message: "ignore".
  * A message ignored earlier comes back on "ignore" and can be moved from there.
  * The owner checks the first file by eye and sticks to `[+]amount[ ]comment`
  * after that. See docs/plans/telegram-cash-import.md.
@@ -181,24 +182,11 @@ function cleanComment(raw: string): string {
   return s.replace(/^[\s:;,.–—-]+/, "").replace(/[\s:;,–—-]+$/, "");
 }
 
-/** Lines of a list message: `41 тетрадь` under one another. */
-export function splitList(text: string, currency: string): { amount: string; comment: string }[] {
-  const parts: { amount: string; comment: string }[] = [];
-  for (const line of text.split("\n")) {
-    const trimmed = line.trim();
-    const read = readAmount(trimmed);
-    if (!read) continue;
-    parts.push({ amount: read.amount, comment: cleanComment(dropCurrency(trimmed.slice(read.length), currency)) });
-  }
-  return parts.length >= 2 ? parts : [];
-}
-
-/** Sort one message by the rules at the top of this file. */
-export function classifyMessage(text: string, currency: string): Classified {
+/** Sort one line by the rules at the top of this file. */
+export function classifyLine(text: string, currency: string): Classified {
   const trimmed = text.trim();
   const plus = /^\+\s*/.exec(trimmed);
   const body = plus ? trimmed.slice(plus[0].length) : trimmed;
-  const severalLines = splitList(trimmed, currency).length >= 2;
 
   if (/^\d/.test(body)) {
     const read = readAmount(body)!;
@@ -209,9 +197,7 @@ export function classifyMessage(text: string, currency: string): Classified {
       // Not an amount at all: "7ка", "3й", "03/04".
       return { bucket: "review", amount: "", comment: cleanComment(body), reasons: ["looseAmount"] };
     }
-    const reasons: Reason[] = [];
-    if (read.loose) reasons.push("looseAmount");
-    if (severalLines) reasons.push("severalNumbers");
+    const reasons: Reason[] = read.loose ? ["looseAmount"] : [];
     return { bucket: reasons.length > 0 ? "review" : plus ? "in" : "out", amount: read.amount, comment, reasons };
   }
 
@@ -230,6 +216,18 @@ export function classifyMessage(text: string, currency: string): Classified {
   return { bucket: plusBefore ? "in" : "out", amount: read.amount, comment, reasons: [] };
 }
 
+/** Sort a whole message: one entry per line with a number. Lines without a number
+ *  say nothing on their own; next to a single entry they stay in its comment. */
+export function classifyMessage(text: string, currency: string): Classified[] {
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  const sorted = lines.map((line) => ({ line, c: classifyLine(line, currency) }));
+  const entries = sorted.filter((x) => x.c.bucket !== "ignore");
+  if (entries.length === 0) return [classifyLine(lines.join(" "), currency)];
+  if (entries.length > 1) return entries.map((x) => x.c);
+  const comment = cleanComment(sorted.map((x) => (x.c.bucket === "ignore" ? x.line : x.c.comment)).join(" "));
+  return [{ ...entries[0].c, comment }];
+}
+
 export interface WizardRow {
   key: number;
   messageId: number;
@@ -243,8 +241,6 @@ export interface WizardRow {
   reasons: Reason[];
   /** The entry already on the account that this row may repeat. */
   duplicateOf: { date: string; amount: string } | null;
-  /** One of the rows the owner split a message into. */
-  isPart: boolean;
 }
 
 export interface EditedMessage {
@@ -261,6 +257,8 @@ export interface KnownMessage {
 
 export interface SortedExport {
   rows: WizardRow[];
+  /** Messages seen for the first time, however many rows they gave. */
+  newMessages: number;
   /** Imported earlier and changed since: only shown, the entry stays as it is. */
   edited: EditedMessage[];
   alreadyImported: number;
@@ -286,6 +284,7 @@ export function sortExport(
   let alreadyImported = 0;
   let alreadySkipped = 0;
   let alreadyPending = 0;
+  let newMessages = 0;
   for (const m of messages) {
     const prior = byId.get(m.id);
     if (prior?.status === "imported") {
@@ -297,29 +296,50 @@ export function sortExport(
       alreadyPending += 1;
       continue;
     }
-    const row = newRow(rows.length, m, currency);
+    const fresh = newRows(rows.length, m, currency);
     if (prior && prior.text === m.text) {
       alreadySkipped += 1;
-      rows.push({ ...row, bucket: "ignore", reasons: ["ignoredEarlier"] });
+      rows.push(...fresh.map((r): WizardRow => ({ ...r, bucket: "ignore", reasons: ["ignoredEarlier"] })));
       continue;
     }
-    rows.push(row);
+    newMessages += 1;
+    rows.push(...fresh);
   }
-  return { rows, edited, alreadyImported, alreadySkipped, alreadyPending };
+  return { rows, newMessages, edited, alreadyImported, alreadySkipped, alreadyPending };
 }
 
-function newRow(key: number, m: ExportMessage, currency: string): WizardRow {
-  return {
-    key,
+function newRows(firstKey: number, m: ExportMessage, currency: string): WizardRow[] {
+  return classifyMessage(m.text, currency).map((c, i) => ({
+    key: firstKey + i,
     messageId: m.id,
     text: m.text,
     date: m.date,
     time: m.time,
-    ...classifyMessage(m.text, currency),
+    ...c,
     categoryId: null,
     duplicateOf: null,
-    isPart: false,
+  }));
+}
+
+/** The latest message on top. By message id, not by the date in the row: a row
+ *  must not jump away while its date is being edited. Rows of one message keep
+ *  their order. */
+export function newestFirst<T extends { messageId: number }>(rows: T[]): T[] {
+  return [...rows].sort((a, b) => b.messageId - a.messageId);
+}
+
+/** A copy of the row right after it, to correct by hand: the same date and time,
+ *  the same message, so together they are one message's entries. */
+export function duplicateRow(rows: WizardRow[], key: number, newKey: number): WizardRow[] {
+  const index = rows.findIndex((r) => r.key === key);
+  if (index < 0) return rows;
+  const copy: WizardRow = {
+    ...rows[index],
+    key: newKey,
+    reasons: rows[index].reasons.filter((x) => x !== "possibleDuplicate"),
+    duplicateOf: null,
   };
+  return [...rows.slice(0, index + 1), copy, ...rows.slice(index + 1)];
 }
 
 /** The rows of messages left for review earlier, corrections included. `fresh`
@@ -339,7 +359,7 @@ export function restorePending(
     try {
       draft = JSON.parse(p.rowsJson);
     } catch {
-      draft = [newRow(0, { id: p.messageId, date: p.date, time: p.time, text: p.text }, currency)];
+      draft = newRows(0, { id: p.messageId, date: p.date, time: p.time, text: p.text }, currency);
     }
     for (const r of draft) rows.push({ ...r, key: firstKey + rows.length });
   }
@@ -456,7 +476,8 @@ export function planImport(rows: WizardRow[], offset: string): Plan {
       entries: group
         .filter((r) => r.bucket === "in" || r.bucket === "out")
         .map((r) => ({
-          occurredAtUtc: toUtc(r.date, r.time, offset),
+          // An empty date is reported by `isInvalid` and blocks the import.
+          occurredAtUtc: isInvalid(r) ? "" : toUtc(r.date, r.time, offset),
           direction: r.bucket as CashDirection,
           amount: r.amount.trim().replace(/\s+/g, "").replace(",", "."),
           categoryId: r.categoryId,

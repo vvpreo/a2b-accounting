@@ -165,7 +165,7 @@
         "buttonHint": "Load expenses and income from a Telegram channel export: everything is checked before the import",
         "title": "Import from Telegram · {account}",
         "intro": "Choose the channel's HTML export: Export Chat in Telegram, without media. You can check and correct every message before the import. Imported messages will not come back; ignored ones wait on the Ignore tab.",
-        "notation": "Rules: a number at the start is the amount of an expense, with a plus of income. “145 stationery”, “+1300 bank withdrawal”. A single number elsewhere reads the same way. Several numbers, or an amount not in plain digits (1.000, 8k), go to review; messages without numbers are ignored, messages with attachments are not counted.",
+        "notation": "Rules: each line of a message is read on its own. A number at the start of a line is the amount of an expense, with a plus of income: “145 stationery”, “+1300 bank withdrawal”. A single number elsewhere in the line reads the same way. Several numbers in a line, or an amount not in plain digits (1.000, 8k), go to review; messages without numbers are ignored, messages with attachments are not counted.",
         "file": "Export file",
         "channel": "Channel name",
         "timezone": "Time zone of the times in the file",
@@ -197,8 +197,6 @@
         "colGroup": "Group",
         "colSource": "Message",
         "emptyTab": "Nothing on this tab.",
-        "split": "Split",
-        "splitHint": "Make several entries from the message. A list of amounts is split by line, otherwise an empty row is added.",
         "duplicateOf": "There is already an entry of {date} for {amount}",
         "editedTab": "Changed",
         "editedHint": "These messages changed after the import. The entry does not change by itself: correct it on the account if needed. After this import these changes will not be shown again.",
@@ -209,7 +207,7 @@
         "summarySkipped": "Messages ignored: {count}",
         "summaryDeferred": "Left for review: {count}",
         "summaryBalance": "Account balance: {before} → {after}",
-        "deferredHint": "What remains for review is saved with all corrections. To sort it out, open the import again: no file needed. If a message is split and any part is left for review, the whole message waits.",
+        "deferredHint": "What remains for review is saved with all corrections. To sort it out, open the import again: no file needed. If any line of a message is left for review, the whole message waits.",
         "invalidRows": "Rows with an empty date or amount among expenses and income: {count}. Correct them on the review step.",
         "commit": "Import entries: {count}",
         "errorAlreadyImported": "Some messages are already imported, perhaps in another window. Close this window and open the import again.",
@@ -238,7 +236,9 @@
         "selectedCount": "Selected: {count}",
         "moveTo": "Move to:",
         "moveToPlaceholder": "choose a group",
-        "clearSelection": "Clear selection"
+        "clearSelection": "Clear selection",
+        "duplicate": "Duplicate",
+        "duplicateHint": "Make a copy with the same date and time to split the entry by hand: correct the amount and comment."
       },
       "dictation": {
         "button": "Entries from a description…",
