@@ -14,6 +14,7 @@ import { AccountsPage, CreateAccountModal } from "./pages/Accounts";
 import { CategoriesPage } from "./pages/Categories";
 import { DocumentsPage } from "./pages/Documents";
 import { ContextPage } from "./pages/Context";
+import { GuidePage } from "./pages/Guide";
 import { useViewState } from "./lib/view-state";
 import { ImportDialog } from "./pages/ImportDialog";
 import { ReportViewPage } from "./pages/ReportView";
@@ -110,6 +111,7 @@ function App() {
   return (
     <main className="container">
       <Tabs active={tab} reportViews={reportViews ?? []} onChange={setTab} />
+      {tab === "guide" && <GuidePage reportViews={reportViews ?? []} onOpen={setTab} />}
       {tab === "context" && <ContextPage />}
       {tab === "documents" && <DocumentsPage />}
       {tab === "categories" && <CategoriesPage />}

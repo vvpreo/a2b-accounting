@@ -1,5 +1,6 @@
 {
   "tabs": {
+    "guide": "Guide",
     "context": "Life context",
     "documents": "Documents",
     "categories": "Categories",
@@ -165,7 +166,7 @@
         "buttonHint": "Load expenses and income from a Telegram channel export: everything is checked before the import",
         "title": "Import from Telegram · {account}",
         "intro": "Choose the channel's HTML export: Export Chat in Telegram, without media. You can check and correct every message before the import. Imported messages will not come back; ignored ones wait on the Ignore tab.",
-        "notation": "Rules: each line of a message is read on its own. A number at the start of a line is the amount of an expense, with a plus of income: “145 stationery”, “+1300 bank withdrawal”. A single number elsewhere in the line reads the same way. Several numbers in a line, or an amount not in plain digits (1.000, 8k), go to review; messages without numbers are ignored, messages with attachments are not counted.",
+        "notation": "Rules: each line of a message is read on its own. A number at the start of a line is the amount of an expense, with a plus of income: “145 stationery”, “+1300 from a neighbour”. A single number elsewhere in the line reads the same way. Several numbers in a line, or an amount not in plain digits (1.000, 8k), go to review; messages without numbers are ignored, messages with attachments are not counted.",
         "file": "Export file",
         "channel": "Channel name",
         "timezone": "Time zone of the times in the file",
@@ -1257,6 +1258,59 @@
       "placeholder": "For example:\nWe live by the sea; I work remotely.\nFamily: partner Sam; kids Alex (12) and Robin (8).\nAlex goes to tennis, Robin plays chess.\nMARIA COSTA is Alex's tutor.",
       "saved": "Saved",
       "unsaved": "Unsaved changes"
+    }
+  },
+  "guide": {
+    "title": "Guide: what to do once a month",
+    "when": "When: in the first 5–7 days of the month. We put the previous month in order: by then banks give out its full statements.",
+    "goal": "Goal: a report that explains as much spending as possible. In the end the report has a minimum in the Uncategorized row and in the Cash remaining metric.",
+    "duringTitle": "During the month",
+    "during": "Write cash spending down in the Telegram channel, one expense per line: “145 stationery”. Do not write ATM withdrawals there: they come from the statement at the step Link transfers and withdrawals. Use a plus only for what the statement does not have: cash received directly (“+1300 from a neighbour”) and currency exchange. This is rare, so say where the money came from. Write notes without numbers, or ignore them at import. Just keep slips and receipts.",
+    "stepsTitle": "Steps at the start of the month",
+    "open": "Open: {screen}",
+    "doneLabel": "Done when:",
+    "steps": {
+      "statements": {
+        "title": "Load bank statements",
+        "body": "Download last month's statements from your banks. On Accounts, press Import in the row of each bank account and load the file.",
+        "done": "last month is filled in the activity strip of every account, with no red marks of balance discrepancies."
+      },
+      "telegram": {
+        "title": "Load cash from Telegram",
+        "body": "In Telegram, open the channel and choose Export Chat, no media needed. On Accounts, press Entries in the row of the cash account, then Import from Telegram…. Go through the tabs: move bank operations to Ignore. There is usually little income, so check each one: is it clear where the money came from? Correct currency exchange by hand.",
+        "done": "the Check tab is empty. What you did not finish is saved and opens with Sort out, no file needed."
+      },
+      "regular": {
+        "title": "Enter regular payments",
+        "body": "In the same Entries of the cash account, press Regular payments… and carry the 🔄 entries over to last month. This step is for recurring expenses that are not in the channel.",
+        "done": "last month's regular entries are on the account and do not repeat entries from the channel."
+      },
+      "documents": {
+        "title": "Load slips and receipts",
+        "body": "On Documents, upload the files or a ZIP of last month and wait for recognition. Then on Transactions select the month's transactions and choose Actions → Match documents. Notes from slips help the agent with categories.",
+        "done": "slips are linked to transactions, and you have looked through the unlinked ones."
+      },
+      "context": {
+        "title": "Mark the life context",
+        "body": "On Life context, add what happened last month: trips, guests, illness. The agent takes this into account when it suggests categories, so this step comes before them.",
+        "done": "the month's important events are on the list."
+      },
+      "links": {
+        "title": "Link transfers and withdrawals",
+        "body": "On Transactions, set the period to last month and select all rows. From Actions, run Find transfers between accounts and Find cash withdrawals, then decide on the suggestions in the Suggestion column. An accepted cash withdrawal creates the income on the cash account and links it to the debit by itself. Linked transfers between your own accounts count as neither income nor expense.",
+        "warning": "A withdrawal must reach the cash account once. A cash withdrawal suggestion creates a new income and does not check whether one is already there, which is why withdrawals are not written in the channel. If one was, delete one of the two entries: the line from Telegram or the income from the suggestion.",
+        "done": "every withdrawal and transfer has its link, and each withdrawal appears once on the cash account."
+      },
+      "categories": {
+        "title": "Assign categories",
+        "body": "Select the month's transactions and choose Actions → Suggest categories. Look through the suggestions and take them with Accept suggestions…. Filter → Without a category finds the rest: do it by hand with Actions → Assign category, or a click on the cell. Mark good examples with ✨, so the agent makes fewer mistakes next time.",
+        "done": "hardly any grey Uncategorized bars remain among the month's transactions."
+      },
+      "report": {
+        "title": "Check the report",
+        "body": "Open the report for last month and look at the Uncategorized row and the Cash remaining metric. A large cash remainder means there was a withdrawal with no expenses entered against it: go back to the Telegram step. On Accounts, the Summary menu's % cat. expense (sum) metric shows the share of explained spending for each account.",
+        "done": "you are fine with Uncategorized and Cash remaining, and can name the unexplained amounts."
+      }
     }
   }
 }

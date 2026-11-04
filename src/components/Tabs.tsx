@@ -3,6 +3,7 @@ import { reportLabel } from "../lib/report-name";
 import { useT } from "../i18n";
 
 export type StaticTab =
+  | "guide"
   | "context"
   | "documents"
   | "categories"
@@ -35,6 +36,19 @@ export function Tabs({ active, reportViews, onChange }: Props) {
   return (
     <nav className="tabs">
       <div className="tabs-main">
+        <button
+          type="button"
+          className={`tab-button tab-button--icon${activeKey === "guide" ? " active" : ""}`}
+          onClick={() => onChange("guide")}
+          title={t("tabs.guide")}
+          aria-label={t("tabs.guide")}
+        >
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+            <circle cx="9" cy="9" r="7.75" stroke="currentColor" strokeWidth="1.5" />
+            <circle cx="9" cy="5.5" r="1" fill="currentColor" />
+            <path d="M9 8.25v5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+          </svg>
+        </button>
         {main.map((tab) => (
           <button
             key={tab}
@@ -45,6 +59,7 @@ export function Tabs({ active, reportViews, onChange }: Props) {
             {t(`tabs.${tab}`)}
           </button>
         ))}
+        {reportViews.length > 0 && <span className="tabs-divider" aria-hidden="true" />}
         {reportViews.map((view) => {
           const key = `report:${view.id}`;
           return (
