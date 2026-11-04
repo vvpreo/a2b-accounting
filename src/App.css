@@ -5082,6 +5082,24 @@ code {
   width: min(1100px, 96vw);
 }
 
+.modal.balance-breakdown-modal {
+  width: min(680px, 96vw);
+  bottom: auto;
+}
+
+.balance-breakdown-table {
+  margin-bottom: 8px;
+}
+
+.cell-txns-table .balance-breakdown-amount {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.balance-breakdown-table tfoot td {
+  font-weight: 600;
+}
+
 .cell-txns-title {
   display: flex;
   align-items: baseline;

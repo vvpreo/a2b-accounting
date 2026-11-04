@@ -929,6 +929,16 @@
     "unfold": "Expand",
     "loading": "Computing...",
     "errorLoading": "Failed to build the report: {message}",
+    "balanceBreakdown": {
+      "colBalance": "Balance",
+      "colAsOf": "Last transaction",
+      "noTxns": "no transactions yet",
+      "mixedCurrencies": "Accounts in different currencies are added as they are, without conversion.",
+      "hint": {
+        "opening": "Balance at the start of the period: each account's balance after its last transaction before this period.",
+        "closing": "Balance at the end of the period: each account's balance after its last transaction up to the end of the period. An old date means no newer transactions on the account: a statement may not be loaded."
+      }
+    },
     "cellTxns": {
       "empty": "No transactions",
       "total": "Total",

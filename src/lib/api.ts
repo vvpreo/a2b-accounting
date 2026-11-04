@@ -1263,6 +1263,18 @@ export interface BalanceMetrics {
   // a money string (same format as ReportRow.values).
   opening: string[];
   closing: string[];
+  /** The same by account: every selected account; their sum is the above. */
+  byAccount: AccountBalances[];
+}
+
+export interface AccountBalances {
+  accountId: number;
+  opening: string[];
+  closing: string[];
+  /** Local day of the transaction each balance comes from; null while the
+   *  account has no transaction yet. */
+  openingAsOf: (string | null)[];
+  closingAsOf: (string | null)[];
 }
 
 export interface InternalTransferMetrics {

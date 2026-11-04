@@ -65,6 +65,21 @@ pub struct BalanceMetrics {
     /// transaction of that period in each account (which equals the opening
     /// balance if the account had no transactions in that period).
     pub closing: Vec<String>,
+    /// The same numbers by account: every selected account, in account order;
+    /// their sum is `opening` / `closing`.
+    pub by_account: Vec<AccountBalances>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountBalances {
+    pub account_id: i64,
+    pub opening: Vec<String>,
+    pub closing: Vec<String>,
+    /// Local day of the transaction each balance comes from; `None` while the
+    /// account has no transaction yet, and the balance is zero.
+    pub opening_as_of: Vec<Option<String>>,
+    pub closing_as_of: Vec<Option<String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -587,50 +602,64 @@ fn load_balance_history(
 
 /// Walk per-account history once, snapshotting the running balance just
 /// before each period start (opening) and at each period end (closing). The
-/// returned vectors are summed across all selected accounts — currencies are
-/// added 1:1, matching the existing income/expense aggregation behavior
-/// (mixed_currency_accounts_sum_one_to_one test).
+/// sums across accounts add currencies 1:1, matching the existing
+/// income/expense aggregation behavior (mixed_currency_accounts_sum_one_to_one
+/// test).
 fn compute_balance_metrics(
     history: &[BalanceTxn],
     bounds: &[(NaiveDate, NaiveDate)],
-) -> (Vec<i64>, Vec<i64>) {
+    account_ids: &[i64],
+) -> BalanceMetrics {
     let n_periods = bounds.len();
     let mut opening = vec![0_i64; n_periods];
     let mut closing = vec![0_i64; n_periods];
-    if n_periods == 0 {
-        return (opening, closing);
-    }
-    // History is sorted by account_id, so accumulate per-account runs by
-    // detecting account boundaries in the slice.
-    let mut start = 0;
-    while start < history.len() {
-        let acc = history[start].account_id;
-        let mut end = start + 1;
-        while end < history.len() && history[end].account_id == acc {
-            end += 1;
-        }
-        let txns = &history[start..end];
+    let mut ids = account_ids.to_vec();
+    ids.sort_unstable();
+    ids.dedup();
+    let mut by_account = Vec::with_capacity(ids.len());
+    for account_id in ids {
+        // History is sorted by account_id, so an account's run is contiguous.
+        let from = history.partition_point(|t| t.account_id < account_id);
+        let to = history.partition_point(|t| t.account_id <= account_id);
+        let txns = &history[from..to];
+        let mut balances = AccountBalances {
+            account_id,
+            opening: Vec::with_capacity(n_periods),
+            closing: Vec::with_capacity(n_periods),
+            opening_as_of: Vec::with_capacity(n_periods),
+            closing_as_of: Vec::with_capacity(n_periods),
+        };
         let mut cursor = 0;
-        let mut last_balance = 0_i64;
+        let mut last: Option<&BalanceTxn> = None;
         for (i, (p_start, p_end)) in bounds.iter().enumerate() {
             // Advance the cursor past every txn dated strictly before this
             // period start; that gives us the opening balance.
             while cursor < txns.len() && txns[cursor].local_date < *p_start {
-                last_balance = txns[cursor].balance;
+                last = Some(&txns[cursor]);
                 cursor += 1;
             }
-            opening[i] += last_balance;
+            let balance = last.map_or(0, |t| t.balance);
+            opening[i] += balance;
+            balances.opening.push(format_minor(balance));
+            balances.opening_as_of.push(last.map(|t| t.local_date.to_string()));
             // Then advance past every txn dated on or before this period end;
             // the last one we touch holds the closing balance.
             while cursor < txns.len() && txns[cursor].local_date <= *p_end {
-                last_balance = txns[cursor].balance;
+                last = Some(&txns[cursor]);
                 cursor += 1;
             }
-            closing[i] += last_balance;
+            let balance = last.map_or(0, |t| t.balance);
+            closing[i] += balance;
+            balances.closing.push(format_minor(balance));
+            balances.closing_as_of.push(last.map(|t| t.local_date.to_string()));
         }
-        start = end;
+        by_account.push(balances);
     }
-    (opening, closing)
+    BalanceMetrics {
+        opening: opening.into_iter().map(format_minor).collect(),
+        closing: closing.into_iter().map(format_minor).collect(),
+        by_account,
+    }
 }
 
 /// Returns the set of transaction ids whose paired link partner is also part
@@ -1125,11 +1154,7 @@ pub(crate) fn compute_report_inner(
     // pipeline.
     let bounds = period_bounds(from, to, gran);
     let history = load_balance_history(conn, &req.account_ids, to)?;
-    let (opening_minor, closing_minor) = compute_balance_metrics(&history, &bounds);
-    let balances = BalanceMetrics {
-        opening: opening_minor.iter().copied().map(format_minor).collect(),
-        closing: closing_minor.iter().copied().map(format_minor).collect(),
-    };
+    let balances = compute_balance_metrics(&history, &bounds, &req.account_ids);
 
     let internal_transfers = InternalTransferMetrics {
         outflows: transfer_outflows.iter().copied().map(format_minor).collect(),
@@ -1805,6 +1830,67 @@ mod tests {
         .unwrap();
         assert_eq!(resp.balances.opening, vec!["0.00", "1500.00", "1200.00"]);
         assert_eq!(resp.balances.closing, vec!["1500.00", "1200.00", "1200.00"]);
+    }
+
+    #[test]
+    fn balances_by_account_sum_to_the_metric_and_say_how_fresh_they_are() {
+        let f = open_fixture("RUB");
+        insert_txn_with_balance(&f, "2026-01-15T10:00:00Z", 5000_00, 0, 5000_00, false);
+        insert_txn_with_balance(&f, "2026-04-05T10:00:00Z", 0, 200_00, 4800_00, false);
+        let new_account = |number: &str| -> i64 {
+            f.conn
+                .query_row(
+                    "INSERT INTO accounts (bank, currency, account_number, owner_name)
+                     VALUES ('B', 'USD', ?1, 'A') RETURNING id",
+                    [number],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        // Stale: its last transaction is long before the report.
+        let stale = new_account("2");
+        // Silent: no transaction at all, but selected.
+        let silent = new_account("3");
+        let batch: i64 = f
+            .conn
+            .query_row(
+                "INSERT INTO import_batches (account_id, imported_at, source_filename, row_count, timezone_offset)
+                 VALUES (?1, '2026-01-01T00:00:00Z', NULL, 1, '+00:00') RETURNING id",
+                [stale],
+                |r| r.get(0),
+            )
+            .unwrap();
+        f.conn
+            .execute(
+                "INSERT INTO transactions (account_id, import_batch_id, occurred_at_utc, credit, debit, balance)
+                 VALUES (?1, ?2, '2025-12-20T10:00:00Z', 30000, 0, 30000)",
+                params![stale, batch],
+            )
+            .unwrap();
+
+        let resp = compute_report_inner(
+            &f.conn,
+            &req(&[silent, f.account_id, stale], &[], &[], "2026-03-01", "2026-04-30", "month"),
+        )
+        .unwrap();
+        let b = &resp.balances;
+        assert_eq!(b.opening, vec!["5300.00", "5300.00"]);
+        assert_eq!(b.closing, vec!["5300.00", "5100.00"]);
+        let ids: Vec<i64> = b.by_account.iter().map(|a| a.account_id).collect();
+        let mut expected = vec![f.account_id, stale, silent];
+        expected.sort_unstable();
+        assert_eq!(ids, expected);
+
+        let of = |id: i64| b.by_account.iter().find(|a| a.account_id == id).unwrap();
+        let main = of(f.account_id);
+        assert_eq!(main.opening, vec!["5000.00", "5000.00"]);
+        assert_eq!(main.closing, vec!["5000.00", "4800.00"]);
+        assert_eq!(main.closing_as_of[1].as_deref(), Some("2026-04-05"));
+        assert_eq!(main.opening_as_of[1].as_deref(), Some("2026-01-15"));
+        assert_eq!(of(stale).closing, vec!["300.00", "300.00"]);
+        assert_eq!(of(stale).closing_as_of[1].as_deref(), Some("2025-12-20"));
+        assert_eq!(of(silent).closing, vec!["0.00", "0.00"]);
+        assert_eq!(of(silent).closing_as_of, vec![None, None]);
     }
 
     #[test]

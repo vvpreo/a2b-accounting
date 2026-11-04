@@ -31,8 +31,10 @@ import {
 import { reportLabel } from "../lib/report-name";
 import { formatMinorAsMoney, formatMoney, parseMoneyToMinor } from "../lib/money";
 import { CategoryPickerModal, computeInitialOrder } from "./report/CategoryPicker";
+import { BalanceBreakdownModal } from "./report/BalanceBreakdownModal";
 import { CellTransactionsModal } from "./report/CellTransactionsModal";
 import { PeriodDropdown, periodPresets } from "./transactions/PeriodDropdown";
+import { BalanceMetric } from "../lib/report-balances";
 import { withUnenteredCash } from "../lib/report-unentered-cash";
 import { useViewState } from "../lib/view-state";
 
@@ -237,6 +239,8 @@ export function ReportViewPage({ view, onSaved }: Props) {
   // The report cell the user clicked, if any — drives the transaction
   // drill-down modal. `null` while closed.
   const [cellModal, setCellModal] = useState<CellClickInfo | null>(null);
+  // The balance cell whose breakdown by account is open.
+  const [balanceCell, setBalanceCell] = useState<{ metric: BalanceMetric; periodIndex: number } | null>(null);
 
   const [response, setResponse] = useState<ReportResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -688,6 +692,23 @@ export function ReportViewPage({ view, onSaved }: Props) {
           onOpenIncomeSettings={() => setIncomePickerOpen(true)}
           onOpenExpenseSettings={() => setExpensePickerOpen(true)}
           onCellClick={setCellModal}
+          onBalanceClick={(metric, periodIndex) => setBalanceCell({ metric, periodIndex })}
+        />
+      )}
+
+      {balanceCell && response && (
+        <BalanceBreakdownModal
+          metric={balanceCell.metric}
+          metricLabel={t(balanceCell.metric === "opening" ? "report.metricOpeningBalance" : "report.metricClosingBalance")}
+          periodLabel={response.periods[balanceCell.periodIndex]?.label ?? ""}
+          periodIndex={balanceCell.periodIndex}
+          byAccount={response.balances.byAccount}
+          accounts={accounts.map((a) => ({
+            id: a.id,
+            currency: a.currency,
+            label: accountNameById.get(a.id) ?? `#${a.id}`,
+          }))}
+          onClose={() => setBalanceCell(null)}
         />
       )}
 
@@ -737,6 +758,7 @@ interface PivotProps {
   // Fired when the user clicks a category/uncategorized value cell (or the
   // Total column). Opens the transaction drill-down modal.
   onCellClick: (info: CellClickInfo) => void;
+  onBalanceClick: (metric: BalanceMetric, periodIndex: number) => void;
 }
 
 /** Which rows and sections of a report are collapsed. `known` lists the group
@@ -762,6 +784,7 @@ function PivotTable({
   onOpenIncomeSettings,
   onOpenExpenseSettings,
   onCellClick,
+  onBalanceClick,
 }: PivotProps) {
   const t = useT();
   const { periods, income, balances, internalTransfers, cash } = response;
@@ -882,6 +905,7 @@ function PivotTable({
     cashRemainingHint: t("report.metricCashRemainingHint"),
     settingsLabel: t("report.metricsSettings"),
     onOpenSettings: onOpenMetricsSettings,
+    onBalanceClick,
     showTotal,
     sectionCollapsed: metricsCollapsed,
     onToggleSection: () => toggleSection("metrics"),
@@ -1388,6 +1412,7 @@ interface RenderMetricsArgs {
   // the metrics-visibility modal.
   settingsLabel: string;
   onOpenSettings: () => void;
+  onBalanceClick: (metric: BalanceMetric, periodIndex: number) => void;
   showTotal: boolean;
   sectionCollapsed: boolean;
   onToggleSection: () => void;
@@ -1434,6 +1459,7 @@ function renderMetricsSection({
   cashRemainingHint,
   settingsLabel,
   onOpenSettings,
+  onBalanceClick,
   showTotal,
   sectionCollapsed,
   onToggleSection,
@@ -1492,6 +1518,9 @@ function renderMetricsSection({
     label: string,
     values: number[],
     total: number,
+    // For a balance: a click on a cell opens its breakdown; the total column
+    // stands for the period at this index.
+    balance?: { metric: BalanceMetric; totalIndex: number },
   ): React.ReactElement => (
     <tr key={key} className="pivot-row pivot-row--metric">
       <td className="pivot-name-cell">
@@ -1499,13 +1528,18 @@ function renderMetricsSection({
         <span className="pivot-name-text">{label}</span>
       </td>
       {values.map((m, idx) => (
-        <td key={idx} className={`pivot-value-cell ${signClass(m)}`.trim()}>
+        <td
+          key={idx}
+          className={`pivot-value-cell ${balance ? "pivot-value-cell--clickable " : ""}${signClass(m)}`.trim()}
+          onClick={balance ? () => onBalanceClick(balance.metric, idx) : undefined}
+        >
           {formatMoney(formatMinorAsMoney(m))}
         </td>
       ))}
       {showTotal && (
         <td
-          className={`pivot-value-cell pivot-value-cell--total ${signClass(total)}`.trim()}
+          className={`pivot-value-cell pivot-value-cell--total ${balance ? "pivot-value-cell--clickable " : ""}${signClass(total)}`.trim()}
+          onClick={balance ? () => onBalanceClick(balance.metric, balance.totalIndex) : undefined}
         >
           {formatMoney(formatMinorAsMoney(total))}
         </td>
@@ -1592,12 +1626,15 @@ function renderMetricsSection({
     }
     if (visibleSet.has("opening")) {
       out.push(
-        renderRow("metric-opening", openingLabel, openingPerPeriod, openingTotal),
+        renderRow("metric-opening", openingLabel, openingPerPeriod, openingTotal, { metric: "opening", totalIndex: 0 }),
       );
     }
     if (visibleSet.has("closing")) {
       out.push(
-        renderRow("metric-closing", closingLabel, closingPerPeriod, closingTotal),
+        renderRow("metric-closing", closingLabel, closingPerPeriod, closingTotal, {
+          metric: "closing",
+          totalIndex: closingPerPeriod.length - 1,
+        }),
       );
     }
     if (visibleSet.has("internalTransferOut")) {
