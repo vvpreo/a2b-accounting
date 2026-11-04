@@ -29,11 +29,12 @@ pub struct HistoryResponse {
     pub rates: BTreeMap<String, BTreeMap<String, f64>>,
 }
 
-/// One HTTP call: fetch full history for a single quote currency vs. EUR base.
+/// One HTTP call: fetch the history from `start` on for a single quote currency
+/// vs. EUR base.
 ///
 /// `currency` must be a 3-letter ISO code; the caller is responsible for validation.
-pub async fn fetch_history(currency: &str) -> Result<HistoryResponse, String> {
-    let url = format!("{API_BASE}/{EUR_EARLIEST}..?symbols={currency}");
+pub async fn fetch_history(currency: &str, start: &str) -> Result<HistoryResponse, String> {
+    let url = format!("{API_BASE}/{start}..?symbols={currency}");
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(60))
         .user_agent("a2b-finances/0.1 (+https://github.com/vvpreo)")

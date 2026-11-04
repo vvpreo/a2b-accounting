@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { useViewState } from "../lib/view-state";
 import {
   baseName,
   DocumentModal,
@@ -96,9 +97,9 @@ export function DocumentsPage() {
   const [uploads, setUploads] = useState<AttachmentUpload[]>([]);
   const [version, setVersion] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
+  const [filters, setFilters] = useViewState<Filters>("documents.filters", NO_FILTERS);
   const [pausing, setPausing] = useState(false);
-  const [showHistory, setShowHistory] = useState(false);
+  const [showHistory, setShowHistory] = useViewState("documents.showHistory", false);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
   const [lastReport, setLastReport] = useState<IngestReport | null>(null);
   const [dragOver, setDragOver] = useState(false);

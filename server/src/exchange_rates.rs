@@ -1,5 +1,7 @@
 use std::str::FromStr;
+use std::time::Duration;
 
+use chrono::{Datelike, NaiveDate};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -195,6 +197,16 @@ pub(crate) async fn download_rates_for_currency_internal(
     app: AppHandle,
     currency: String,
 ) -> Result<usize, String> {
+    download_rates_from(app, currency, frankfurter::EUR_EARLIEST).await
+}
+
+/// Download the rates from `start` on. Starting at an already stored weekly
+/// quote keeps that week's pick the same, so re-reading it inserts nothing.
+async fn download_rates_from(
+    app: AppHandle,
+    currency: String,
+    start: &str,
+) -> Result<usize, String> {
     let cur = currency.trim().to_ascii_uppercase();
     if cur.is_empty() {
         return Err("currency is required".to_string());
@@ -224,7 +236,7 @@ pub(crate) async fn download_rates_for_currency_internal(
     emit_event(&app, "rates:download:started", &cur, serde_json::json!({}));
 
     // 2. HTTP fetch — pure async, no DB lock held.
-    let resp = match frankfurter::fetch_history(&cur).await {
+    let resp = match frankfurter::fetch_history(&cur, start).await {
         Ok(r) => r,
         Err(e) => {
             emit_event(
@@ -323,6 +335,74 @@ pub(crate) fn spawn_missing_rate_downloads(app: AppHandle) -> Result<(), String>
         });
     }
     Ok(())
+}
+
+/// How often the running server looks for a new weekly quote. Most checks need
+/// no request at all; one that failed is simply tried again at the next.
+const RATE_REFRESH_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+
+/// Stored quotes are one per ISO week, so there is nothing new to fetch until
+/// the week after the latest one has begun.
+fn week_has_passed(latest: NaiveDate, today: NaiveDate) -> bool {
+    let (l, t) = (latest.iso_week(), today.iso_week());
+    (t.year(), t.week()) > (l.year(), l.week())
+}
+
+/// Currencies of the user's accounts whose quotes are behind, each with the date
+/// of its latest quote. Those without any are `spawn_missing_rate_downloads`'s.
+fn currencies_behind(conn: &Connection, today: NaiveDate) -> Result<Vec<(String, String)>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT a.currency, MAX(r.rate_date)
+             FROM accounts a
+             JOIN currencies c ON c.code = a.currency
+             JOIN exchange_rates r ON r.currency = a.currency
+             WHERE a.currency != 'EUR' AND c.rate_source = 'frankfurter'
+             GROUP BY a.currency",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .map_err(|e| e.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .filter(|(_, latest)| {
+            NaiveDate::parse_from_str(latest, "%Y-%m-%d")
+                .is_ok_and(|latest| week_has_passed(latest, today))
+        })
+        .collect())
+}
+
+fn read_currencies_behind(app: &AppHandle) -> Result<Vec<(String, String)>, String> {
+    let state = app.db();
+    let conn = state.lock().map_err(|e| e.to_string())?;
+    currencies_behind(&conn, chrono::Local::now().date_naive())
+}
+
+/// Keep the rates current on their own while the server runs: at startup and
+/// then every `RATE_REFRESH_EVERY`. Failures (no network, the service is down)
+/// only get logged.
+pub(crate) fn spawn_rate_refresh(app: AppHandle) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(RATE_REFRESH_EVERY);
+        loop {
+            tick.tick().await;
+            let behind = match read_currencies_behind(&app) {
+                Ok(behind) => behind,
+                Err(err) => {
+                    eprintln!("rate refresh failed: {err}");
+                    continue;
+                }
+            };
+            for (currency, latest) in behind {
+                if let Err(err) = download_rates_from(app.clone(), currency.clone(), &latest).await {
+                    eprintln!("rate refresh for {currency} failed: {err}");
+                }
+            }
+        }
+    });
 }
 
 pub fn list_currency_rate_summaries(
@@ -459,18 +539,28 @@ pub fn convert_amount(
     }
 
     let conn = state.lock().map_err(|e| e.to_string())?;
-    let rate_from = rate_at(&conn, &from, &date, "EUR")
+    convert_at(&conn, amount_decimal, &from, &to, &date)
+}
+
+fn convert_at(
+    conn: &Connection,
+    amount: Decimal,
+    from: &str,
+    to: &str,
+    date: &str,
+) -> Result<String, String> {
+    let rate_from = rate_at(conn, from, date, "EUR")
         .map_err(|_| "withdrawal.rate_unavailable".to_string())?;
-    let rate_to = rate_at(&conn, &to, &date, "EUR")
+    let rate_to = rate_at(conn, to, date, "EUR")
         .map_err(|_| "withdrawal.rate_unavailable".to_string())?;
-    if rate_to.is_zero() {
+    if rate_from.is_zero() {
         return Err("withdrawal.rate_unavailable".to_string());
     }
 
-    // rate_to_base means: rate_X = price of 1 X in EUR-base units, so
-    // amount_X in EUR base = amount_X * rate_X. Convert across via base:
-    //   amount_to = amount_from * rate_from / rate_to
-    let converted = (amount_decimal * rate_from / rate_to).round_dp(2);
+    // rate_to_base is how many units of X one EUR buys (1 EUR = rate_X X), so
+    // amount_X in EUR = amount_X / rate_X. Convert across via the base:
+    //   amount_to = amount_from / rate_from * rate_to
+    let converted = (amount * rate_to / rate_from).round_dp(2);
     Ok(converted.to_string())
 }
 
@@ -532,6 +622,95 @@ mod tests {
     use crate::db;
     use rusqlite::params;
     use tempfile::TempDir;
+
+    fn day(s: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+
+    #[test]
+    fn converts_the_right_way_round() {
+        let (_dir, conn) = open_conn();
+        insert(&conn, "THB", "2026-08-24", "38");
+        insert(&conn, "USD", "2026-08-24", "1.2");
+        let at = |amount: i64, from: &str, to: &str| {
+            let converted = convert_at(&conn, Decimal::from(amount), from, to, "2026-08-24").unwrap();
+            converted.parse::<Decimal>().unwrap().normalize().to_string()
+        };
+
+        // 1 EUR = 38 THB = 1.2 USD, so a baht is worth far less than a dollar.
+        assert_eq!(at(3800, "THB", "USD"), "120");
+        assert_eq!(at(120, "USD", "THB"), "3800");
+        assert_eq!(at(3800, "THB", "EUR"), "100");
+        assert_eq!(at(100, "EUR", "THB"), "3800");
+    }
+
+    #[test]
+    fn conversion_without_a_rate_gives_the_stable_error() {
+        let (_dir, conn) = open_conn();
+        insert(&conn, "THB", "2026-08-24", "38");
+        let result = convert_at(&conn, Decimal::from(100), "THB", "USD", "2026-08-24");
+        assert_eq!(result.unwrap_err(), "withdrawal.rate_unavailable");
+    }
+
+    #[test]
+    fn nothing_to_fetch_until_the_next_iso_week() {
+        // 2026-08-24 is a Monday.
+        assert!(!week_has_passed(day("2026-08-24"), day("2026-08-24")));
+        assert!(!week_has_passed(day("2026-08-24"), day("2026-08-30")));
+        assert!(week_has_passed(day("2026-08-24"), day("2026-08-31")));
+        // Across a new year, where the week number starts over.
+        assert!(week_has_passed(day("2026-12-21"), day("2027-01-04")));
+        assert!(!week_has_passed(day("2026-12-28"), day("2027-01-01")));
+    }
+
+    #[test]
+    fn fetching_from_the_latest_quote_adds_only_the_new_weeks() {
+        let (_dir, mut conn) = open_conn();
+        insert(&conn, "THB", "2026-08-24", "38");
+        // The latest quote's week read again from its first day, then two more weeks.
+        let resp: frankfurter::HistoryResponse = serde_json::from_str(
+            r#"{"base":"EUR","start_date":"2026-08-24","end_date":"2026-09-08","rates":{
+                "2026-08-24":{"THB":38.0},"2026-08-25":{"THB":38.5},
+                "2026-08-31":{"THB":39.0},"2026-09-01":{"THB":39.5},
+                "2026-09-08":{"THB":40.0}}}"#,
+        )
+        .unwrap();
+        let rows: Vec<(String, String)> = frankfurter::pick_first_business_day_per_week(&resp, "THB")
+            .into_iter()
+            .map(|(date, rate)| (date, rate.to_string()))
+            .collect();
+
+        assert_eq!(upsert_many(&mut conn, "THB", &rows).unwrap(), 2);
+        let dates: Vec<String> = conn
+            .prepare("SELECT rate_date FROM exchange_rates WHERE currency = 'THB' ORDER BY rate_date")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(dates, ["2026-08-24", "2026-08-31", "2026-09-08"]);
+    }
+
+    #[test]
+    fn only_account_currencies_that_are_behind_get_refreshed() {
+        let (_dir, conn) = open_conn();
+        for (currency, number) in [("THB", "1"), ("USD", "2"), ("EUR", "3"), ("GBP", "4")] {
+            conn.execute(
+                "INSERT INTO accounts (bank, currency, account_number, owner_name)
+                 VALUES ('B', ?1, ?2, 'A')",
+                params![currency, number],
+            )
+            .unwrap();
+        }
+        insert(&conn, "THB", "2026-08-10", "37");
+        insert(&conn, "THB", "2026-08-24", "38");
+        insert(&conn, "USD", "2026-08-31", "1.1");
+        // No account in yen; GBP has no quotes yet, so it isn't this job's.
+        insert(&conn, "JPY", "2020-01-06", "120");
+
+        let behind = currencies_behind(&conn, day("2026-09-02")).unwrap();
+        assert_eq!(behind, vec![("THB".to_string(), "2026-08-24".to_string())]);
+    }
 
     fn open_conn() -> (TempDir, rusqlite::Connection) {
         let dir = TempDir::new().unwrap();

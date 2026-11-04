@@ -1307,6 +1307,80 @@ export function computeReport(request: ReportRequest): Promise<ReportResponse> {
   return invoke<ReportResponse>("compute_report", { request });
 }
 
+// The waterfall report (a `ReportView` whose config has `kind: "waterfall"`):
+// the clicked categories, in click order, are the steps of the bridge.
+export interface WaterfallConfig {
+  version: 1;
+  kind: "waterfall";
+  accountIds: number[];
+  defaultRange: ReportRange;
+  /** Missing until the user's first visit: then the first account's currency. */
+  currency?: string;
+  steps: number[];
+  /** How the columns stand; missing means vertical. */
+  orientation?: WaterfallOrientation;
+  /** Missing means the stored rates, each operation at its own date. */
+  rateMode?: WaterfallRateMode;
+  /** The user's own rates: by report currency, then by the currency converted. */
+  fixedRates?: Record<string, Record<string, WaterfallFixedRate>>;
+}
+
+export type WaterfallRateMode = "system" | "fixed";
+
+// One rate for a whole period, as the user reads it: `1 currency = rate
+// report-currency`, or with `perReport`, `1 report-currency = rate currency`.
+export interface WaterfallFixedRate {
+  currency: string;
+  rate: string;
+  perReport: boolean;
+}
+
+export type WaterfallOrientation = "vertical" | "horizontal";
+
+export interface WaterfallRequest {
+  accountIds: number[];
+  from: string;
+  to: string;
+  currency: string;
+  /** Set: one rate per currency for the whole period; these, or the suggested. */
+  fixedRates?: WaterfallFixedRate[];
+}
+
+export interface WaterfallAccount {
+  accountId: number;
+  currency: string;
+  openingNative: string;
+  closingNative: string;
+  opening: string;
+  closing: string;
+}
+
+// All money strings are in the requested currency, unless named `*Native`.
+export interface WaterfallResponse {
+  currency: string;
+  opening: string;
+  closing: string;
+  /** Each category's own money: subcategories are listed separately. */
+  categories: { categoryId: number; amount: string }[];
+  uncategorizedIncome: string;
+  uncategorizedExpense: string;
+  /** Balance moves beyond the operations: correcting rows, statement gaps. */
+  adjustments: string;
+  /** Rate moves within the period and the spread of cross-currency transfers. */
+  fxDifference: string;
+  accounts: WaterfallAccount[];
+  /** Currencies with no rate: their accounts are left out of every number. */
+  missingRates: string[];
+  /** Rates ending well before the period's end: later money uses the last one. */
+  staleRates: { currency: string; latestDate: string }[];
+  /** The last rate known on the period's end, for each currency to convert. */
+  suggestedRates: WaterfallFixedRate[];
+}
+
+export function computeWaterfall(request: WaterfallRequest): Promise<WaterfallResponse> {
+  return invoke<WaterfallResponse>("compute_waterfall", { request });
+}
+
 // Drill-down: which report cell the user clicked. The backend replays the same
 // aggregation as `compute_report` for this single cell, so the returned shares
 // sum to the displayed value.

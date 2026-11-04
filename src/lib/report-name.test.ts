@@ -11,6 +11,12 @@ describe("reportLabel", () => {
     }
   });
 
+  it("translates the waterfall's names", () => {
+    for (const name of ["Водопад", "Waterfall"]) {
+      expect(reportLabel(name, t)).toEqual({ label: "tabs.waterfall", title: "tabs.waterfallTooltip" });
+    }
+  });
+
   it("keeps the user's own name", () => {
     expect(reportLabel("Семейный бюджет", t)).toEqual({
       label: "Семейный бюджет",

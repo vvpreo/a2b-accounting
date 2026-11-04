@@ -138,6 +138,7 @@ struct SeedStrings {
 
     // Default demo report.
     report_name: &'static str,
+    waterfall_name: &'static str,
 
     // Peers (single-string fields used as `Some(s.peer_*)` on TxnSpec).
     peer_employer: &'static str,
@@ -223,6 +224,7 @@ static STRINGS_RU: SeedStrings = SeedStrings {
     account_owner: "Демо",
 
     report_name: "ДДС",
+    waterfall_name: "Водопад",
 
     peer_employer: "ООО \"Работодатель\"",
     peer_current_expenses: "Текущие расходы",
@@ -299,6 +301,7 @@ static STRINGS_EN: SeedStrings = SeedStrings {
     account_owner: "Demo",
 
     report_name: "Cash Flow",
+    waterfall_name: "Waterfall",
 
     peer_employer: "Acme Corp.",
     peer_current_expenses: "Monthly expenses",
@@ -2204,6 +2207,51 @@ pub fn ensure_default_report_view(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Idempotent: ensures the waterfall report exists, on all accounts, after the
+/// other reports. Recognised by its config, so renaming it does not duplicate it.
+pub fn ensure_waterfall_report_view(conn: &Connection) -> rusqlite::Result<()> {
+    let n: i64 = conn.query_row(
+        r#"SELECT COUNT(*) FROM report_views WHERE config LIKE '%"kind":"waterfall"%'"#,
+        [],
+        |r| r.get(0),
+    )?;
+    if n > 0 {
+        return Ok(());
+    }
+
+    let account_ids: Vec<i64> = conn
+        .prepare("SELECT id FROM accounts ORDER BY id")?
+        .query_map([], |r| r.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let config = serde_json::json!({
+        "version": 1,
+        "kind": "waterfall",
+        "accountIds": account_ids,
+        "defaultRange": { "kind": "preset", "preset": "months_12" },
+        "steps": []
+    });
+
+    // Report names are unique, and the user may already have one called this.
+    // A startup step must not fail over it.
+    let base = resolve_locale(conn)?.strings().waterfall_name;
+    let mut name = base.to_string();
+    let mut suffix = 2;
+    while conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM report_views WHERE name = ?1)",
+        [&name],
+        |r| r.get::<_, bool>(0),
+    )? {
+        name = format!("{base} {suffix}");
+        suffix += 1;
+    }
+    conn.execute(
+        "INSERT INTO report_views (name, config, sort_order)
+         VALUES (?1, ?2, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM report_views))",
+        params![name, config.to_string()],
+    )?;
+    Ok(())
+}
+
 // ---- Public seed/wipe pipeline ----
 
 fn has_user_data(conn: &Connection) -> rusqlite::Result<bool> {
@@ -2370,6 +2418,7 @@ pub fn seed_demo_data(
         let locale = resolve_locale(&tx).map_err(|e| e.to_string())?;
         wipe(&tx).map_err(|e| e.to_string())?;
         seed_full(&tx, today_local(), locale).map_err(|e| e.to_string())?;
+        ensure_waterfall_report_view(&tx).map_err(|e| e.to_string())?;
         set_flag(&tx).map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
     } // db lock released before we spawn background fetches
@@ -2386,6 +2435,7 @@ pub fn clear_all_data(state: State<'_, DbState>) -> Result<(), String> {
     // The accounting report is the sole entry point to the report tab; recreate
     // it (empty) so the user isn't stranded on a missing tab after a wipe.
     ensure_default_report_view(&tx).map_err(|e| e.to_string())?;
+    ensure_waterfall_report_view(&tx).map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -2404,6 +2454,52 @@ mod tests {
         // Apply migrations the same way db::open does.
         crate::db::apply_migrations_for_tests(&conn).unwrap();
         (dir, conn)
+    }
+
+    #[test]
+    fn waterfall_report_is_created_once_after_the_default_one() {
+        let (_dir, conn) = open_clean_db();
+        ensure_default_report_view(&conn).unwrap();
+        ensure_waterfall_report_view(&conn).unwrap();
+        ensure_waterfall_report_view(&conn).unwrap();
+
+        let (name, config): (String, String) = conn
+            .query_row(
+                "SELECT name, config FROM report_views ORDER BY sort_order DESC LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert!(name == "Водопад" || name == "Waterfall", "{name}");
+        let value: serde_json::Value = serde_json::from_str(&config).unwrap();
+        assert_eq!(value["kind"], "waterfall");
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM report_views", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn waterfall_report_does_not_fail_when_its_name_is_taken() {
+        let (_dir, conn) = open_clean_db();
+        for name in ["Водопад", "Waterfall"] {
+            conn.execute(
+                "INSERT INTO report_views (name, config, sort_order) VALUES (?1, '{}', 0)",
+                [name],
+            )
+            .unwrap();
+        }
+        ensure_waterfall_report_view(&conn).unwrap();
+        ensure_waterfall_report_view(&conn).unwrap();
+
+        let n: i64 = conn
+            .query_row(
+                r#"SELECT COUNT(*) FROM report_views WHERE config LIKE '%"kind":"waterfall"%'"#,
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
     }
 
     #[test]

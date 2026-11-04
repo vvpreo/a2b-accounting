@@ -8,7 +8,9 @@
     "transactions": "Transactions",
     "settings": "Settings",
     "report": "Cash Flow",
-    "reportTooltip": "Cash Flow"
+    "reportTooltip": "Cash Flow",
+    "waterfall": "Waterfall",
+    "waterfallTooltip": "How the balance at the start of the period becomes the balance at its end"
   },
   "toolbar": {
     "createAccount": "Create account",
@@ -935,7 +937,7 @@
       "noTxns": "no transactions yet",
       "mixedCurrencies": "Accounts in different currencies are added as they are, without conversion.",
       "hint": {
-        "opening": "Balance at the start of the period: each account's balance after its last transaction before this period.",
+        "opening": "Balance at the start of the period: each account's balance after its last transaction before this period. With no earlier transactions, it is the first transaction's balance corrected for that transaction.",
         "closing": "Balance at the end of the period: each account's balance after its last transaction up to the end of the period. An old date means no newer transactions on the account: a statement may not be loaded."
       }
     },
@@ -1320,6 +1322,81 @@
         "title": "Check the report",
         "body": "Open the report for last month and look at the Uncategorized row and the Cash remaining metric. A large cash remainder means there was a withdrawal with no expenses entered against it: go back to the Telegram step. On Accounts, the Summary menu's % cat. expense (sum) metric shows the share of explained spending for each account.",
         "done": "you are fine with Uncategorized and Cash remaining, and can name the unexplained amounts."
+      }
+    }
+  },
+  "waterfall": {
+    "currencyLabel": "Currency",
+    "accountsHidden": "No exchange rate for: {currencies}. Accounts in these currencies are left out.",
+    "chartLabel": "Column chart from the opening to the closing balance of the period",
+    "opening": "Opening balance",
+    "closing": "Closing balance",
+    "income": "Income",
+    "other": "Other expenses",
+    "system": "Rates and adjustments",
+    "adjustments": "Adjustments and statement gaps",
+    "fx": "Exchange rate difference",
+    "adjustmentsHint": "The account balance moved by more than its operations add up to: correcting rows or missing statements.",
+    "fxHint": "Operations are converted at the last rate known on their day, balances at the start and end of the period. The rate difference of exchanges between your own accounts lands here too.",
+    "tooltipChange": "Change",
+    "tooltipBefore": "Before",
+    "tooltipAfter": "After",
+    "tooltipShareExpense": "Share of expenses",
+    "tooltipClick": "Click to see what it consists of",
+    "panelTitle": "Columns",
+    "panelHint": "Click categories: they appear on the chart in this order, a nested one always before its group. Everything else goes to “Other”.",
+    "pickerEmpty": "No operations in this period.",
+    "expand": "Expand",
+    "collapse": "Collapse",
+    "removeStep": "Remove column",
+    "moveDown": "Down the list: column to the right",
+    "moveUp": "Up the list: column to the left",
+    "addStep": "Make a separate column",
+    "detailAll": "All transactions",
+    "detailUncategorized": "Uncategorized",
+    "detailOwn": "No subcategory",
+    "detailEmpty": "Nothing here.",
+    "colAccount": "Account",
+    "colNative": "In account currency",
+    "colConverted": "In report currency",
+    "colTotal": "Total",
+    "changeLabel": "Balance change over the period",
+    "theRest": "the rest",
+    "tooltipExcept": "Without: {categories}",
+    "coveredBy": "Already part of the “{group}” column",
+    "nestedFirst": "A nested category always comes before its group",
+    "ratesStale": "Last downloaded rate: {rates}. Anything later is converted at it. Rates can be updated in the currency settings.",
+    "otherIncome": "Other income",
+    "incomeStep": "Income",
+    "tooltipShareIncome": "Share of income",
+    "panelIncome": "Income",
+    "panelExpense": "Expenses",
+    "orientationLabel": "View",
+    "orientationVertical": "Vertical columns",
+    "orientationHorizontal": "Horizontal bars",
+    "systemHint": "This is neither income nor an expense. It is how the balances differ from the sum of operations: exchange rate moves and balance changes with no operation behind them.",
+    "rateModeLabel": "Rate",
+    "rateModeSystem": "At each operation’s date",
+    "rateModeFixed": "My own, one for the period",
+    "ratesHint": "One rate for the whole period, for balances and operations alike. The suggestion is the last rate known on the period’s end; you can change it.",
+    "rateReset": "Back to the suggested: {rate}",
+    "fxHintFixed": "One rate covers the whole period, so no rate movement lands here. Only the difference from exchanges between your own accounts is left: their actual rate differs from the chosen one.",
+    "image": {
+      "copy": "Copy as image",
+      "copied": "Copied",
+      "downloaded": "Saved as a file",
+      "copying": "Copying…"
+    },
+    "xlsx": {
+      "export": "Export to Excel",
+      "colColumn": "Column",
+      "colSection": "Section",
+      "colBalance": "Balance",
+      "section": {
+        "balance": "Balance",
+        "income": "Income",
+        "expense": "Expenses",
+        "system": "Rates and adjustments"
       }
     }
   }

@@ -1,4 +1,4 @@
-use rusqlite::{params, Row};
+use rusqlite::{params, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use crate::host::State;
 
@@ -40,6 +40,22 @@ fn validate_config(config: &str) -> Result<(), String> {
     serde_json::from_str::<serde_json::Value>(config)
         .map(|_| ())
         .map_err(|e| format!("config is not valid JSON: {e}"))
+}
+
+fn config_kind(config: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(config).ok()?;
+    value.get("kind")?.as_str().map(str::to_string)
+}
+
+/// A report never changes kind. A page still running an older build doesn't
+/// know about newer kinds and would save its own config over them.
+fn ensure_kind_kept(stored: &str, incoming: &str) -> Result<(), String> {
+    match config_kind(stored) {
+        Some(kind) if config_kind(incoming).as_deref() != Some(kind.as_str()) => Err(format!(
+            "this page is out of date for a '{kind}' report: reload it"
+        )),
+        _ => Ok(()),
+    }
 }
 
 pub fn list_report_views(state: State<'_, DbState>) -> Result<Vec<ReportView>, String> {
@@ -109,6 +125,14 @@ pub fn update_report_view(
 
     let conn = state.lock().map_err(|e| e.to_string())?;
 
+    let stored: Option<String> = conn
+        .query_row("SELECT config FROM report_views WHERE id = ?1", [id], |r| r.get(0))
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if let Some(stored) = stored {
+        ensure_kind_kept(&stored, &config)?;
+    }
+
     let updated = conn
         .execute(
             "UPDATE report_views
@@ -172,6 +196,15 @@ mod tests {
     use super::*;
     use crate::db;
     use tempfile::TempDir;
+
+    #[test]
+    fn a_report_keeps_its_kind() {
+        let waterfall = r#"{"kind":"waterfall","steps":[]}"#;
+        let pivot = r#"{"version":1}"#;
+        assert!(ensure_kind_kept(waterfall, r#"{"kind":"waterfall","steps":[1]}"#).is_ok());
+        assert!(ensure_kind_kept(waterfall, pivot).is_err());
+        assert!(ensure_kind_kept(pivot, pivot).is_ok());
+    }
 
     fn open_conn() -> (TempDir, rusqlite::Connection) {
         let dir = TempDir::new().unwrap();

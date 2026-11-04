@@ -10,6 +10,8 @@ import {
   useRef,
   useState,
 } from "react";
+
+import { useViewState } from "../lib/view-state";
 import { createPortal } from "react-dom";
 
 import { useI18n, useT, useTPlural } from "../i18n";
@@ -375,7 +377,7 @@ export function AccountsPage({
   // count from the earliest transaction up to the previous month (0 means
   // there are no transactions at all).
   const [allTimeCount, setAllTimeCount] = useState<number | null>(null);
-  const [filtersExpanded, setFiltersExpanded] = useState(true);
+  const [filtersExpanded, setFiltersExpanded] = useViewState("accounts.filtersExpanded", true);
   // Which row's help is open in the legend modal — `null` = closed,
   // `"fullness"` = the months strip (pre_account / no_data / complete /
   // anchor / dashed), or the id of a summary metric.

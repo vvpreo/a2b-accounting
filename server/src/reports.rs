@@ -57,8 +57,9 @@ pub struct BalanceMetrics {
     /// Per-period sum of opening balances across the selected accounts. The
     /// opening balance for a period is the running balance JUST BEFORE the
     /// first transaction of that period in each account (i.e. the closing
-    /// balance carried over from the previous period; zero if the account
-    /// had no prior activity).
+    /// balance carried over from the previous period). Before an account's
+    /// first transaction, that is what the transaction's balance says the
+    /// account already held: its balance corrected for the transaction itself.
     pub opening: Vec<String>,
     /// Per-period sum of closing balances across the selected accounts. The
     /// closing balance for a period is the running balance AFTER the last
@@ -77,7 +78,8 @@ pub struct AccountBalances {
     pub opening: Vec<String>,
     pub closing: Vec<String>,
     /// Local day of the transaction each balance comes from; `None` while the
-    /// account has no transaction yet, and the balance is zero.
+    /// account has no transaction yet: the balance is then what it held before
+    /// its first one.
     pub opening_as_of: Vec<Option<String>>,
     pub closing_as_of: Vec<Option<String>>,
 }
@@ -180,7 +182,7 @@ fn parse_granularity(s: &str) -> Result<Granularity, String> {
     }
 }
 
-fn parse_iso_date(s: &str) -> Result<NaiveDate, String> {
+pub(crate) fn parse_iso_date(s: &str) -> Result<NaiveDate, String> {
     NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d")
         .map_err(|e| format!("invalid date '{s}': {e}"))
 }
@@ -333,11 +335,11 @@ fn enumerate_periods(from: NaiveDate, to: NaiveDate, gran: Granularity) -> Vec<S
 }
 
 #[derive(Debug, Clone)]
-struct CatNode {
+pub(crate) struct CatNode {
     parent_id: Option<i64>,
     name: String,
     color: String,
-    kind: String,
+    pub(crate) kind: String,
 }
 
 /// For an *unselected* category, return the closest *strict* ancestor that *is* selected.
@@ -399,23 +401,23 @@ fn push_subtree(
 // ---------- DB-backed pipeline ----------
 
 #[derive(Debug, Clone)]
-struct TxnRow {
-    id: i64,
-    account_id: i64,
-    occurred_at_utc: String,
-    timezone_offset: String,
-    credit: i64,
-    debit: i64,
+pub(crate) struct TxnRow {
+    pub(crate) id: i64,
+    pub(crate) account_id: i64,
+    pub(crate) occurred_at_utc: String,
+    pub(crate) timezone_offset: String,
+    pub(crate) credit: i64,
+    pub(crate) debit: i64,
 }
 
 #[derive(Debug, Clone)]
-struct ShareRow {
-    transaction_id: i64,
-    category_id: i64,
-    share_minor: i64,
+pub(crate) struct ShareRow {
+    pub(crate) transaction_id: i64,
+    pub(crate) category_id: i64,
+    pub(crate) share_minor: i64,
 }
 
-fn load_categories(conn: &Connection) -> Result<HashMap<i64, CatNode>, String> {
+pub(crate) fn load_categories(conn: &Connection) -> Result<HashMap<i64, CatNode>, String> {
     let mut stmt = conn
         .prepare("SELECT id, parent_id, name, color, kind FROM categories")
         .map_err(|e| e.to_string())?;
@@ -440,7 +442,7 @@ fn load_categories(conn: &Connection) -> Result<HashMap<i64, CatNode>, String> {
     Ok(out)
 }
 
-fn load_transactions(
+pub(crate) fn load_transactions(
     conn: &Connection,
     account_ids: &[i64],
     from_local: NaiveDate,
@@ -522,12 +524,14 @@ fn cash_account_currencies(
 }
 
 #[derive(Debug, Clone)]
-struct BalanceTxn {
-    account_id: i64,
-    local_date: NaiveDate,
+pub(crate) struct BalanceTxn {
+    pub(crate) account_id: i64,
+    pub(crate) local_date: NaiveDate,
     occurred_at_utc: String,
     id: i64,
-    balance: i64,
+    pub(crate) balance: i64,
+    pub(crate) credit: i64,
+    pub(crate) debit: i64,
 }
 
 /// Load every transaction for `account_ids` whose local date is on or before
@@ -535,7 +539,7 @@ struct BalanceTxn {
 /// transactions because they participate in the actual balance chain (we want
 /// the same number the bank shows, not a synthetic income/expense view).
 /// Returns rows sorted by (account_id, local_date, occurred_at_utc, id).
-fn load_balance_history(
+pub(crate) fn load_balance_history(
     conn: &Connection,
     account_ids: &[i64],
     to_local: NaiveDate,
@@ -554,7 +558,8 @@ fn load_balance_history(
         .map(|i| format!("?{}", i + 1))
         .collect();
     let sql = format!(
-        "SELECT t.id, t.account_id, t.occurred_at_utc, COALESCE(ib.timezone_offset, '+00:00'), t.balance
+        "SELECT t.id, t.account_id, t.occurred_at_utc, COALESCE(ib.timezone_offset, '+00:00'), t.balance,
+                t.credit, t.debit
          FROM transactions t
          LEFT JOIN import_batches ib ON ib.id = t.import_batch_id
          WHERE t.occurred_at_utc <= ?1
@@ -578,6 +583,8 @@ fn load_balance_history(
         let utc: String = row.get(2).map_err(|e| e.to_string())?;
         let tz: String = row.get(3).map_err(|e| e.to_string())?;
         let balance: i64 = row.get(4).map_err(|e| e.to_string())?;
+        let credit: i64 = row.get(5).map_err(|e| e.to_string())?;
+        let debit: i64 = row.get(6).map_err(|e| e.to_string())?;
         let local = local_date(&utc, &tz)?;
         if local > to_local {
             continue;
@@ -588,6 +595,8 @@ fn load_balance_history(
             occurred_at_utc: utc,
             id,
             balance,
+            credit,
+            debit,
         });
     }
     out.sort_by(|a, b| {
@@ -622,6 +631,9 @@ fn compute_balance_metrics(
         let from = history.partition_point(|t| t.account_id < account_id);
         let to = history.partition_point(|t| t.account_id <= account_id);
         let txns = &history[from..to];
+        // An account's history starts where its first statement does: it held
+        // money before that, so its balance isn't zero up to that row.
+        let held_before = txns.first().map_or(0, |t| t.balance - t.credit + t.debit);
         let mut balances = AccountBalances {
             account_id,
             opening: Vec::with_capacity(n_periods),
@@ -638,7 +650,7 @@ fn compute_balance_metrics(
                 last = Some(&txns[cursor]);
                 cursor += 1;
             }
-            let balance = last.map_or(0, |t| t.balance);
+            let balance = last.map_or(held_before, |t| t.balance);
             opening[i] += balance;
             balances.opening.push(format_minor(balance));
             balances.opening_as_of.push(last.map(|t| t.local_date.to_string()));
@@ -648,7 +660,7 @@ fn compute_balance_metrics(
                 last = Some(&txns[cursor]);
                 cursor += 1;
             }
-            let balance = last.map_or(0, |t| t.balance);
+            let balance = last.map_or(held_before, |t| t.balance);
             closing[i] += balance;
             balances.closing.push(format_minor(balance));
             balances.closing_as_of.push(last.map(|t| t.local_date.to_string()));
@@ -667,7 +679,7 @@ fn compute_balance_metrics(
 /// inside the report and must be skipped from income/expense aggregation.
 /// Links whose other side falls outside the report scope are NOT excluded:
 /// the visible side stays as-is so the user still sees the gap.
-fn excluded_by_paired_link(
+pub(crate) fn excluded_by_paired_link(
     conn: &Connection,
     txn_ids: &[i64],
 ) -> Result<HashSet<i64>, String> {
@@ -706,7 +718,7 @@ fn excluded_by_paired_link(
     Ok(out)
 }
 
-fn load_shares(conn: &Connection, txn_ids: &[i64]) -> Result<Vec<ShareRow>, String> {
+pub(crate) fn load_shares(conn: &Connection, txn_ids: &[i64]) -> Result<Vec<ShareRow>, String> {
     if txn_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -1891,6 +1903,25 @@ mod tests {
         assert_eq!(of(stale).closing_as_of[1].as_deref(), Some("2025-12-20"));
         assert_eq!(of(silent).closing, vec!["0.00", "0.00"]);
         assert_eq!(of(silent).closing_as_of, vec![None, None]);
+    }
+
+    #[test]
+    fn balance_before_the_first_transaction_is_what_the_account_already_held() {
+        let f = open_fixture("RUB");
+        // The history starts in May: 100.00 came in and the balance became 1100.00,
+        // so the account held 1000.00 all along.
+        insert_txn_with_balance(&f, "2026-05-10T10:00:00Z", 100_00, 0, 1100_00, false);
+
+        let resp = compute_report_inner(
+            &f.conn,
+            &req(&[f.account_id], &[], &[], "2026-04-01", "2026-05-31", "month"),
+        )
+        .unwrap();
+        assert_eq!(resp.balances.opening, vec!["1000.00", "1000.00"]);
+        assert_eq!(resp.balances.closing, vec!["1000.00", "1100.00"]);
+        // The balance is known, but no transaction stands behind it yet.
+        assert_eq!(resp.balances.by_account[0].opening_as_of, vec![None, None]);
+        assert_eq!(resp.balances.by_account[0].closing_as_of[0], None);
     }
 
     #[test]

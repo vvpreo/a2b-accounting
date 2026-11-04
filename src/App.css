@@ -8038,3 +8038,719 @@ tr:hover .txn-example-btn.is-example {
 :root[data-theme="dark"] .agent-example-note {
   color: #a1a1aa;
 }
+
+/* Waterfall report */
+.waterfall-page {
+  --wf-surface: #ffffff;
+  --wf-border: #e4e4e7;
+  --wf-grid: #f0f0f2;
+  --wf-grid-zero: #a1a1aa;
+  --wf-connector: #a1a1aa;
+  --wf-muted: #71717a;
+  --wf-total: #52606d;
+  --wf-income: #16977b;
+  --wf-expense: #d8573a;
+  --wf-system: #8a8f98;
+  --wf-hover: #f4f4f5;
+  --wf-on: #e7f3ef;
+  display: flex;
+  flex-direction: column;
+}
+
+:root[data-theme="dark"] .waterfall-page {
+  --wf-surface: #27272a;
+  --wf-border: #3f3f46;
+  --wf-grid: #323236;
+  --wf-grid-zero: #71717a;
+  --wf-connector: #71717a;
+  --wf-muted: #a1a1aa;
+  --wf-total: #94a3b8;
+  --wf-income: #1f9e82;
+  --wf-expense: #dc5f43;
+  --wf-system: #80858e;
+  --wf-hover: #323236;
+  --wf-on: #24403a;
+}
+
+.waterfall-page button.select-dropdown {
+  height: 32px;
+}
+
+.waterfall-notice {
+  flex: none;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--wf-border);
+  border-radius: 6px;
+  background: var(--wf-surface);
+  font-size: 13px;
+}
+
+.waterfall-notice--error {
+  color: #dc2626;
+}
+
+.waterfall-rates {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 18px;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--wf-border);
+  border-radius: 6px;
+  background: var(--wf-surface);
+  font-size: 13px;
+}
+
+.waterfall-rates-hint {
+  flex-basis: 100%;
+  color: var(--wf-muted);
+  font-size: 12px;
+}
+
+.waterfall-rate {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.waterfall-rate input {
+  width: 96px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--wf-border);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.waterfall-rate input[aria-invalid="true"] {
+  border-color: #dc2626;
+}
+
+.waterfall-body {
+  display: flex;
+  flex: 1;
+  gap: 12px;
+  min-height: 0;
+}
+
+.waterfall-chart-wrap,
+.waterfall-panel {
+  background: var(--wf-surface);
+  border: 1px solid var(--wf-border);
+  border-radius: 6px;
+  overflow: auto;
+}
+
+.waterfall-chart-wrap {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.waterfall-chart-head {
+  position: sticky;
+  left: 0;
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px 0;
+}
+
+.waterfall-chart-actions {
+  display: flex;
+  flex: none;
+  gap: 8px;
+}
+
+.waterfall-copy {
+  white-space: nowrap;
+}
+
+.waterfall-change {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+.waterfall-change-label,
+.waterfall-change-share {
+  color: var(--wf-muted);
+  font-size: 13px;
+}
+
+.waterfall-change-mark {
+  font-size: 12px;
+}
+
+.waterfall-change--up .waterfall-change-mark {
+  color: var(--wf-income);
+}
+
+.waterfall-change--down .waterfall-change-mark {
+  color: var(--wf-expense);
+}
+
+/* The plot's vertical bounds: room for a value above the tallest column and
+   for the names below. Grid and columns share them, so their scales line up. */
+.waterfall-chart {
+  --wf-plot-top: 52px;
+  --wf-plot-bottom: 76px;
+  --wf-gutter: 60px;
+  position: relative;
+  flex: 1;
+  min-height: 340px;
+}
+
+.waterfall-grid {
+  position: absolute;
+  top: var(--wf-plot-top);
+  right: 8px;
+  bottom: var(--wf-plot-bottom);
+  left: var(--wf-gutter);
+}
+
+.waterfall-gridline {
+  position: absolute;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: var(--wf-grid);
+}
+
+.waterfall-gridline--zero {
+  background: var(--wf-grid-zero);
+}
+
+.waterfall-tick {
+  position: absolute;
+  top: 0;
+  right: 100%;
+  margin-right: 8px;
+  transform: translateY(-50%);
+  color: var(--wf-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.waterfall-columns {
+  position: absolute;
+  top: 0;
+  right: 8px;
+  bottom: 0;
+  left: var(--wf-gutter);
+  display: flex;
+}
+
+/* The income and expense parts of the chart, behind their columns. */
+.waterfall-zone {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--wf-zone) 7%, transparent);
+  pointer-events: none;
+}
+
+.waterfall-zone--income {
+  --wf-zone: var(--wf-income);
+}
+
+.waterfall-zone--expense {
+  --wf-zone: var(--wf-expense);
+}
+
+.waterfall-zone-title {
+  position: absolute;
+  top: 8px;
+  right: 0;
+  left: 0;
+  color: var(--wf-muted);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.waterfall-column {
+  --wf-color: var(--wf-total);
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+
+.waterfall-column:hover {
+  background: color-mix(in srgb, var(--wf-hover) 70%, transparent);
+}
+
+.waterfall-column:focus-visible {
+  outline: 2px solid var(--wf-color);
+  outline-offset: -2px;
+}
+
+.waterfall-column--income,
+.waterfall-column--incomeStep,
+.waterfall-column--otherIncome {
+  --wf-color: var(--wf-income);
+}
+
+.waterfall-column--expense,
+.waterfall-column--other {
+  --wf-color: var(--wf-expense);
+}
+
+.waterfall-column--system {
+  --wf-color: var(--wf-system);
+}
+
+.waterfall-column-plot {
+  position: absolute;
+  top: var(--wf-plot-top);
+  right: 0;
+  bottom: var(--wf-plot-bottom);
+  left: 0;
+}
+
+.waterfall-bar {
+  position: absolute;
+  right: 20%;
+  left: 20%;
+  z-index: 2;
+  min-height: 2px;
+  border-radius: 4px;
+  background: var(--wf-color);
+}
+
+/* Hatching: money the categories on the chart don't describe, and only that. */
+.waterfall-column--income .waterfall-bar,
+.waterfall-column--otherIncome .waterfall-bar,
+.waterfall-column--other .waterfall-bar {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--wf-color) 0 4px,
+    color-mix(in srgb, var(--wf-color) 35%, var(--wf-surface)) 4px 8px
+  );
+}
+
+/* Hairline from where a column ends to where the next one starts. */
+.waterfall-connector {
+  position: absolute;
+  left: 80%;
+  z-index: 1;
+  width: 40%;
+  height: 1px;
+  background: var(--wf-connector);
+}
+
+.waterfall-value {
+  position: absolute;
+  right: 0;
+  left: 0;
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.waterfall-column--opening .waterfall-value,
+.waterfall-column--closing .waterfall-value {
+  font-weight: 600;
+}
+
+.waterfall-name {
+  position: absolute;
+  right: 4px;
+  bottom: 6px;
+  left: 4px;
+  height: 64px;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.waterfall-column--opening .waterfall-name,
+.waterfall-column--closing .waterfall-name {
+  font-weight: 600;
+}
+
+.waterfall-date {
+  display: block;
+  color: var(--wf-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.waterfall-dot {
+  display: inline-block;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.waterfall-name .waterfall-dot {
+  margin-right: 4px;
+}
+
+.waterfall-tooltip {
+  position: fixed;
+  z-index: 50;
+  width: max-content;
+  max-width: 320px;
+  padding: 8px 10px;
+  border: 1px solid var(--wf-border);
+  border-radius: 6px;
+  background: var(--wf-surface);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.waterfall-tooltip-title {
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+.waterfall-tooltip table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.waterfall-tooltip td {
+  padding: 1px 0 1px 12px;
+  border: 0;
+}
+
+.waterfall-tooltip td:first-child {
+  padding-left: 0;
+}
+
+.waterfall-tooltip .num,
+.waterfall-amount {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.waterfall-tooltip-hint {
+  margin: 6px 0 0;
+  color: var(--wf-muted);
+}
+
+.waterfall-panel {
+  flex: 0 0 320px;
+  padding: 10px 12px;
+}
+
+.waterfall-panel h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.waterfall-tree {
+  margin-top: 4px;
+}
+
+.waterfall-panel h4 {
+  margin: 14px 0 4px;
+  color: var(--wf-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.waterfall-panel .hint {
+  margin: 4px 0 6px;
+  color: var(--wf-muted);
+  font-size: 12px;
+}
+
+.waterfall-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0 2px 6px;
+  border-radius: 4px;
+  background: var(--wf-on);
+  font-size: 13px;
+}
+
+.waterfall-step + .waterfall-step {
+  margin-top: 2px;
+}
+
+.waterfall-step-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.waterfall-step-actions {
+  display: flex;
+  flex: none;
+}
+
+.waterfall-step-actions .icon-btn {
+  padding: 0 4px;
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.waterfall-step-action--off {
+  visibility: hidden;
+}
+
+.waterfall-step-actions .icon-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.3;
+}
+
+.waterfall-pick {
+  display: flex;
+  align-items: center;
+  border-radius: 4px;
+}
+
+.waterfall-pick:hover {
+  background: var(--wf-hover, #f4f4f5);
+}
+
+.waterfall-pick--on,
+.waterfall-pick--on:hover {
+  background: var(--wf-on);
+}
+
+.waterfall-pick-caret {
+  flex: none;
+  width: 20px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--wf-muted, #71717a);
+  cursor: pointer;
+  font: inherit;
+}
+
+span.waterfall-pick-caret {
+  cursor: default;
+}
+
+.waterfall-pick--covered .waterfall-pick-main {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.waterfall-pick--covered:hover {
+  background: none;
+}
+
+.waterfall-pick-main {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 6px 4px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+
+.waterfall-pick-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.waterfall-pick-number {
+  flex: none;
+  min-width: 18px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--wf-total);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+
+.waterfall-pick-amount {
+  flex: none;
+  color: var(--wf-muted, #71717a);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.waterfall-pick-add {
+  flex: none;
+  margin-left: 4px;
+  white-space: nowrap;
+}
+
+/* The same chart lying on its side: rows run down the page, money along it. */
+.waterfall-chart--horizontal {
+  --wf-plot-top: 28px;
+  --wf-plot-bottom: 8px;
+  --wf-gutter: 210px;
+  --wf-plot-right: 200px;
+  min-width: 720px;
+}
+
+.waterfall-chart--horizontal .waterfall-grid,
+.waterfall-chart--horizontal .waterfall-columns {
+  right: var(--wf-plot-right);
+  left: var(--wf-gutter);
+}
+
+.waterfall-chart--horizontal .waterfall-gridline {
+  top: 0;
+  right: auto;
+  bottom: 0;
+  width: 1px;
+  height: auto;
+}
+
+.waterfall-chart--horizontal .waterfall-tick {
+  top: -22px;
+  right: auto;
+  margin-right: 0;
+  transform: translateX(-50%);
+}
+
+.waterfall-chart--horizontal .waterfall-columns {
+  top: var(--wf-plot-top);
+  bottom: var(--wf-plot-bottom);
+  flex-direction: column;
+}
+
+.waterfall-chart--horizontal .waterfall-zone {
+  right: calc(-1 * var(--wf-plot-right));
+  bottom: auto;
+  left: calc(-1 * var(--wf-gutter));
+}
+
+/* In their own strip at the right edge, clear of the bars' values. */
+.waterfall-chart--horizontal .waterfall-zone-title {
+  top: 50%;
+  right: 10px;
+  left: auto;
+  transform: translateY(-50%);
+}
+
+.waterfall-chart--horizontal .waterfall-column {
+  width: calc(100% + var(--wf-gutter) + var(--wf-plot-right));
+  margin-left: calc(-1 * var(--wf-gutter));
+}
+
+.waterfall-chart--horizontal .waterfall-column-plot {
+  top: 0;
+  right: var(--wf-plot-right);
+  bottom: 0;
+  left: var(--wf-gutter);
+}
+
+.waterfall-chart--horizontal .waterfall-bar {
+  top: 50%;
+  right: auto;
+  height: min(60%, 26px);
+  min-width: 2px;
+  min-height: 0;
+  transform: translateY(-50%);
+}
+
+/* Runs from this row's middle to the next one's, behind both bars. */
+.waterfall-chart--horizontal .waterfall-connector {
+  top: 50%;
+  width: 1px;
+  height: 100%;
+}
+
+.waterfall-chart--horizontal .waterfall-value {
+  top: 50%;
+  right: auto;
+  margin: 0 0 0 6px;
+  transform: translateY(-50%);
+}
+
+.waterfall-chart--horizontal .waterfall-name {
+  top: 50%;
+  right: auto;
+  bottom: auto;
+  left: 12px;
+  width: calc(var(--wf-gutter) - 24px);
+  height: auto;
+  max-height: 100%;
+  transform: translateY(-50%);
+  text-align: left;
+}
+
+.waterfall-chart--horizontal .waterfall-date {
+  display: inline;
+  margin-left: 6px;
+}
+
+.modal.waterfall-detail-modal {
+  width: min(640px, 96vw);
+  bottom: auto;
+  max-height: calc(100vh - 24px);
+}
+
+.waterfall-detail-modal .modal-body {
+  overflow: auto;
+}
+
+.waterfall-detail-actions {
+  margin-bottom: 8px;
+}
+
+.waterfall-detail-hint {
+  margin: 2px 0 12px;
+  color: #71717a;
+  font-size: 12px;
+}
+
+@media (max-width: 900px) {
+  .waterfall-body {
+    flex-direction: column;
+    overflow: auto;
+  }
+
+  .waterfall-chart-wrap {
+    flex: none;
+    height: 420px;
+  }
+
+  .waterfall-panel {
+    flex: none;
+  }
+}

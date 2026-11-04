@@ -499,7 +499,8 @@ fn merge_into(
 /// source's place goes to the target, so its money does not drop out of a
 /// report that showed the source but not the target.
 fn remap_report_views(conn: &rusqlite::Connection, source: i64, target: i64) -> Result<(), String> {
-    const KEYS: [&str; 5] = [
+    const KEYS: [&str; 6] = [
+        "steps",
         "expenseCategoryIds",
         "incomeCategoryIds",
         "expenseCategoryOrder",
@@ -753,7 +754,7 @@ mod tests {
             let b = txn(&conn, account, 1000, &[(cafe, 300), (other, 200), (cafes, 500)]);
             conn.execute(
                 "INSERT INTO report_views (name, config) VALUES ('R', ?1)",
-                [format!(r#"{{"expenseCategoryIds":[{food},{cafes}],"expenseCategoryOrder":[{cafes},{other}]}}"#)],
+                [format!(r#"{{"expenseCategoryIds":[{food},{cafes}],"expenseCategoryOrder":[{cafes},{other}],"steps":[{other},{cafes}]}}"#)],
             )
             .unwrap();
             (food, cafe, cafes, other, a, b)
@@ -778,6 +779,7 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&config).unwrap();
         assert_eq!(value["expenseCategoryIds"], serde_json::json!([food, cafe]));
         assert_eq!(value["expenseCategoryOrder"], serde_json::json!([cafe, other]));
+        assert_eq!(value["steps"], serde_json::json!([other, cafe]));
     }
 
     #[test]

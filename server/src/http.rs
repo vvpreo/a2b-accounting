@@ -19,6 +19,21 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use crate::host::AppHandle;
 
+/// The page must be revalidated on every load: it names the current hashed
+/// bundles, so a cached copy keeps a browser on an old build after an update.
+async fn revalidate_html(mut response: Response) -> Response {
+    let is_html = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .is_some_and(|v| v.as_bytes().starts_with(b"text/html"));
+    if is_html {
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, header::HeaderValue::from_static("no-cache"));
+    }
+    response
+}
+
 pub async fn serve(app: AppHandle) {
     let bind = std::env::var(crate::ENV_BIND).unwrap_or_else(|_| crate::DEFAULT_BIND.to_string());
     let static_dir =
@@ -37,6 +52,7 @@ pub async fn serve(app: AppHandle) {
         // No cap on request bodies: a single-user server, and a backup ZIP
         // grows with every stored document (axum's default is only 2 MB).
         .layer(DefaultBodyLimit::disable())
+        .layer(middleware::map_response(revalidate_html))
         .with_state(app);
     if let Some(token) = std::env::var(crate::ENV_ACCESS_TOKEN).ok().filter(|t| !t.is_empty()) {
         let token = std::sync::Arc::new(token);
@@ -496,6 +512,9 @@ async fn rpc(
             request: crate::reports::ReportRequest]),
         "report_cell_transactions" => run!(state crate::reports::report_cell_transactions, [
             request: crate::reports::ReportRequest, target: crate::reports::CellTarget]),
+
+        "compute_waterfall" => run!(state crate::report_waterfall::compute_waterfall, [
+            request: crate::report_waterfall::WaterfallRequest]),
 
         "seed_demo_data" => run!(app_state crate::seed::seed_demo_data),
         "clear_all_data" => run!(state crate::seed::clear_all_data),

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import { useViewState } from "../lib/view-state";
 import {
   Account,
   clearAllData,
@@ -35,7 +36,7 @@ type SettingsTab = "general" | "currencies" | "ai" | "recognition";
 export function SettingsPage() {
   const { t, locale, setLocale } = useI18n();
   const { mode, setMode } = useTheme();
-  const [tab, setTab] = useState<SettingsTab>("general");
+  const [tab, setTab] = useViewState<SettingsTab>("settings.tab", "general");
 
   return (
     <section className="page">

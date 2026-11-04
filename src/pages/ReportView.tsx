@@ -18,7 +18,6 @@ import {
   listAccounts,
   listCategories,
   MetricKey,
-  RangePreset,
   ReportConfig,
   ReportRange,
   ReportRequest,
@@ -33,6 +32,7 @@ import { formatMinorAsMoney, formatMoney, parseMoneyToMinor } from "../lib/money
 import { CategoryPickerModal, computeInitialOrder } from "./report/CategoryPicker";
 import { BalanceBreakdownModal } from "./report/BalanceBreakdownModal";
 import { CellTransactionsModal } from "./report/CellTransactionsModal";
+import { reportPeriodBounds, reportRangeFromPeriod, resolveRange } from "./report/report-period";
 import { PeriodDropdown, periodPresets } from "./transactions/PeriodDropdown";
 import { BalanceMetric } from "../lib/report-balances";
 import { withUnenteredCash } from "../lib/report-unentered-cash";
@@ -91,16 +91,6 @@ function normalizeVisibleMetrics(
   return ALL_METRIC_KEYS.filter((k) => seen.has(k) || !offered.has(k));
 }
 
-// Period dropdown preset key (see PeriodDropdown) ↔ the persisted preset.
-const PRESET_BY_KEY: Record<string, Exclude<RangePreset, "custom">> = {
-  "1": "months_1",
-  "3": "months_3",
-  "6": "months_6",
-  "12": "months_12",
-  "36": "months_36",
-  all: "all_time",
-};
-
 const GRANULARITIES: Granularity[] = ["year", "quarter", "month"];
 
 // Font sizes per row depth in the pivot. Section header is styled separately
@@ -111,79 +101,6 @@ const ROW_FONT_SIZES = [15, 13, 12, 11];
 // produces one save instead of one-per-keystroke; short enough that toggles
 // feel persistent within a beat.
 const AUTOSAVE_DELAY_MS = 500;
-
-function pad(n: number): string {
-  return String(n).padStart(2, "0");
-}
-
-function isoDate(y: number, m: number, d: number): string {
-  return `${y}-${pad(m)}-${pad(d)}`;
-}
-
-function lastDayOfMonth(year: number, monthOneIndexed: number): number {
-  return new Date(year, monthOneIndexed, 0).getDate();
-}
-
-
-function resolveRange(
-  range: ReportRange,
-  // Earliest transaction date for the active account selection. When the
-  // "all_time" preset is chosen we anchor `from` here so the report doesn't
-  // start at 1970 and pad with thousands of empty periods. `null` while still
-  // loading or when there are no transactions — fallback to a small window
-  // around today instead of 1970.
-  earliestTxnDate: string | null,
-): { from: string; to: string } | null {
-  if (range.kind === "custom") return { from: range.from, to: range.to };
-  const today = new Date();
-  const y = today.getFullYear();
-  const m = today.getMonth() + 1;
-  const todayStr = isoDate(y, m, today.getDate());
-  // Cap any built-in preset's upper bound at today — there's no point
-  // padding the report with empty future periods (May–Dec when we're in
-  // April), and the user can always switch to "custom" to look ahead.
-  const capToToday = (to: string): string => (to > todayStr ? todayStr : to);
-  switch (range.preset) {
-    case "months_1":
-    case "months_3":
-    case "months_6":
-    case "months_12":
-    case "months_36":
-    // Older reports: shown and resolved as "12", like the Transactions screen.
-    case "last_12_months": {
-      const back = range.preset === "last_12_months" ? 12 : Number(range.preset.slice("months_".length));
-      const start = new Date(y, m - 1 - back, 1);
-      return {
-        from: isoDate(start.getFullYear(), start.getMonth() + 1, 1),
-        to: capToToday(isoDate(y, m, lastDayOfMonth(y, m))),
-      };
-    }
-    case "current_month":
-      return {
-        from: isoDate(y, m, 1),
-        to: capToToday(isoDate(y, m, lastDayOfMonth(y, m))),
-      };
-    case "current_quarter": {
-      const qStart = Math.floor((m - 1) / 3) * 3 + 1;
-      const qEnd = qStart + 2;
-      return {
-        from: isoDate(y, qStart, 1),
-        to: capToToday(isoDate(y, qEnd, lastDayOfMonth(y, qEnd))),
-      };
-    }
-    case "current_year":
-      return { from: isoDate(y, 1, 1), to: capToToday(isoDate(y, 12, 31)) };
-    case "all_time": {
-      if (earliestTxnDate === null) {
-        // Hold off computing the report until we know where the data starts.
-        // Returning null here means the effect skips the computeReport call;
-        // it'll re-run when earliestTxnDate arrives.
-        return null;
-      }
-      return { from: earliestTxnDate, to: todayStr };
-    }
-  }
-}
 
 function safeParseConfig(raw: string): ReportConfig {
   try {
@@ -499,27 +416,11 @@ export function ReportViewPage({ view, onSaved }: Props) {
     onSaved,
   ]);
 
-  // The period dropdown works with from/to; a range equal to one of its
-  // presets is stored as that (rolling) preset, anything else as custom.
   const presets = periodPresets();
-  // "last_12_months" of older reports is the same range as "12".
-  const presetKeyOf = (preset: RangePreset) =>
-    preset === "last_12_months"
-      ? "12"
-      : Object.keys(PRESET_BY_KEY).find((k) => PRESET_BY_KEY[k] === preset);
-  const periodBounds = (() => {
-    if (range.kind === "custom") return { from: range.from, to: range.to };
-    const p = presets.find((x) => x.key === presetKeyOf(range.preset));
-    if (p) return { from: p.from, to: p.to };
-    return resolveRange(range, earliestTxnDate) ?? { from: "", to: "" };
-  })();
+  const periodBounds = reportPeriodBounds(range, presets, earliestTxnDate);
   function onPeriodChange(from: string, to: string) {
-    const p = presets.find((x) => x.from === from && x.to === to);
-    if (p) {
-      setRange({ kind: "preset", preset: PRESET_BY_KEY[p.key] });
-    } else if (from && to) {
-      setRange({ kind: "custom", from: from <= to ? from : to, to: from <= to ? to : from });
-    }
+    const next = reportRangeFromPeriod(from, to, presets);
+    if (next) setRange(next);
   }
 
   const accountItems = accounts.map((a) => ({

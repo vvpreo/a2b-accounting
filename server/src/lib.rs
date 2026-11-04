@@ -23,6 +23,7 @@ mod money;
 mod ocr;
 mod recognition_queue;
 mod report_views;
+mod report_waterfall;
 mod reports;
 mod seed;
 mod settings;
@@ -120,6 +121,8 @@ pub fn open_and_init(dir: &Path) -> Result<rusqlite::Connection, String> {
         .map_err(|e| format!("failed to recolor categories: {e}"))?;
     seed::ensure_default_report_view(&conn)
         .map_err(|e| format!("failed to ensure accounting report: {e}"))?;
+    seed::ensure_waterfall_report_view(&conn)
+        .map_err(|e| format!("failed to ensure waterfall report: {e}"))?;
     ai::migrate_legacy_config(&conn)
         .map_err(|e| format!("failed to migrate ai provider config: {e}"))?;
     attachments::backfill_filename_times(&conn)
@@ -146,6 +149,7 @@ pub fn run() {
         if let Err(err) = exchange_rates::spawn_missing_rate_downloads(app.clone()) {
             eprintln!("startup rate prefill failed: {err}");
         }
+        exchange_rates::spawn_rate_refresh(app.clone());
         // Documents left pending (a restart mid-queue, older uploads) are
         // picked up right away.
         recognition_queue::spawn(app.clone());

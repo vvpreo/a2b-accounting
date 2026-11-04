@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 
 import "./App.css";
 import { Tab, Tabs } from "./components/Tabs";
@@ -15,9 +15,11 @@ import { CategoriesPage } from "./pages/Categories";
 import { DocumentsPage } from "./pages/Documents";
 import { ContextPage } from "./pages/Context";
 import { GuidePage } from "./pages/Guide";
+import { isWaterfallView } from "./lib/report-waterfall";
 import { useViewState } from "./lib/view-state";
 import { ImportDialog } from "./pages/ImportDialog";
 import { ReportViewPage } from "./pages/ReportView";
+import { WaterfallPage } from "./pages/report/WaterfallPage";
 import { SettingsPage } from "./pages/Settings";
 import { TransactionsPage } from "./pages/Transactions";
 
@@ -26,7 +28,9 @@ function App() {
   // default "auto" means Transactions if any exist, otherwise Accounts. We
   // hold off rendering the page area until that check resolves so the user
   // doesn't see a brief flash of the wrong tab.
-  const [tab, setTab] = useState<Tab | null>(null);
+  // A reload comes back to the same screen; only a fresh start asks for the start screen.
+  const [tab, setTab] = useViewState<Tab | null>("app.tab", null);
+  const tabRestored = useRef(tab !== null);
   const [txnFilterAccountIds, setTxnFilterAccountIds] = useViewState<number[]>(
     "transactions.accountIds",
     [],
@@ -59,6 +63,7 @@ function App() {
   const [reportViewsVersion, setReportViewsVersion] = useState(0);
 
   useEffect(() => {
+    if (tabRestored.current) return;
     let cancelled = false;
     (async () => {
       const [screen, views] = await Promise.all([
@@ -133,13 +138,20 @@ function App() {
         />
       )}
       {tab === "settings" && <SettingsPage />}
-      {activeReportView && (
-        <ReportViewPage
-          key={activeReportView.id}
-          view={activeReportView}
-          onSaved={refreshReportViews}
-        />
-      )}
+      {activeReportView &&
+        (isWaterfallView(activeReportView) ? (
+          <WaterfallPage
+            key={activeReportView.id}
+            view={activeReportView}
+            onSaved={refreshReportViews}
+          />
+        ) : (
+          <ReportViewPage
+            key={activeReportView.id}
+            view={activeReportView}
+            onSaved={refreshReportViews}
+          />
+        ))}
 
       {creatingAccount && (
         <CreateAccountModal
