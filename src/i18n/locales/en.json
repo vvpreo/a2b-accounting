@@ -47,7 +47,6 @@
     "fieldAccountNumberOptional": "Account number (optional)",
     "fieldOwner": "Owner name",
     "fieldOwnerOptional": "Owner name (optional)",
-    "tableId": "#",
     "dragToReorder": "Drag to reorder accounts",
     "tableName": "Name",
     "tableBank": "Bank",

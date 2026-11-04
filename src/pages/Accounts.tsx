@@ -699,7 +699,7 @@ export function AccountsPage({
         <table className="accounts-table">
           <thead>
           <tr>
-            <th>{t("accounts.tableId")}</th>
+            <th aria-label={t("accounts.dragToReorder")} />
             <th>{t("accounts.tableName")}</th>
             <th>{t("accounts.tableBank")}</th>
             <th>{t("accounts.tableCurrency")}</th>
@@ -727,7 +727,7 @@ export function AccountsPage({
                   onDragOver={(e) => onRowDragOver(e, a.id, false)}
                   onDrop={onRowDrop}
                 >
-                  <td className="account-id-cell">
+                  <td className="account-drag-cell">
                     <span
                       className="account-drag-handle"
                       draggable
@@ -745,7 +745,6 @@ export function AccountsPage({
                     >
                       ⠿
                     </span>
-                    {a.id}
                   </td>
                   <td className="account-name-cell">
                     <span className="account-name-text">{a.name}</span>

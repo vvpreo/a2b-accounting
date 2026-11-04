@@ -47,7 +47,6 @@
     "fieldAccountNumberOptional": "Номер счёта (необязательно)",
     "fieldOwner": "Имя владельца",
     "fieldOwnerOptional": "Имя владельца (необязательно)",
-    "tableId": "#",
     "dragToReorder": "Перетащите, чтобы поменять порядок счетов",
     "tableName": "Имя",
     "tableBank": "Банк",

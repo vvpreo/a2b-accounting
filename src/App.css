@@ -7372,13 +7372,12 @@ thead:hover .col-resize-handle::after {
 /* Accounts: user-defined order — drag an account by its ⠿ handle; the drop
    position is marked by a line above (before) or below (after) the account's
    two rows. */
-.account-id-cell {
+.account-drag-cell {
   white-space: nowrap;
 }
 
 .account-drag-handle {
   display: inline-block;
-  margin-right: 6px;
   color: #a1a1aa;
   cursor: grab;
   user-select: none;
