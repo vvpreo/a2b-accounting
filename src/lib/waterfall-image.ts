@@ -48,10 +48,11 @@ const PIXEL_RATIO = 2;
 const WIDTH = 1200;
 const HEADER = 72;
 const ROW_HEIGHT = 44;
-// Under the column names (vertical), or right of the values (horizontal).
-const BRACKET_STRIP_HEIGHT = 56;
+// The least room for the brackets right of the values (horizontal).
 const BRACKET_STRIP_WIDTH = 170;
 const BRACE_DEPTH = 14;
+const BRACKET_GAP = 6;
+const BRACKET_LINE = 15;
 
 /** Breaks a label into lines that fit, at most `maxLines`; the last gets an ellipsis. */
 export function wrapText(
@@ -82,6 +83,31 @@ export function wrapText(
     const cut = i === lines.length - 1 && lines.length === maxLines ? fit(l, maxWidth, measure) : l;
     return measure(cut) > maxWidth ? fit(cut, maxWidth, measure) : cut;
   });
+}
+
+/** Breaks a label into as many lines as it takes, cutting nothing: only a word
+ *  wider than the line itself is split. */
+export function wrapWhole(text: string, maxWidth: number, measure: (s: string) => number): string[] {
+  const lines: string[] = [];
+  let line = "";
+  for (const word of text.split(/\s+/).filter(Boolean)) {
+    const next = line ? `${line} ${word}` : word;
+    if (measure(next) <= maxWidth) {
+      line = next;
+      continue;
+    }
+    if (line) lines.push(line);
+    line = "";
+    for (const char of word) {
+      if (line && measure(line + char) > maxWidth) {
+        lines.push(line);
+        line = "";
+      }
+      line += char;
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
 }
 
 function fit(text: string, maxWidth: number, measure: (s: string) => number): string {
@@ -159,12 +185,30 @@ function drawBrace(
   ctx.restore();
 }
 
-function drawVertical(ctx: CanvasRenderingContext2D, spec: WaterfallImageSpec, width: number, height: number) {
-  const left = 64;
-  const right = width - 16;
-  const top = HEADER + 50;
-  const strip = spec.brackets.length > 0 ? BRACKET_STRIP_HEIGHT : 0;
-  const bottom = height - 84 - strip;
+const VERTICAL_LEFT = 64;
+const VERTICAL_RIGHT_GAP = 16;
+
+/** The name of each group wrapped to its bracket's width (vertical view). */
+function bracketNameLines(ctx: CanvasRenderingContext2D, spec: WaterfallImageSpec, width: number): string[][] {
+  const slot = (width - VERTICAL_RIGHT_GAP - VERTICAL_LEFT) / spec.columns.length;
+  ctx.font = `12px ${FONT}`;
+  return spec.brackets.map((bracket) =>
+    wrapWhole(bracket.name, bracket.count * slot - 8, (s) => ctx.measureText(s).width),
+  );
+}
+
+function drawVertical(
+  ctx: CanvasRenderingContext2D,
+  spec: WaterfallImageSpec,
+  width: number,
+  height: number,
+  strip: number,
+  nameLines: string[][],
+) {
+  const left = VERTICAL_LEFT;
+  const right = width - VERTICAL_RIGHT_GAP;
+  const top = HEADER + 50 + strip;
+  const bottom = height - 84;
   const slot = (right - left) / spec.columns.length;
   const yOf = (v: number) => bottom - ((v - spec.min) / (spec.max - spec.min)) * (bottom - top);
 
@@ -223,26 +267,39 @@ function drawVertical(ctx: CanvasRenderingContext2D, spec: WaterfallImageSpec, w
       ctx.fillText(c.note, center, y);
     }
   });
-  for (const bracket of spec.brackets) {
+  spec.brackets.forEach((bracket, index) => {
     const from = left + bracket.start * slot;
     const to = from + bracket.count * slot;
-    const y = height - 8 - strip + 2;
+    // Right above the highest value among the group's own columns.
+    const own = spec.columns.slice(bracket.start, bracket.start + bracket.count);
+    const peak = Math.min(...own.map((c) => yOf(Math.max(c.column.startMinor, c.column.endMinor))));
+    const y = peak - 20 - BRACKET_GAP - BRACE_DEPTH;
     drawBrace(ctx, from + slot * 0.2, y, to - from - slot * 0.4, "across");
     const center = (from + to) / 2;
-    const measure = (s: string) => ctx.measureText(s).width;
     ctx.textAlign = "center";
     ctx.fillStyle = INK;
-    ctx.font = `12px ${FONT}`;
-    ctx.fillText(fit(bracket.name, to - from - 8, measure), center, y + BRACE_DEPTH + 14);
     ctx.font = `600 12px ${FONT}`;
-    ctx.fillText(bracket.total, center, y + BRACE_DEPTH + 29);
-  }
+    ctx.fillText(bracket.total, center, y - 5);
+    ctx.font = `12px ${FONT}`;
+    const lines = nameLines[index];
+    lines.forEach((text, n) => {
+      ctx.fillText(text, center, y - 5 - (lines.length - n) * BRACKET_LINE);
+    });
+  });
 }
 
 function drawHorizontal(ctx: CanvasRenderingContext2D, spec: WaterfallImageSpec, width: number) {
   const left = 250;
-  // Room after the bars for a value, then for the brackets, then the zones' captions.
-  const strip = spec.brackets.length > 0 ? BRACKET_STRIP_WIDTH : 0;
+  // Room after the bars for a value, then for the brackets with their longest
+  // name on one line, then the zones' captions.
+  ctx.font = `12px ${FONT}`;
+  const strip =
+    spec.brackets.length > 0
+      ? Math.max(
+          BRACKET_STRIP_WIDTH,
+          BRACE_DEPTH + 10 + Math.max(...spec.brackets.map((bracket) => ctx.measureText(bracket.name).width)),
+        )
+      : 0;
   const right = width - 220 - strip;
   const top = HEADER + 28;
   const bottom = top + spec.columns.length * ROW_HEIGHT;
@@ -266,6 +323,7 @@ function drawHorizontal(ctx: CanvasRenderingContext2D, spec: WaterfallImageSpec,
     ctx.fillText(tick.label, x, top - 8);
   }
   const barHeight = 26;
+  const valueEnds: number[] = [];
   spec.columns.forEach((c, i) => {
     const middle = top + (i + 0.5) * ROW_HEIGHT;
     if (i < spec.columns.length - 1) {
@@ -280,6 +338,7 @@ function drawHorizontal(ctx: CanvasRenderingContext2D, spec: WaterfallImageSpec,
     ctx.fillStyle = INK;
     ctx.font = `${total ? "600 " : ""}13px ${FONT}`;
     ctx.fillText(c.value, Math.max(b, a + 2) + 6, middle + 4);
+    valueEnds.push(Math.max(b, a + 2) + 6 + ctx.measureText(c.value).width);
 
     let x = 16;
     if (c.dotColor) {
@@ -301,16 +360,16 @@ function drawHorizontal(ctx: CanvasRenderingContext2D, spec: WaterfallImageSpec,
     }
   });
   for (const bracket of spec.brackets) {
-    const x = right + 80;
+    // Right after the longest-reaching value among the group's own rows.
+    const x = Math.max(...valueEnds.slice(bracket.start, bracket.start + bracket.count)) + BRACKET_GAP;
     const y1 = top + bracket.start * ROW_HEIGHT + (ROW_HEIGHT - barHeight) / 2;
     const y2 = top + (bracket.start + bracket.count) * ROW_HEIGHT - (ROW_HEIGHT - barHeight) / 2;
     drawBrace(ctx, x, y1, y2 - y1, "down");
     const mid = (y1 + y2) / 2;
-    const measure = (s: string) => ctx.measureText(s).width;
     ctx.textAlign = "left";
     ctx.fillStyle = INK;
     ctx.font = `12px ${FONT}`;
-    ctx.fillText(fit(bracket.name, BRACKET_STRIP_WIDTH - 24, measure), x + BRACE_DEPTH + 6, mid - 2);
+    ctx.fillText(bracket.name, x + BRACE_DEPTH + 6, mid - 2);
     ctx.font = `600 12px ${FONT}`;
     ctx.fillText(bracket.total, x + BRACE_DEPTH + 6, mid + 13);
   }
@@ -321,12 +380,19 @@ function drawHorizontal(ctx: CanvasRenderingContext2D, spec: WaterfallImageSpec,
 export function renderWaterfallImage(spec: WaterfallImageSpec): HTMLCanvasElement {
   const vertical = spec.orientation === "vertical";
   const width = vertical ? Math.max(WIDTH, 80 + spec.columns.length * 92) : WIDTH;
-  const height = vertical ? 680 + (spec.brackets.length > 0 ? BRACKET_STRIP_HEIGHT : 0) : HEADER + 28 + spec.columns.length * ROW_HEIGHT + 16;
   const canvas = document.createElement("canvas");
-  canvas.width = width * PIXEL_RATIO;
-  canvas.height = height * PIXEL_RATIO;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("canvas is not available");
+  // Names wrap to their brackets' width, and the canvas grows to hold them.
+  const nameLines = vertical ? bracketNameLines(ctx, spec, width) : [];
+  const strip =
+    nameLines.length > 0
+      ? Math.max(...nameLines.map((lines) => lines.length)) * BRACKET_LINE + BRACKET_LINE + BRACE_DEPTH + 8
+      : 0;
+  const height = vertical ? 680 + strip : HEADER + 28 + spec.columns.length * ROW_HEIGHT + 16;
+  // Setting the size resets the context, so the scale comes after it.
+  canvas.width = width * PIXEL_RATIO;
+  canvas.height = height * PIXEL_RATIO;
   ctx.scale(PIXEL_RATIO, PIXEL_RATIO);
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, width, height);
@@ -343,7 +409,7 @@ export function renderWaterfallImage(spec: WaterfallImageSpec): HTMLCanvasElemen
   ctx.fillStyle = INK;
   ctx.fillText(spec.change, 16 + labelWidth + 8, 52);
 
-  if (vertical) drawVertical(ctx, spec, width, height);
+  if (vertical) drawVertical(ctx, spec, width, height, strip, nameLines);
   else drawHorizontal(ctx, spec, width);
   return canvas;
 }

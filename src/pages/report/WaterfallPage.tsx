@@ -800,6 +800,29 @@ function ChartActions({
 }
 
 const BRACE_DEPTH = 14;
+/** Between a group's brace and the nearest value of its columns. */
+const BRACKET_GAP_PX = 6;
+
+/// Sets each brace right after its own columns' values, and the room the longest
+/// label needs: the width of a name on one line when the chart lies on its side,
+/// the height of a wrapped name otherwise. The room comes first, as it moves the plot.
+function placeBrackets(chart: HTMLElement, brackets: WaterfallBracket[], vertical: boolean) {
+  const labels = [...chart.querySelectorAll(".waterfall-bracket-label")].map((label) => label.getBoundingClientRect());
+  const room = Math.max(...labels.map((label) => (vertical ? label.height : label.width)));
+  chart.style.setProperty("--wf-bracket-label", `${Math.ceil(room)}px`);
+
+  const plot = chart.querySelector(".waterfall-columns");
+  if (!plot) return;
+  const area = plot.getBoundingClientRect();
+  const values = [...plot.querySelectorAll(".waterfall-value")].map((value) => value.getBoundingClientRect());
+  plot.querySelectorAll<HTMLElement>(".waterfall-bracket").forEach((element, index) => {
+    const own = values.slice(brackets[index].start, brackets[index].start + brackets[index].count);
+    const at = vertical
+      ? area.bottom - Math.min(...own.map((value) => value.top))
+      : Math.max(...own.map((value) => value.right)) - area.left;
+    element.style.setProperty("--wf-bracket-at", `${Math.ceil(at) + BRACKET_GAP_PX}px`);
+  });
+}
 
 /// A group's brace, drawn for its exact size: stretching a picture to fit would
 /// distort the curves, so the path is rebuilt whenever the chart changes size.
@@ -850,6 +873,10 @@ function WaterfallChart({ columns, currency, categories, steps, brackets, orient
   const columnLabel = useColumnLabel(byId);
   const scale = useMemo(() => waterfallScale(columns), [columns]);
   const [hover, setHover] = useState<{ column: WaterfallColumn; x: number; y: number } | null>(null);
+  // The group under the pointer: its columns light up, the rest fade.
+  const [hoveredBracket, setHoveredBracket] = useState<number | null>(null);
+  const activeBracket = brackets.find((bracket) => bracket.categoryId === hoveredBracket) ?? null;
+  const chartRef = useRef<HTMLDivElement>(null);
 
   const compact = useMemo(
     () => new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }),
@@ -862,9 +889,25 @@ function WaterfallChart({ columns, currency, categories, steps, brackets, orient
   const vertical = orientation === "vertical";
   const along = vertical ? "bottom" : "left";
 
+  useLayoutEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || brackets.length === 0) return;
+    const measure = () => placeBrackets(chart, brackets, vertical);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(chart);
+    return () => observer.disconnect();
+  }, [brackets, columns, vertical]);
+
   return (
     <div
-      className={`waterfall-chart waterfall-chart--${orientation}${brackets.length > 0 ? " waterfall-chart--brackets" : ""}`}
+      ref={chartRef}
+      className={[
+        "waterfall-chart",
+        `waterfall-chart--${orientation}`,
+        brackets.length > 0 ? "waterfall-chart--brackets" : "",
+        activeBracket ? "waterfall-chart--bracket-active" : "",
+      ].join(" ")}
       role="group"
       aria-label={t("waterfall.chartLabel")}
       style={
@@ -912,7 +955,13 @@ function WaterfallChart({ columns, currency, categories, steps, brackets, orient
             <button
               key={column.key}
               type="button"
-              className={`waterfall-column waterfall-column--${column.kind}`}
+              className={[
+                "waterfall-column",
+                `waterfall-column--${column.kind}`,
+                activeBracket && index >= activeBracket.start && index < activeBracket.start + activeBracket.count
+                  ? "waterfall-column--in-bracket"
+                  : "",
+              ].join(" ")}
               aria-label={`${fullLabel}: ${money(shown)} ${currency}`}
               onClick={() => {
                 setHover(null);
@@ -959,8 +1008,10 @@ function WaterfallChart({ columns, currency, categories, steps, brackets, orient
           return (
             <div
               key={bracket.categoryId}
-              className="waterfall-bracket"
+              className={`waterfall-bracket${bracket === activeBracket ? " waterfall-bracket--active" : ""}`}
               style={vertical ? { left: start, width: size } : { top: start, height: size }}
+              onMouseEnter={() => setHoveredBracket(bracket.categoryId)}
+              onMouseLeave={() => setHoveredBracket(null)}
             >
               <Brace
                 direction={vertical ? "across" : "down"}

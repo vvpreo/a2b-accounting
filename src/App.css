@@ -8743,31 +8743,25 @@ span.waterfall-pick-caret {
   white-space: nowrap;
 }
 
-/* A group's brace stands under the column names here, and to the right of the
-   values when the chart lies on its side. */
-.waterfall-chart--brackets {
-  --wf-bracket-strip: 52px;
-}
-
+/* A group's brace stands right above its columns' values, and right after them
+   when the chart lies on its side. --wf-bracket-at and --wf-bracket-label are
+   measured in placeBrackets. */
 .waterfall-chart--vertical.waterfall-chart--brackets {
-  --wf-plot-bottom: calc(76px + var(--wf-bracket-strip));
-}
-
-.waterfall-chart--vertical.waterfall-chart--brackets .waterfall-name {
-  bottom: calc(6px + var(--wf-bracket-strip));
+  --wf-bracket-strip: calc(var(--wf-bracket-label, 32px) + 16px);
+  --wf-plot-top: calc(58px + var(--wf-bracket-strip));
 }
 
 .waterfall-bracket {
   position: absolute;
   z-index: 3;
-  bottom: 2px;
+  bottom: var(--wf-bracket-at, 100%);
   height: var(--wf-bracket-strip);
-  pointer-events: none;
+  transition: opacity 0.12s;
 }
 
 .waterfall-brace {
   position: absolute;
-  top: 0;
+  bottom: 0;
   height: 14px;
 }
 
@@ -8784,16 +8778,34 @@ span.waterfall-pick-caret {
   stroke-width: 1.5;
 }
 
+.waterfall-bracket--active .waterfall-brace path {
+  stroke-width: 2.25;
+}
+
+.waterfall-column-plot,
+.waterfall-name {
+  transition: opacity 0.12s;
+}
+
+.waterfall-chart--bracket-active .waterfall-column:not(.waterfall-column--in-bracket) .waterfall-column-plot,
+.waterfall-chart--bracket-active .waterfall-column:not(.waterfall-column--in-bracket) .waterfall-name,
+.waterfall-chart--bracket-active .waterfall-bracket:not(.waterfall-bracket--active) {
+  opacity: 0.3;
+}
+
+.waterfall-column--in-bracket {
+  background: color-mix(in srgb, var(--wf-hover) 70%, transparent);
+}
+
 .waterfall-bracket-label {
   position: absolute;
-  top: 16px;
   right: 2px;
+  bottom: 16px;
   left: 2px;
   display: flex;
   flex-direction: column;
   font-size: 12px;
   line-height: 16px;
-  pointer-events: auto;
   text-align: center;
 }
 
@@ -8803,9 +8815,7 @@ span.waterfall-pick-caret {
 }
 
 .waterfall-bracket-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 /* The same chart lying on its side: rows run down the page, money along it. */
@@ -8910,22 +8920,21 @@ span.waterfall-pick-caret {
   margin-left: 6px;
 }
 
-/* Room for the values, then the braces with their labels, then the zones' captions. */
+/* Room for the values, the braces with their longest label, the zones' captions. */
 .waterfall-chart--horizontal.waterfall-chart--brackets {
-  --wf-plot-right: 370px;
-  min-width: 900px;
+  --wf-plot-right: calc(220px + var(--wf-bracket-label, 150px));
+  min-width: calc(var(--wf-gutter) + var(--wf-plot-right) + 320px);
 }
 
 .waterfall-chart--horizontal .waterfall-bracket {
   right: auto;
   bottom: auto;
-  left: calc(100% + 76px);
-  width: 170px;
+  left: var(--wf-bracket-at, 100%);
+  width: calc(20px + var(--wf-bracket-label, 150px));
   height: auto;
 }
 
 .waterfall-chart--horizontal .waterfall-brace {
-  top: 0;
   left: 0;
   width: 14px;
   height: auto;
@@ -8933,10 +8942,16 @@ span.waterfall-pick-caret {
 
 .waterfall-chart--horizontal .waterfall-bracket-label {
   top: 50%;
-  right: 0;
+  right: auto;
+  bottom: auto;
   left: 20px;
+  width: max-content;
   transform: translateY(-50%);
   text-align: left;
+}
+
+.waterfall-chart--horizontal .waterfall-bracket-name {
+  white-space: nowrap;
 }
 
 .modal.waterfall-detail-modal {

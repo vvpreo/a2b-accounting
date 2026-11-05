@@ -308,12 +308,12 @@ export function waterfallBrackets(
 /** A curly brace as one SVG path, so it stays a single smooth line at any length:
  *  the legs start at 0 and `length`, the tip reaches `depth` halfway between them.
  *  It runs down the page with the tip to the right ("down"), or along the page
- *  with the tip below ("across"). The curves shrink on short braces. */
+ *  with the tip above ("across"). The curves shrink on short braces. */
 export function bracePath(length: number, depth: number, direction: "down" | "across"): string {
   const stem = depth / 2;
   const curve = Math.min(length / 4, depth * 0.6);
   const mid = length / 2;
-  const at = (along: number, out: number) => (direction === "down" ? `${out} ${along}` : `${along} ${out}`);
+  const at = (along: number, out: number) => (direction === "down" ? `${out} ${along}` : `${along} ${depth - out}`);
   return [
     `M${at(0, 0)}`,
     `Q${at(0, stem)} ${at(curve, stem)}`,

@@ -378,8 +378,8 @@ describe("bracePath", () => {
     expect(d.match(/M/g)).toHaveLength(1);
   });
 
-  it("is the same curve lying along the page, the tip below", () => {
-    const flipped = points(bracePath(100, 14, "down")).map(([x, y]) => [y, x]);
+  it("is the same curve lying along the page, the tip above", () => {
+    const flipped = points(bracePath(100, 14, "down")).map(([x, y]) => [y, 14 - x]);
     expect(points(bracePath(100, 14, "across"))).toEqual(flipped);
   });
 

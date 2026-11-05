@@ -1,9 +1,27 @@
 import { describe, expect, it } from "vitest";
 
-import { wrapText } from "./waterfall-image";
+import { wrapText, wrapWhole } from "./waterfall-image";
 
 // One unit per character keeps the expectations readable.
 const measure = (s: string) => s.length;
+
+describe("wrapWhole", () => {
+  it("keeps every word, however many lines it takes", () => {
+    expect(wrapWhole("one two three four five six", 5, measure)).toEqual(["one", "two", "three", "four", "five", "six"]);
+  });
+
+  it("puts words together while they fit", () => {
+    expect(wrapWhole("Rates and adjustments", 11, measure)).toEqual(["Rates and", "adjustments"]);
+  });
+
+  it("splits a word wider than the line instead of cutting it", () => {
+    expect(wrapWhole("Superlongcategory x", 6, measure)).toEqual(["Superl", "ongcat", "egory", "x"]);
+  });
+
+  it("survives an empty label", () => {
+    expect(wrapWhole("", 10, measure)).toEqual([]);
+  });
+});
 
 describe("wrapText", () => {
   it("keeps a short label on one line", () => {
