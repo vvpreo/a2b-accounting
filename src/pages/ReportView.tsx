@@ -481,7 +481,7 @@ export function ReportViewPage({ view, onSaved }: Props) {
                 autoComplete="off"
               />
             </label>
-            <label className="filter-field">
+            <div className="filter-field">
               <span>{t("builder.accountsLabel")}</span>
               <MultiSelectDropdown<number>
                 items={accountItems}
@@ -493,7 +493,7 @@ export function ReportViewPage({ view, onSaved }: Props) {
                 multiSelectedLabel={(count) => t("builder.accountsMany", { count })}
                 applyLabel={t("builder.accountsApply")}
               />
-            </label>
+            </div>
             <div className="filter-field">
               <span>{t("report.rangeLabel")}</span>
               <PeriodDropdown
@@ -516,7 +516,7 @@ export function ReportViewPage({ view, onSaved }: Props) {
                 ))}
               </select>
             </label>
-            <label className="filter-field">
+            <div className="filter-field">
               <span>{t("report.displayLabel")}</span>
               <MultiSelectDropdown<string>
                 items={displayItems}
@@ -535,7 +535,7 @@ export function ReportViewPage({ view, onSaved }: Props) {
                 applyLabel={t("report.displayApply")}
                 showSelectAll={false}
               />
-            </label>
+            </div>
           </div>
         )}
       </section>

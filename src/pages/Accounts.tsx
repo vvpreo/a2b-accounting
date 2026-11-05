@@ -667,7 +667,7 @@ export function AccountsPage({
                 ))}
               </select>
             </label>
-            <label className="filter-field">
+            <div className="filter-field">
               <span>{t("accounts.menuSummary")}</span>
               <MultiSelectDropdown<SummaryMetricId>
                 items={summaryDropdownItems}
@@ -681,7 +681,7 @@ export function AccountsPage({
                 }
                 applyLabel={t("accounts.summaryApply")}
               />
-            </label>
+            </div>
             <button
               type="button"
               className="btn-primary filter-bar-action"

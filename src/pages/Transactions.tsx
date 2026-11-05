@@ -1244,7 +1244,7 @@ export function TransactionsPage({
         </button>
         {filtersExpanded && (
           <div className="filter-bar-row">
-            <label className="filter-field">
+            <div className="filter-field">
               <span>{t("transactions.filterAccounts")}</span>
               <MultiSelectDropdown
                 items={accountItems}
@@ -1258,7 +1258,7 @@ export function TransactionsPage({
                 }
                 applyLabel={t("transactions.applyButton")}
               />
-            </label>
+            </div>
             <div className="filter-field">
               <span>{t("transactions.filterPeriod")}</span>
               <PeriodDropdown
@@ -1271,7 +1271,7 @@ export function TransactionsPage({
                 }}
               />
             </div>
-            <label className="filter-field">
+            <div className="filter-field">
               <span>{t("transactions.filterKind")}</span>
               <MultiSelectDropdown<RowKind>
                 items={ROW_KINDS.map((k) => ({
@@ -1297,8 +1297,8 @@ export function TransactionsPage({
                 }
                 applyLabel={t("transactions.applyButton")}
               />
-            </label>
-            <label className="filter-field">
+            </div>
+            <div className="filter-field">
               <span>{t("transactions.filterCategories")}</span>
               <MultiSelectDropdown<number>
                 items={categoryFilterItems}
@@ -1310,7 +1310,7 @@ export function TransactionsPage({
                 multiSelectedLabel={(count) => t("transactions.filterCategoriesMany", { count })}
                 applyLabel={t("transactions.applyButton")}
               />
-            </label>
+            </div>
             <div className="filter-field filter-field--amount">
               <span>{t("transactions.filterAmount")}</span>
               <div className="amount-filter">
@@ -1354,7 +1354,7 @@ export function TransactionsPage({
                 )}
               </div>
             </div>
-            <label className="filter-field">
+            <div className="filter-field">
               <span>{t("transactions.filterColumns")}</span>
               <MultiSelectDropdown<ColumnKey>
                 items={COLUMN_KEYS.map((k) => ({
@@ -1371,7 +1371,7 @@ export function TransactionsPage({
                 }
                 applyLabel={t("transactions.applyButton")}
               />
-            </label>
+            </div>
             {/* Right edge of the bar, where the Import button used to be;
                 importing is the last item of the menu. */}
             <div className="filter-bar-action">

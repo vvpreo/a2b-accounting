@@ -326,7 +326,7 @@ export function WaterfallPage({ view, onSaved }: Props) {
         </button>
         {filtersExpanded && (
           <div className="filter-bar-row report-filter-bar-row">
-            <label className="filter-field">
+            <div className="filter-field">
               <span>{t("builder.accountsLabel")}</span>
               <MultiSelectDropdown<number>
                 items={accounts.map((a) => ({ id: a.id, label: accountNameById.get(a.id) ?? "" }))}
@@ -338,7 +338,7 @@ export function WaterfallPage({ view, onSaved }: Props) {
                 multiSelectedLabel={(count) => t("builder.accountsMany", { count })}
                 applyLabel={t("builder.accountsApply")}
               />
-            </label>
+            </div>
             <div className="filter-field">
               <span>{t("report.rangeLabel")}</span>
               <PeriodDropdown
