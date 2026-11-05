@@ -54,6 +54,20 @@ describe("buildWaterfallSheet", () => {
     expect(rows[1][2]?.format).toBe("#,##0.00");
   });
 
+  it("adds a group column only when some column stands under a bracket", () => {
+    expect(sheet[6]).toHaveLength(4);
+    const none = buildWaterfallSheet(COLUMNS, { ...LABELS, colGroup: "Group", groupName: () => undefined });
+    expect(none[6]).toHaveLength(4);
+    const grouped = buildWaterfallSheet(COLUMNS, {
+      ...LABELS,
+      colGroup: "Group",
+      groupName: (c) => (c.key === "other" ? "Food" : undefined),
+    });
+    expect(grouped[6][4]?.value).toBe("Group");
+    expect(grouped[9][4]?.value).toBe("Food");
+    expect(grouped[7][4]?.value).toBe("");
+  });
+
   it("leaves the change empty for the two balances", () => {
     const rows = sheet.slice(7);
     expect(rows[0][2]).toBeNull();

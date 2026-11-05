@@ -18,6 +18,9 @@ export interface WaterfallSheetLabels {
   colBalance: string;
   section: (kind: WaterfallColumn["kind"]) => string;
   columnName: (column: WaterfallColumn) => string;
+  /** The bracket a column stands under. The sheet gets this column only if any does. */
+  colGroup?: string;
+  groupName?: (column: WaterfallColumn) => string | undefined;
 }
 
 type Cell = CellObject | null;
@@ -39,6 +42,7 @@ export function buildWaterfallSheet(columns: WaterfallColumn[], labels: Waterfal
   const first = columns[0];
   const last = columns[columns.length - 1];
   const change = first && last ? last.endMinor - first.endMinor : 0;
+  const grouped = columns.some((column) => labels.groupName?.(column));
   return [
     [text(labels.title, true)],
     [text(labels.period), text(labels.periodValue)],
@@ -46,7 +50,13 @@ export function buildWaterfallSheet(columns: WaterfallColumn[], labels: Waterfal
     [text(labels.rate), text(labels.rateValue)],
     [text(labels.change), money(change, true)],
     [],
-    [text(labels.colColumn, true), text(labels.colSection, true), text(labels.colChange, true), text(labels.colBalance, true)],
+    [
+      text(labels.colColumn, true),
+      text(labels.colSection, true),
+      text(labels.colChange, true),
+      text(labels.colBalance, true),
+      ...(grouped ? [text(labels.colGroup ?? "", true)] : []),
+    ],
     ...columns.map((column) => {
       const total = column.kind === "opening" || column.kind === "closing";
       return [
@@ -54,6 +64,7 @@ export function buildWaterfallSheet(columns: WaterfallColumn[], labels: Waterfal
         text(labels.section(column.kind)),
         total ? null : money(column.deltaMinor),
         money(column.endMinor, total),
+        ...(grouped ? [text(labels.groupName?.(column) ?? "")] : []),
       ];
     }),
   ];
@@ -64,7 +75,7 @@ export async function downloadWaterfallXlsx(sheet: Cell[][], filename: string, s
   const { default: writeExcelFile } = await import("write-excel-file/browser");
   const blob = await writeExcelFile(sheet, {
     sheet: sheetName,
-    columns: [{ width: 38 }, { width: 24 }, { width: 16 }, { width: 16 }],
+    columns: [{ width: 38 }, { width: 24 }, { width: 16 }, { width: 16 }, { width: 24 }].slice(0, sheet[6]?.length ?? 4),
   }).toBlob();
   triggerDownload(blob, filename);
 }

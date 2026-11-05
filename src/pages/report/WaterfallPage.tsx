@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { MultiSelectDropdown } from "../../components/MultiSelectDropdown";
@@ -24,8 +24,12 @@ import {
 import { listen } from "../../lib/events";
 import { formatMinorAsMoney, formatMoney, parseMoneyToMinor } from "../../lib/money";
 import {
+  activeBrackets,
   addStep,
   allocateToSteps,
+  bracePath,
+  bracketConflict,
+  bracketOf,
   buildWaterfallColumns,
   canMoveStep,
   carvedOutSteps,
@@ -39,6 +43,8 @@ import {
   normalizeRate,
   validFixedRates,
   toggleStep,
+  WaterfallBracket,
+  waterfallBrackets,
   WaterfallColumn,
   WaterfallDrill,
   waterfallScale,
@@ -49,6 +55,7 @@ import { useViewState } from "../../lib/view-state";
 import { copyOrDownloadPng, renderWaterfallImage } from "../../lib/waterfall-image";
 import { buildWaterfallSheet, downloadWaterfallXlsx } from "../../lib/waterfall-xlsx";
 import type { CellClickInfo } from "../ReportView";
+import { trackHandleDrag } from "../transactions/columnWidths";
 import { PeriodDropdown, periodPresets } from "../transactions/PeriodDropdown";
 import { CellTransactionsModal } from "./CellTransactionsModal";
 import { reportPeriodBounds, reportRangeFromPeriod, resolveRange } from "./report-period";
@@ -62,6 +69,12 @@ const AUTOSAVE_DELAY_MS = 500;
 // Narrower than this and a column's value no longer fits: the chart scrolls instead.
 const MIN_COLUMN_WIDTH = 84;
 const MIN_ROW_HEIGHT = 36;
+// The side panel's width stays between these; the chart keeps the rest.
+const PANEL_WIDTH_DEFAULT = 320;
+const PANEL_WIDTH_MIN = 220;
+const PANEL_WIDTH_MAX = 720;
+const MIN_CHART_WIDTH = 360;
+const PANEL_WIDTH_STEP = 24;
 const SHEET_SECTIONS: Record<WaterfallColumn["kind"], string> = {
   opening: "balance",
   closing: "balance",
@@ -97,6 +110,8 @@ const isTotal = (column: WaterfallColumn) => column.kind === "opening" || column
 const isIncome = (column: WaterfallColumn) =>
   column.kind === "income" || column.kind === "incomeStep" || column.kind === "otherIncome";
 const isExpense = (column: WaterfallColumn) => column.kind === "expense" || column.kind === "other";
+const groupTotal = (bracket: WaterfallBracket) =>
+  (bracket.totalMinor > 0 ? "+" : "") + wholeMoney(bracket.totalMinor);
 
 function categoryPath(id: number, byId: Map<number, Category>): string {
   const names: string[] = [];
@@ -132,6 +147,8 @@ export function WaterfallPage({ view, onSaved }: Props) {
   const [steps, setSteps] = useState<number[]>(initial.steps);
   const [orientation, setOrientation] = useState<WaterfallOrientation>(initial.orientation ?? "vertical");
   const [hideZeroColumns, setHideZeroColumns] = useState(initial.hideZeroColumns ?? false);
+  const [brackets, setBrackets] = useState<number[]>(initial.brackets ?? []);
+  const [panelWidth, setPanelWidth] = useState<number | null>(initial.panelWidth ?? null);
   const [rateMode, setRateMode] = useState<WaterfallRateMode>(initial.rateMode ?? "system");
   const [fixedRates, setFixedRates] = useState<Record<string, Record<string, WaterfallFixedRate>>>(
     initial.fixedRates ?? {},
@@ -227,6 +244,8 @@ export function WaterfallPage({ view, onSaved }: Props) {
     // Left out while it is the default, so opening the report doesn't rewrite it.
     orientation: orientation === "vertical" ? undefined : orientation,
     hideZeroColumns: hideZeroColumns || undefined,
+    brackets: brackets.length > 0 ? brackets : undefined,
+    panelWidth: panelWidth ?? undefined,
     rateMode: rateMode === "system" ? undefined : rateMode,
     fixedRates: Object.keys(fixedRates).length > 0 ? fixedRates : undefined,
   });
@@ -254,13 +273,50 @@ export function WaterfallPage({ view, onSaved }: Props) {
     if (next) setRange(next);
   }
 
-  const known = useMemo(() => orderedSteps(steps, categories), [steps, categories]);
+  const shownBrackets = useMemo(() => activeBrackets(brackets, steps, categories), [brackets, steps, categories]);
+  const known = useMemo(() => orderedSteps(steps, categories, shownBrackets), [steps, categories, shownBrackets]);
   // The picture and the spreadsheet both take these, so they match the screen.
   const columns = useMemo(() => {
     if (!data) return [];
-    const all = buildWaterfallColumns(data, categories, steps);
+    const all = buildWaterfallColumns(data, categories, known);
     return hideZeroColumns ? withoutZeroColumns(all) : all;
-  }, [data, categories, steps, hideZeroColumns]);
+  }, [data, categories, known, hideZeroColumns]);
+  const bracketSpans = useMemo(
+    () => waterfallBrackets(columns, shownBrackets, categories),
+    [columns, shownBrackets, categories],
+  );
+
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  function clampPanelWidth(width: number) {
+    const room = (bodyRef.current?.clientWidth ?? Infinity) - MIN_CHART_WIDTH;
+    return Math.round(Math.max(PANEL_WIDTH_MIN, Math.min(PANEL_WIDTH_MAX, room, width)));
+  }
+  function startPanelDrag(e: React.PointerEvent<HTMLDivElement>) {
+    const start = panelRef.current?.getBoundingClientRect().width ?? PANEL_WIDTH_DEFAULT;
+    // The panel stands to the right of the handle: dragging right narrows it.
+    trackHandleDrag(e, (dx) => setPanelWidth(clampPanelWidth(start - dx)), () => {});
+  }
+  function onPanelHandleKey(e: React.KeyboardEvent<HTMLDivElement>) {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    const step = e.key === "ArrowLeft" ? PANEL_WIDTH_STEP : -PANEL_WIDTH_STEP;
+    setPanelWidth((width) => clampPanelWidth((width ?? PANEL_WIDTH_DEFAULT) + step));
+  }
+
+  function toggleBracket(id: number) {
+    if (shownBrackets.includes(id)) {
+      setBrackets(shownBrackets.filter((b) => b !== id));
+    } else {
+      setBrackets([...shownBrackets, id]);
+      setSteps(addStep(known, id, categories, shownBrackets));
+    }
+  }
+  // A group taken off the chart loses its bracket: adding it back starts clean.
+  function toggleColumn(id: number) {
+    if (known.includes(id)) setBrackets(shownBrackets.filter((b) => b !== id));
+    setSteps(toggleStep(known, id, categories, shownBrackets));
+  }
   const accountNameById = useMemo(() => {
     const m = new Map<number, string>();
     for (const a of accounts) {
@@ -419,7 +475,11 @@ export function WaterfallPage({ view, onSaved }: Props) {
         </div>
       )}
 
-      <div className="waterfall-body">
+      <div
+        className="waterfall-body"
+        ref={bodyRef}
+        style={panelWidth === null ? undefined : ({ "--wf-panel-width": `${panelWidth}px` } as React.CSSProperties)}
+      >
         <div className="waterfall-chart-wrap">
           {data && (
             <div className="waterfall-chart-head">
@@ -429,6 +489,8 @@ export function WaterfallPage({ view, onSaved }: Props) {
                 currency={data.currency}
                 categories={categories}
                 steps={known}
+                brackets={bracketSpans}
+                shownBrackets={shownBrackets}
                 orientation={orientation}
                 from={from}
                 to={to}
@@ -445,6 +507,7 @@ export function WaterfallPage({ view, onSaved }: Props) {
               currency={data.currency}
               categories={categories}
               steps={known}
+              brackets={bracketSpans}
               orientation={orientation}
               from={from}
               to={to}
@@ -453,14 +516,33 @@ export function WaterfallPage({ view, onSaved }: Props) {
           )}
         </div>
         {data && (
-          <StepsPanel
-            data={data}
-            categories={categories}
-            steps={known}
-            viewId={view.id}
-            onToggle={(id) => setSteps(toggleStep(known, id, categories))}
-            onMove={(id, dir) => setSteps(moveStep(known, id, dir, categories))}
-          />
+          <>
+            <div
+              className="waterfall-resizer"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label={t("waterfall.panelResize")}
+              aria-valuenow={panelWidth ?? PANEL_WIDTH_DEFAULT}
+              aria-valuemin={PANEL_WIDTH_MIN}
+              aria-valuemax={PANEL_WIDTH_MAX}
+              tabIndex={0}
+              title={t("waterfall.panelResize")}
+              onPointerDown={startPanelDrag}
+              onDoubleClick={() => setPanelWidth(null)}
+              onKeyDown={onPanelHandleKey}
+            />
+            <StepsPanel
+              ref={panelRef}
+              data={data}
+              categories={categories}
+              steps={known}
+              brackets={shownBrackets}
+              viewId={view.id}
+              onToggle={toggleColumn}
+              onMove={(id, dir) => setSteps(moveStep(known, id, dir, categories, shownBrackets))}
+              onBracket={toggleBracket}
+            />
+          </>
         )}
       </div>
 
@@ -470,13 +552,14 @@ export function WaterfallPage({ view, onSaved }: Props) {
           data={data}
           categories={categories}
           steps={known}
+          brackets={shownBrackets}
           rateMode={rateMode}
           periodLabel={periodLabel}
           accountNameById={accountNameById}
           viewId={view.id}
           onClose={() => setDetail(null)}
           onDrill={(next, label, amount) => setDrill({ drill: next, label, amount })}
-          onAddStep={(id) => setSteps(addStep(known, id, categories))}
+          onAddStep={(id) => setSteps(addStep(known, id, categories, shownBrackets))}
         />
       )}
       {drillRequest && drillInfo && (
@@ -582,6 +665,8 @@ interface ChartActionsProps {
   currency: string;
   categories: Category[];
   steps: number[];
+  brackets: WaterfallBracket[];
+  shownBrackets: number[];
   orientation: WaterfallOrientation;
   from: string;
   to: string;
@@ -598,6 +683,8 @@ function ChartActions({
   currency,
   categories,
   steps,
+  brackets,
+  shownBrackets,
   orientation,
   from,
   to,
@@ -629,6 +716,12 @@ function ChartActions({
         title: `${t(zone.kind === "income" ? "waterfall.panelIncome" : "waterfall.panelExpense")} ${
           (zone.totalMinor > 0 ? "+" : "") + wholeMoney(zone.totalMinor)
         }`,
+      })),
+      brackets: brackets.map((bracket) => ({
+        start: bracket.start,
+        count: bracket.count,
+        name: byId.get(bracket.categoryId)?.name ?? "",
+        total: groupTotal(bracket),
       })),
       columns: columns.map((column) => {
         const shown = isTotal(column) ? column.endMinor : column.deltaMinor;
@@ -668,6 +761,14 @@ function ChartActions({
       change: t("waterfall.changeLabel"),
       colColumn: t("waterfall.xlsx.colColumn"),
       colSection: t("waterfall.xlsx.colSection"),
+      colGroup: t("waterfall.xlsx.colGroup"),
+      groupName: (column) => {
+        if (column.categoryId === null) return undefined;
+        const group = shownBrackets.includes(column.categoryId)
+          ? column.categoryId
+          : bracketOf(column.categoryId, shownBrackets, categories);
+        return group === null ? undefined : byId.get(group)?.name;
+      },
       colChange: t("waterfall.tooltipChange"),
       colBalance: t("waterfall.xlsx.colBalance"),
       section: (kind) => t(`waterfall.xlsx.section.${SHEET_SECTIONS[kind]}`),
@@ -698,18 +799,51 @@ function ChartActions({
   );
 }
 
+const BRACE_DEPTH = 14;
+
+/// A group's brace, drawn for its exact size: stretching a picture to fit would
+/// distort the curves, so the path is rebuilt whenever the chart changes size.
+function Brace({ direction, style }: { direction: "down" | "across"; style: React.CSSProperties }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [length, setLength] = useState(0);
+
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const measure = () => {
+      const { width, height } = element.getBoundingClientRect();
+      setLength(direction === "down" ? height : width);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [direction]);
+
+  return (
+    <span className="waterfall-brace" aria-hidden="true" ref={ref} style={style}>
+      {length > 0 && (
+        <svg width="100%" height="100%">
+          <path d={bracePath(length, BRACE_DEPTH, direction)} />
+        </svg>
+      )}
+    </span>
+  );
+}
+
 interface ChartProps {
   columns: WaterfallColumn[];
   currency: string;
   categories: Category[];
   steps: number[];
+  brackets: WaterfallBracket[];
   orientation: WaterfallOrientation;
   from: string;
   to: string;
   onOpen: (column: WaterfallColumn) => void;
 }
 
-function WaterfallChart({ columns, currency, categories, steps, orientation, from, to, onOpen }: ChartProps) {
+function WaterfallChart({ columns, currency, categories, steps, brackets, orientation, from, to, onOpen }: ChartProps) {
   const t = useT();
   const { locale } = useI18n();
   const byId = useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories]);
@@ -730,7 +864,7 @@ function WaterfallChart({ columns, currency, categories, steps, orientation, fro
 
   return (
     <div
-      className={`waterfall-chart waterfall-chart--${orientation}`}
+      className={`waterfall-chart waterfall-chart--${orientation}${brackets.length > 0 ? " waterfall-chart--brackets" : ""}`}
       role="group"
       aria-label={t("waterfall.chartLabel")}
       style={
@@ -811,6 +945,32 @@ function WaterfallChart({ columns, currency, categories, steps, orientation, fro
                 )}
               </span>
             </button>
+          );
+        })}
+        {brackets.map((bracket) => {
+          const start = `${(bracket.start / columns.length) * 100}%`;
+          const size = `${(bracket.count / columns.length) * 100}%`;
+          // From the first bar's edge to the last one's, not to the edges of their
+          // slots: the same insets as .waterfall-bar along each axis.
+          const inset = vertical
+            ? `${20 / bracket.count}%`
+            : `max(${20 / bracket.count}%, calc(${50 / bracket.count}% - 13px))`;
+          const name = byId.get(bracket.categoryId)?.name ?? "";
+          return (
+            <div
+              key={bracket.categoryId}
+              className="waterfall-bracket"
+              style={vertical ? { left: start, width: size } : { top: start, height: size }}
+            >
+              <Brace
+                direction={vertical ? "across" : "down"}
+                style={vertical ? { left: inset, right: inset } : { top: inset, bottom: inset }}
+              />
+              <span className="waterfall-bracket-label" title={`${categoryPath(bracket.categoryId, byId)}: ${money(bracket.totalMinor)} ${currency}`}>
+                <span className="waterfall-bracket-name">{name}</span>
+                <strong>{groupTotal(bracket)}</strong>
+              </span>
+            </div>
           );
         })}
       </div>
@@ -897,8 +1057,11 @@ interface TreeProps {
   expandedKey: string;
   /** Rows covered by a group's column can't be picked; the panel greys them out. */
   disableCovered?: boolean;
+  brackets?: number[];
   onPick: (category: Category) => void;
   onAdd?: (category: Category) => void;
+  /** Offers expense groups a bracket; left out where brackets don't apply. */
+  onBracket?: (id: number) => void;
 }
 
 /// The categories with money this period, largest first.
@@ -912,8 +1075,10 @@ function CategoryTree({
   hideSteps = false,
   expandedKey,
   disableCovered = false,
+  brackets = [],
   onPick,
   onAdd,
+  onBracket,
 }: TreeProps) {
   const t = useT();
   const [expanded, setExpanded] = useViewState<number[]>(expandedKey, []);
@@ -943,7 +1108,7 @@ function CategoryTree({
     const open = expanded.includes(c.id);
     const stepNumber = hideSteps ? 0 : ownSteps.indexOf(c.id) + 1;
     // A column of its own stays clickable, to remove it, even inside a group's column.
-    const coveredId = disableCovered && stepNumber === 0 ? coveredByStep(c.id, steps, categories) : null;
+    const coveredId = disableCovered && stepNumber === 0 ? coveredByStep(c.id, steps, categories, brackets) : null;
     const coveredName = categories.find((x) => x.id === coveredId)?.name;
     return (
       <div key={c.id}>
@@ -991,6 +1156,15 @@ function CategoryTree({
               +
             </button>
           )}
+          {onBracket && (
+            <BracketToggle
+              id={c.id}
+              categories={categories}
+              brackets={brackets}
+              coveredName={coveredId !== null ? coveredName : undefined}
+              onToggle={onBracket}
+            />
+          )}
         </div>
         {open && kids.map((kid) => renderNode(kid, depth + 1))}
       </div>
@@ -1000,17 +1174,61 @@ function CategoryTree({
   return <>{(childrenOf.get(rootParent) ?? []).map((c) => renderNode(c, 0))}</>;
 }
 
+interface BracketToggleProps {
+  id: number;
+  categories: Category[];
+  brackets: number[];
+  /** The group's column this one is part of, if it can't get a column now. */
+  coveredName?: string;
+  onToggle: (id: number) => void;
+}
+
+/// Shows an expense group with a brace over its columns. A category without
+/// subcategories only keeps the place, so the amounts stay in one line.
+function BracketToggle({ id, categories, brackets, coveredName, onToggle }: BracketToggleProps) {
+  const t = useT();
+  if (!categories.some((c) => c.parentId === id)) {
+    return <span className="waterfall-bracket-toggle waterfall-bracket-toggle--off" aria-hidden="true" />;
+  }
+  const on = brackets.includes(id);
+  const conflict = on ? null : bracketConflict(id, brackets, categories);
+  const conflictName = categories.find((c) => c.id === conflict)?.name ?? "";
+  const label = on
+    ? t("waterfall.bracketOff")
+    : conflict !== null
+      ? t("waterfall.bracketNested", { group: conflictName })
+      : coveredName !== undefined
+        ? t("waterfall.coveredBy", { group: coveredName })
+        : t("waterfall.bracketOn");
+  return (
+    <button
+      type="button"
+      className={`icon-btn waterfall-bracket-toggle${on ? " waterfall-bracket-toggle--on" : ""}`}
+      aria-pressed={on}
+      aria-label={label}
+      title={label}
+      disabled={conflict !== null || coveredName !== undefined}
+      onClick={() => onToggle(id)}
+    >
+      {"}"}
+    </button>
+  );
+}
+
 interface PanelProps {
   data: WaterfallResponse;
   categories: Category[];
   steps: number[];
+  brackets: number[];
   viewId: number;
+  ref: React.Ref<HTMLElement>;
   onToggle: (id: number) => void;
   onMove: (id: number, dir: -1 | 1) => void;
+  onBracket: (id: number) => void;
 }
 
 /// Which categories get a column, and in what order.
-function StepsPanel({ data, categories, steps, viewId, onToggle, onMove }: PanelProps) {
+function StepsPanel({ data, categories, steps, brackets, viewId, ref, onToggle, onMove, onBracket }: PanelProps) {
   const t = useT();
   const byId = useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories]);
   const { amounts } = useMemo(() => allocateToSteps(data, categories, steps), [data, categories, steps]);
@@ -1023,20 +1241,25 @@ function StepsPanel({ data, categories, steps, viewId, onToggle, onMove }: Panel
       <section key={kind}>
         <h4>{t(kind === "income" ? "waterfall.panelIncome" : "waterfall.panelExpense")}</h4>
         {own.map((id, index) => {
-          const canDown = canMoveStep(steps, id, 1, categories);
-          const canUp = canMoveStep(steps, id, -1, categories);
+          const canDown = canMoveStep(steps, id, 1, categories, brackets);
+          const canUp = canMoveStep(steps, id, -1, categories, brackets);
+          const inBracket = bracketOf(id, brackets, categories) !== null;
+          const blockedTitle = inBracket ? "waterfall.bracketTogether" : "waterfall.nestedFirst";
           return (
-            <div className="waterfall-step" key={id}>
+            <div className={`waterfall-step${inBracket ? " waterfall-step--in-bracket" : ""}`} key={id}>
               <span className="waterfall-dot" style={{ background: byId.get(id)?.color }} />
               <span className="waterfall-step-name" title={categoryPath(id, byId)}>{byId.get(id)?.name}</span>
               <span className="waterfall-pick-amount">{money(amounts.get(id) ?? 0)}</span>
               <span className="waterfall-step-actions">
+                {kind === "expense" && (
+                  <BracketToggle id={id} categories={categories} brackets={brackets} onToggle={onBracket} />
+                )}
                 {/* Both arrows always take their place: down on the left, up on the right. */}
                 <button
                   type="button"
                   className={`icon-btn${index < own.length - 1 ? "" : " waterfall-step-action--off"}`}
                   disabled={!canDown}
-                  title={t(canDown || index >= own.length - 1 ? "waterfall.moveDown" : "waterfall.nestedFirst")}
+                  title={t(canDown || index >= own.length - 1 ? "waterfall.moveDown" : blockedTitle)}
                   aria-label={t("waterfall.moveDown")}
                   onClick={() => onMove(id, 1)}
                 >
@@ -1046,7 +1269,7 @@ function StepsPanel({ data, categories, steps, viewId, onToggle, onMove }: Panel
                   type="button"
                   className={`icon-btn${index > 0 ? "" : " waterfall-step-action--off"}`}
                   disabled={!canUp}
-                  title={t(canUp || index <= 0 ? "waterfall.moveUp" : "waterfall.nestedFirst")}
+                  title={t(canUp || index <= 0 ? "waterfall.moveUp" : blockedTitle)}
                   aria-label={t("waterfall.moveUp")}
                   onClick={() => onMove(id, -1)}
                 >
@@ -1075,7 +1298,9 @@ function StepsPanel({ data, categories, steps, viewId, onToggle, onMove }: Panel
             steps={steps}
             expandedKey={`report.${viewId}.expandedCategories`}
             disableCovered
+            brackets={brackets}
             onPick={(c) => onToggle(c.id)}
+            onBracket={kind === "expense" ? onBracket : undefined}
           />
         </div>
       </section>
@@ -1083,7 +1308,7 @@ function StepsPanel({ data, categories, steps, viewId, onToggle, onMove }: Panel
   }
 
   return (
-    <aside className="waterfall-panel">
+    <aside className="waterfall-panel" ref={ref}>
       <h3>{t("waterfall.panelTitle")}</h3>
       <p className="hint">{t("waterfall.panelHint")}</p>
       {renderGroup("income")}
@@ -1097,6 +1322,7 @@ interface DetailProps {
   data: WaterfallResponse;
   categories: Category[];
   steps: number[];
+  brackets: number[];
   rateMode: WaterfallRateMode;
   periodLabel: string;
   accountNameById: Map<number, string>;
@@ -1112,6 +1338,7 @@ function ColumnDetailModal({
   data,
   categories,
   steps,
+  brackets,
   rateMode,
   periodLabel,
   accountNameById,
@@ -1204,7 +1431,7 @@ function ColumnDetailModal({
           hideSteps
           expandedKey={expandedKey}
           onPick={pick}
-          onAdd={isRest ? (c) => onAddStep(c.id) : undefined}
+          onAdd={isRest || brackets.includes(column.categoryId!) ? (c) => onAddStep(c.id) : undefined}
         />
         {column.categoryId !== null && own !== 0 && (
           <div className="waterfall-pick">

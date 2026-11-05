@@ -1338,6 +1338,10 @@ export interface WaterfallConfig {
   orientation?: WaterfallOrientation;
   /** Leaves out the columns that hold no money; missing means they are shown. */
   hideZeroColumns?: boolean;
+  /** Expense groups drawn with a brace over their columns. */
+  brackets?: number[];
+  /** Width of the side panel, as the user dragged it; missing means the default. */
+  panelWidth?: number;
   /** Missing means the stored rates, each operation at its own date. */
   rateMode?: WaterfallRateMode;
   /** The user's own rates: by report currency, then by the currency converted. */

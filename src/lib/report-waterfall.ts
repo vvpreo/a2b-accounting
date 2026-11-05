@@ -90,10 +90,37 @@ function ancestorIds(id: number, categories: Category[]): number[] {
   return out;
 }
 
+/** The saved brackets that can be drawn: expense groups that are columns. They
+ *  don't nest, so if moving categories around made one sit inside another, the
+ *  one saved first wins. */
+export function activeBrackets(brackets: number[], steps: number[], categories: Category[]): number[] {
+  const out: number[] = [];
+  for (const id of brackets) {
+    if (out.includes(id) || !steps.includes(id)) continue;
+    if (categories.find((c) => c.id === id)?.kind !== "expense") continue;
+    if (bracketConflict(id, out, categories) === null) out.push(id);
+  }
+  return out;
+}
+
+/** The bracket that stops this group from getting one of its own: the group sits
+ *  inside it, or holds it. */
+export function bracketConflict(id: number, brackets: number[], categories: Category[]): number | null {
+  const above = ancestorIds(id, categories).find((a) => brackets.includes(a));
+  if (above !== undefined) return above;
+  return brackets.find((b) => ancestorIds(b, categories).includes(id)) ?? null;
+}
+
+/** The bracket a column stands under, when that isn't its own. */
+export function bracketOf(id: number, brackets: number[], categories: Category[]): number | null {
+  return ancestorIds(id, categories).find((a) => brackets.includes(a)) ?? null;
+}
+
 /** The steps whose categories still exist, in the user's order, except that
- *  income comes before expenses, and a nested category always comes before the
- *  group it belongs to: the group's column is what is left without the nested. */
-export function orderedSteps(steps: number[], categories: Category[]): number[] {
+ *  income comes before expenses, a nested category always comes before the group
+ *  it belongs to (the group's column is what is left without the nested), and
+ *  the columns of a bracketed group stand side by side, in the group's place. */
+export function orderedSteps(steps: number[], categories: Category[], brackets: number[] = []): number[] {
   const kinds = new Map(categories.map((c) => [c.id, c.kind]));
   const out: number[] = [];
   for (const id of steps) {
@@ -103,13 +130,28 @@ export function orderedSteps(steps: number[], categories: Category[]): number[] 
     if (firstAncestor >= 0) out.splice(firstAncestor, 0, id);
     else out.push(id);
   }
-  return [...out.filter((id) => kinds.get(id) === "income"), ...out.filter((id) => kinds.get(id) !== "income")];
+  const ordered = [...out.filter((id) => kinds.get(id) === "income"), ...out.filter((id) => kinds.get(id) !== "income")];
+  return brackets.reduce((list, group) => {
+    if (!list.includes(group)) return list;
+    const inside = list.filter((id) => ancestorIds(id, categories).includes(group));
+    const rest = list.filter((id) => !inside.includes(id));
+    rest.splice(rest.indexOf(group), 0, ...inside);
+    return rest;
+  }, ordered);
 }
 
 /** The column that already holds this category's money, if any: its nearest
- *  ancestor among the steps. Such a category can't get a column of its own. */
-export function coveredByStep(id: number, steps: number[], categories: Category[]): number | null {
-  return ancestorIds(id, categories).find((a) => steps.includes(a)) ?? null;
+ *  ancestor among the steps. Such a category can't get a column of its own,
+ *  unless that column is a bracketed group's: there it is the group's remainder,
+ *  and the user picks which subcategories stand beside it. */
+export function coveredByStep(
+  id: number,
+  steps: number[],
+  categories: Category[],
+  brackets: number[] = [],
+): number | null {
+  const nearest = ancestorIds(id, categories).find((a) => steps.includes(a));
+  return nearest === undefined || brackets.includes(nearest) ? null : nearest;
 }
 
 /** Steps nested in this one: its column shows only what is left without them. */
@@ -232,6 +274,57 @@ export function waterfallZones(columns: WaterfallColumn[]): WaterfallZone[] {
   return zones;
 }
 
+export interface WaterfallBracket {
+  categoryId: number;
+  /** Position among the columns; a bracket's columns always stand side by side. */
+  start: number;
+  count: number;
+  /** Signed, like the columns: the whole group, what stands beside its column included. */
+  totalMinor: number;
+}
+
+/** The brackets to draw over these columns. A group with no column left (all of
+ *  them hidden as zero) has none. */
+export function waterfallBrackets(
+  columns: WaterfallColumn[],
+  brackets: number[],
+  categories: Category[],
+): WaterfallBracket[] {
+  const out: WaterfallBracket[] = [];
+  for (const categoryId of brackets) {
+    const group = subtreeIds(categoryId, categories);
+    const held = columns.flatMap((c, i) => (c.categoryId !== null && group.has(c.categoryId) ? [i] : []));
+    if (held.length === 0) continue;
+    out.push({
+      categoryId,
+      start: held[0],
+      count: held.length,
+      totalMinor: held.reduce((sum, i) => sum + columns[i].deltaMinor, 0),
+    });
+  }
+  return out.sort((a, b) => a.start - b.start);
+}
+
+/** A curly brace as one SVG path, so it stays a single smooth line at any length:
+ *  the legs start at 0 and `length`, the tip reaches `depth` halfway between them.
+ *  It runs down the page with the tip to the right ("down"), or along the page
+ *  with the tip below ("across"). The curves shrink on short braces. */
+export function bracePath(length: number, depth: number, direction: "down" | "across"): string {
+  const stem = depth / 2;
+  const curve = Math.min(length / 4, depth * 0.6);
+  const mid = length / 2;
+  const at = (along: number, out: number) => (direction === "down" ? `${out} ${along}` : `${along} ${out}`);
+  return [
+    `M${at(0, 0)}`,
+    `Q${at(0, stem)} ${at(curve, stem)}`,
+    `L${at(mid - curve, stem)}`,
+    `Q${at(mid, stem)} ${at(mid, depth)}`,
+    `Q${at(mid, stem)} ${at(mid + curve, stem)}`,
+    `L${at(length - curve, stem)}`,
+    `Q${at(length, stem)} ${at(length, 0)}`,
+  ].join(" ");
+}
+
 export interface WaterfallScale {
   min: number;
   max: number;
@@ -256,34 +349,73 @@ export function waterfallScale(columns: WaterfallColumn[], tickCount = 5): Water
 
 /** Step list changes, pure so the screen and the tests agree. A new step goes
  *  last, so a group added after its nested categories lands after them. */
-export function addStep(steps: number[], id: number, categories: Category[]): number[] {
-  if (steps.includes(id) || coveredByStep(id, steps, categories) !== null) return steps;
+export function addStep(steps: number[], id: number, categories: Category[], brackets: number[] = []): number[] {
+  if (steps.includes(id) || coveredByStep(id, steps, categories, brackets) !== null) return steps;
   return [...steps, id];
 }
 
-export function toggleStep(steps: number[], id: number, categories: Category[]): number[] {
-  return steps.includes(id) ? steps.filter((s) => s !== id) : addStep(steps, id, categories);
+export function toggleStep(steps: number[], id: number, categories: Category[], brackets: number[] = []): number[] {
+  return steps.includes(id) ? steps.filter((s) => s !== id) : addStep(steps, id, categories, brackets);
+}
+
+/** What moves together with a step: a bracketed group takes its columns along. */
+function stepBlock(id: number, steps: number[], categories: Category[], brackets: number[]): number[] {
+  if (!brackets.includes(id)) return [id];
+  return steps.filter((s) => s === id || ancestorIds(s, categories).includes(id));
+}
+
+/** The two neighbouring runs of steps that an arrow would swap, or null when it
+ *  can't: past the other section, past the edge of the step's own bracket, or
+ *  so that a group lands before something nested in it. Expects `orderedSteps`. */
+function moveBlocks(
+  steps: number[],
+  id: number,
+  dir: -1 | 1,
+  categories: Category[],
+  brackets: number[],
+): { moved: number[]; passed: number[] } | null {
+  if (!steps.includes(id)) return null;
+  const moved = stepBlock(id, steps, categories, brackets);
+  const start = steps.indexOf(moved[0]);
+  const neighbour = steps[dir === 1 ? start + moved.length : start - 1];
+  if (neighbour === undefined) return null;
+  const kindOf = (step: number) => categories.find((c) => c.id === step)?.kind;
+  if (kindOf(id) !== kindOf(neighbour)) return null;
+  const own = bracketOf(id, brackets, categories);
+  const theirs = bracketOf(neighbour, brackets, categories);
+  if (own !== null && theirs !== own) return null;
+  const passed = own !== null ? [neighbour] : stepBlock(theirs ?? neighbour, steps, categories, brackets);
+  const [nested, groups] = dir === 1 ? [moved, passed] : [passed, moved];
+  const blocked = nested.some((n) => ancestorIds(n, categories).some((a) => groups.includes(a)));
+  return blocked ? null : { moved, passed };
 }
 
 /** A step can swap with its neighbour unless that would put a group before
- *  something nested in it. */
-export function canMoveStep(steps: number[], id: number, dir: -1 | 1, categories: Category[]): boolean {
-  const at = steps.indexOf(id);
-  const to = at + dir;
-  if (at < 0 || to < 0 || to >= steps.length) return false;
-  const kindOf = (step: number) => categories.find((c) => c.id === step)?.kind;
-  if (kindOf(id) !== kindOf(steps[to])) return false;
-  const [nested, group] = dir === 1 ? [id, steps[to]] : [steps[to], id];
-  return !ancestorIds(nested, categories).includes(group);
+ *  something nested in it. Under a bracket it stays among the group's columns;
+ *  a bracketed group moves with all of them, and others pass it whole. */
+export function canMoveStep(
+  steps: number[],
+  id: number,
+  dir: -1 | 1,
+  categories: Category[],
+  brackets: number[] = [],
+): boolean {
+  return moveBlocks(steps, id, dir, categories, brackets) !== null;
 }
 
-export function moveStep(steps: number[], id: number, dir: -1 | 1, categories: Category[]): number[] {
-  if (!canMoveStep(steps, id, dir, categories)) return steps;
-  const at = steps.indexOf(id);
-  const to = at + dir;
-  const next = [...steps];
-  [next[at], next[to]] = [next[to], next[at]];
-  return next;
+export function moveStep(
+  steps: number[],
+  id: number,
+  dir: -1 | 1,
+  categories: Category[],
+  brackets: number[] = [],
+): number[] {
+  const blocks = moveBlocks(steps, id, dir, categories, brackets);
+  if (!blocks) return steps;
+  const { moved, passed } = blocks;
+  const start = steps.indexOf((dir === 1 ? moved : passed)[0]);
+  const swapped = dir === 1 ? [...passed, ...moved] : [...moved, ...passed];
+  return [...steps.slice(0, start), ...swapped, ...steps.slice(start + swapped.length)];
 }
 
 function subtreeIds(id: number, categories: Category[]): Set<number> {

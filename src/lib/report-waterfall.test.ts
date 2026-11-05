@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { Category, WaterfallResponse } from "./api";
 import {
+  activeBrackets,
   addStep,
   allocateToSteps,
+  bracePath,
+  bracketConflict,
+  bracketOf,
   buildWaterfallColumns,
   canMoveStep,
   carvedOutSteps,
@@ -18,6 +22,7 @@ import {
   normalizeRate,
   validFixedRates,
   toggleStep,
+  waterfallBrackets,
   waterfallScale,
   waterfallZones,
   withoutZeroColumns,
@@ -234,6 +239,156 @@ describe("withoutZeroColumns", () => {
       { kind: "income", start: 1, count: 1, totalMinor: 5000 },
       { kind: "expense", start: 2, count: 1, totalMinor: -3000 },
     ]);
+  });
+});
+
+describe("brackets", () => {
+  // Expenses: group 10 holds 11 and 12; group 20 holds 21; 30 stands alone.
+  const TREE = [
+    cat(10, "expense"),
+    cat(11, "expense", 10),
+    cat(12, "expense", 10),
+    cat(20, "expense"),
+    cat(21, "expense", 20),
+    cat(30, "expense"),
+    cat(40, "income"),
+    cat(41, "income", 40),
+  ];
+  const MONEY: WaterfallResponse = {
+    ...DATA,
+    opening: "1000.00",
+    closing: "0.00",
+    categories: [
+      { categoryId: 10, amount: "100.00" }, // the group's own money
+      { categoryId: 11, amount: "600.00" },
+      { categoryId: 12, amount: "300.00" },
+    ],
+    uncategorizedIncome: "0.00",
+    uncategorizedExpense: "0.00",
+    adjustments: "0.00",
+    fxDifference: "0.00",
+  };
+  const columnsOf = (steps: number[], brackets: number[]) =>
+    buildWaterfallColumns(MONEY, TREE, orderedSteps(steps, TREE, brackets));
+
+  it("lets a subcategory join a bracketed group that is already a column", () => {
+    expect(coveredByStep(11, [10], TREE)).toBe(10);
+    expect(coveredByStep(11, [10], TREE, [10])).toBeNull();
+    expect(addStep([10], 11, TREE)).toEqual([10]);
+    expect(orderedSteps(addStep([10], 11, TREE, [10]), TREE, [10])).toEqual([11, 10]);
+  });
+
+  it("totals the whole group: the picked columns and the remainder", () => {
+    const columns = columnsOf([11, 10], [10]);
+    expect(columns.filter((c) => c.categoryId !== null).map((c) => [c.categoryId, c.deltaMinor])).toEqual([
+      [11, -60000],
+      [10, -40000],
+    ]);
+    expect(waterfallBrackets(columns, [10], TREE)).toEqual([
+      { categoryId: 10, start: 2, count: 2, totalMinor: -100000 },
+    ]);
+  });
+
+  it("keeps the total when only the group's own column is shown", () => {
+    const columns = columnsOf([10], [10]);
+    expect(waterfallBrackets(columns, [10], TREE)[0]).toMatchObject({ count: 1, totalMinor: -100000 });
+  });
+
+  it("brings a group's columns together, in the group's place", () => {
+    expect(orderedSteps([11, 30, 10], TREE)).toEqual([11, 30, 10]);
+    expect(orderedSteps([11, 30, 10], TREE, [10])).toEqual([30, 11, 10]);
+    expect(orderedSteps([12, 30, 11, 20, 10], TREE, [10])).toEqual([30, 20, 12, 11, 10]);
+  });
+
+  it("is stable: ordering twice changes nothing", () => {
+    const once = orderedSteps([12, 30, 11, 20, 10], TREE, [10]);
+    expect(orderedSteps(once, TREE, [10])).toEqual(once);
+  });
+
+  it("counts positions after zero columns are hidden, and drops an empty group", () => {
+    const steps = orderedSteps([20, 11, 12, 10], TREE, [10, 20]);
+    const all = buildWaterfallColumns({ ...MONEY, categories: [{ categoryId: 11, amount: "5.00" }] }, TREE, steps);
+    const kept = withoutZeroColumns(all);
+    expect(waterfallBrackets(kept, [10, 20], TREE)).toEqual([
+      { categoryId: 10, start: 1, count: 1, totalMinor: -500 },
+    ]);
+  });
+
+  it("reads only expense groups that are columns, without nesting", () => {
+    const nested = [cat(1, "expense"), cat(2, "expense", 1), cat(3, "expense", 2)];
+    expect(activeBrackets([10, 99, 40, 20], [10, 40], TREE)).toEqual([10]);
+    expect(activeBrackets([2, 1], [1, 2], nested)).toEqual([2]);
+    expect(bracketConflict(3, [1], nested)).toBe(1);
+    expect(bracketConflict(1, [3], nested)).toBe(3);
+    expect(bracketConflict(10, [20], TREE)).toBeNull();
+    expect(bracketOf(11, [10], TREE)).toBe(10);
+    expect(bracketOf(10, [10], TREE)).toBeNull();
+  });
+
+  describe("arrows", () => {
+    const steps = [30, 11, 12, 10, 20];
+    const b = [10];
+
+    it("moves a column only among its group's columns", () => {
+      expect(moveStep(steps, 12, -1, TREE, b)).toEqual([30, 12, 11, 10, 20]);
+      expect(canMoveStep(steps, 11, -1, TREE, b)).toBe(false);
+      // The remainder stays last under the bracket.
+      expect(canMoveStep(steps, 12, 1, TREE, b)).toBe(false);
+      expect(moveStep(steps, 11, -1, TREE, b)).toEqual(steps);
+    });
+
+    it("moves a bracketed group with all its columns", () => {
+      expect(moveStep(steps, 10, -1, TREE, b)).toEqual([11, 12, 10, 30, 20]);
+      expect(moveStep(steps, 10, 1, TREE, b)).toEqual([30, 20, 11, 12, 10]);
+    });
+
+    it("takes another column past a bracket whole", () => {
+      expect(moveStep(steps, 30, 1, TREE, b)).toEqual([11, 12, 10, 30, 20]);
+      expect(moveStep(steps, 20, -1, TREE, b)).toEqual([30, 20, 11, 12, 10]);
+    });
+
+    it("swaps two bracketed groups whole", () => {
+      const two = [11, 10, 21, 20];
+      expect(moveStep(two, 20, -1, TREE, [10, 20])).toEqual([21, 20, 11, 10]);
+      expect(moveStep(two, 10, 1, TREE, [10, 20])).toEqual([21, 20, 11, 10]);
+    });
+
+    it("stops at the ends and at income", () => {
+      expect(canMoveStep([11, 10], 10, 1, TREE, b)).toBe(false);
+      expect(canMoveStep([11, 10], 10, -1, TREE, b)).toBe(false);
+      expect(canMoveStep([40, 11, 10], 10, -1, TREE, b)).toBe(false);
+    });
+
+    it("behaves as before without brackets", () => {
+      expect(moveStep([30, 20], 30, 1, TREE)).toEqual([20, 30]);
+      expect(canMoveStep([11, 10], 11, 1, TREE)).toBe(false);
+    });
+  });
+});
+
+describe("bracePath", () => {
+  const points = (d: string) => [...d.matchAll(/(-?[\d.]+) (-?[\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
+
+  it("runs down the page from one leg to the other, the tip at the middle", () => {
+    const d = bracePath(100, 14, "down");
+    const p = points(d);
+    expect(p[0]).toEqual([0, 0]);
+    expect(p[p.length - 1]).toEqual([0, 100]);
+    expect(p).toContainEqual([14, 50]);
+    expect(d.match(/M/g)).toHaveLength(1);
+  });
+
+  it("is the same curve lying along the page, the tip below", () => {
+    const flipped = points(bracePath(100, 14, "down")).map(([x, y]) => [y, x]);
+    expect(points(bracePath(100, 14, "across"))).toEqual(flipped);
+  });
+
+  it("stays inside its size on a short brace: the curves don't overlap", () => {
+    const p = points(bracePath(20, 14, "down"));
+    expect(p.every(([x, y]) => x >= 0 && x <= 14 && y >= 0 && y <= 20)).toBe(true);
+    const along = p.map(([, y]) => y);
+    along.forEach((y, i) => i === 0 || expect(y).toBeGreaterThanOrEqual(along[i - 1] - 5));
+    expect(bracePath(20, 14, "down")).toContain("L7 5 Q7 10 14 10");
   });
 });
 
