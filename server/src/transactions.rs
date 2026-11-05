@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use chrono::{DateTime, FixedOffset, NaiveDateTime, SecondsFormat, TimeZone, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Row};
@@ -65,6 +65,7 @@ pub struct ImportResult {
     pub batch_id: i64,
     pub inserted: i64,
     pub corrections_inserted: i64,
+    pub corrections_replaced: i64,
     pub validation_errors: Vec<ValidationError>,
 }
 
@@ -81,9 +82,24 @@ pub struct PreviewRowIssue {
 #[serde(rename_all = "camelCase")]
 pub struct ImportPreviewValidation {
     pub row_issues: Vec<PreviewRowIssue>,
+    pub replaced_corrections: Vec<ReplacedCorrection>,
 }
 
-#[derive(Debug)]
+/// A stored correcting row the import would remove, with what goes with it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplacedCorrection {
+    pub id: i64,
+    pub occurred_at_utc: String,
+    pub credit: String,
+    pub debit: String,
+    pub category_count: i64,
+    pub has_comment: bool,
+    pub is_linked: bool,
+    pub attachment_count: i64,
+}
+
+#[derive(Debug, Clone)]
 struct ParsedRow {
     occurred_at_utc: String,
     occurred_at_tz: String,
@@ -252,13 +268,24 @@ pub fn import_transactions(
         return Err(format!("account {account_id} does not exist"));
     }
 
-    let corrections =
-        synthesize_corrections(conn, account_id, &parsed, &timezone_offset)?;
+    import_parsed(conn, account_id, source_filename, &timezone_offset, &parsed)
+}
+
+fn import_parsed(
+    conn: &mut Connection,
+    account_id: i64,
+    source_filename: Option<String>,
+    timezone_offset: &str,
+    parsed: &[ParsedRow],
+) -> Result<ImportResult, String> {
+    let ledger = load_ledger(conn, account_id)?;
+    let rows: Vec<&ParsedRow> = parsed.iter().collect();
+    let plan = plan_import(&ledger, &rows, timezone_offset)?;
 
     let tx = conn.transaction().map_err(|e| e.to_string())?;
 
     let imported_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-    let row_count = (parsed.len() + corrections.len()) as i64;
+    let row_count = plan.inserts.len() as i64;
 
     let batch_id: i64 = tx
         .query_row(
@@ -269,6 +296,24 @@ pub fn import_transactions(
             |row| row.get(0),
         )
         .map_err(|e| e.to_string())?;
+
+    for id in &plan.replaced_corrections {
+        tx.execute(
+            "UPDATE import_batches SET row_count = row_count - 1
+             WHERE id = (SELECT import_batch_id FROM transactions WHERE id = ?1)",
+            [id],
+        )
+        .map_err(|e| e.to_string())?;
+        crate::cash_transactions::delete_row(&tx, *id)?;
+    }
+
+    for (id, occurred_at_utc) in &plan.shifted_rows {
+        tx.execute(
+            "UPDATE transactions SET occurred_at_utc = ?1 WHERE id = ?2",
+            params![occurred_at_utc, id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
 
     {
         let mut stmt = tx
@@ -282,7 +327,8 @@ pub fn import_transactions(
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             )
             .map_err(|e| e.to_string())?;
-        for p in parsed.iter().chain(corrections.iter()) {
+        // Chain order: rows sharing a timestamp are read back in id order.
+        for p in &plan.inserts {
             stmt.execute(params![
                 account_id,
                 batch_id,
@@ -307,160 +353,313 @@ pub fn import_transactions(
     Ok(ImportResult {
         batch_id,
         inserted: parsed.len() as i64,
-        corrections_inserted: corrections.len() as i64,
+        corrections_inserted: plan.inserts.iter().filter(|p| p.is_correcting).count() as i64,
+        corrections_replaced: plan.replaced_corrections.len() as i64,
         validation_errors,
     })
 }
 
-/// Walk a chain that merges existing DB context (head + interval + tail)
-/// with the freshly parsed import rows, and emit a synthetic "correcting"
-/// row at every break that touches at least one new import row.
-///
-/// The correcting row is placed 1ms before `curr` and constructed so that
-/// `prev → correcting → curr` reconciles locally:
-///   correcting.balance = curr.balance - curr.credit + curr.debit
-///   correcting.delta   = correcting.balance - prev.balance
-fn synthesize_corrections(
-    conn: &Connection,
-    account_id: i64,
-    parsed: &[ParsedRow],
-    batch_tz_offset: &str,
-) -> Result<Vec<ParsedRow>, String> {
-    if parsed.is_empty() {
-        return Ok(vec![]);
-    }
+/// A stored row of the account, as the import merge sees it.
+#[derive(Debug, Clone)]
+struct LedgerRow {
+    id: i64,
+    occurred_at_utc: String,
+    credit: i64,
+    debit: i64,
+    balance: i64,
+    is_correcting: bool,
+}
 
-    let mut sorted_idx: Vec<usize> = (0..parsed.len()).collect();
-    sorted_idx.sort_by(|&a, &b| parsed[a].occurred_at_utc.cmp(&parsed[b].occurred_at_utc));
-    let min_t = parsed[sorted_idx[0]].occurred_at_utc.clone();
-    let max_t = parsed[*sorted_idx.last().unwrap()].occurred_at_utc.clone();
-
-    let mut interval_stmt = conn
+fn load_ledger(conn: &Connection, account_id: i64) -> Result<Vec<LedgerRow>, String> {
+    let mut stmt = conn
         .prepare(
-            "SELECT occurred_at_utc, credit, debit, balance
+            "SELECT id, occurred_at_utc, credit, debit, balance, is_correcting
              FROM transactions
-             WHERE account_id = ?1 AND occurred_at_utc >= ?2 AND occurred_at_utc <= ?3
+             WHERE account_id = ?1
              ORDER BY occurred_at_utc ASC, id ASC",
         )
         .map_err(|e| e.to_string())?;
-    let interval: Vec<DbRecord> = interval_stmt
-        .query_map(params![account_id, min_t, max_t], db_record_from_row)
+    let rows = stmt
+        .query_map([account_id], |r| {
+            Ok(LedgerRow {
+                id: r.get(0)?,
+                occurred_at_utc: r.get(1)?,
+                credit: r.get(2)?,
+                debit: r.get(3)?,
+                balance: r.get(4)?,
+                is_correcting: r.get(5)?,
+            })
+        })
         .map_err(|e| e.to_string())?
         .collect::<rusqlite::Result<_>>()
         .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
 
-    let head: Option<DbRecord> = conn
-        .query_row(
-            "SELECT occurred_at_utc, credit, debit, balance
-             FROM transactions
-             WHERE account_id = ?1 AND occurred_at_utc < ?2
-             ORDER BY occurred_at_utc DESC, id DESC
-             LIMIT 1",
-            params![account_id, min_t],
-            db_record_from_row,
-        )
-        .optional()
-        .map_err(|e| e.to_string())?;
+fn timestamp_ms(occurred_at_utc: &str) -> Result<i64, String> {
+    DateTime::parse_from_rfc3339(occurred_at_utc)
+        .map(|dt| dt.timestamp_millis())
+        .map_err(|e| format!("invalid stored timestamp '{occurred_at_utc}': {e}"))
+}
 
-    let tail: Option<DbRecord> = conn
-        .query_row(
-            "SELECT occurred_at_utc, credit, debit, balance
-             FROM transactions
-             WHERE account_id = ?1 AND occurred_at_utc > ?2
-             ORDER BY occurred_at_utc ASC, id ASC
-             LIMIT 1",
-            params![account_id, max_t],
-            db_record_from_row,
-        )
-        .optional()
-        .map_err(|e| e.to_string())?;
+fn format_ms(ms: i64) -> Result<String, String> {
+    Utc.timestamp_millis_opt(ms)
+        .single()
+        .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Millis, true))
+        .ok_or_else(|| format!("timestamp out of range: {ms}"))
+}
 
-    let mut chain: Vec<ChainItem> = Vec::new();
-    if let Some(h) = &head {
-        chain.push(ChainItem {
-            origin: ItemOrigin::Db,
-            occurred_at_utc: h.occurred_at_utc.clone(),
-            credit: h.credit,
-            debit: h.debit,
-            balance: h.balance,
-        });
-    }
-    for r in &interval {
-        chain.push(ChainItem {
-            origin: ItemOrigin::Db,
-            occurred_at_utc: r.occurred_at_utc.clone(),
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ItemOrigin {
+    Db(i64),
+    Import(usize),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ChainItem {
+    origin: ItemOrigin,
+    occurred_ms: i64,
+    credit: i64,
+    debit: i64,
+    balance: i64,
+}
+
+impl ChainItem {
+    fn from_ledger(r: &LedgerRow) -> Result<Self, String> {
+        Ok(Self {
+            origin: ItemOrigin::Db(r.id),
+            occurred_ms: timestamp_ms(&r.occurred_at_utc)?,
             credit: r.credit,
             debit: r.debit,
             balance: r.balance,
-        });
-    }
-    for (idx, p) in parsed.iter().enumerate() {
-        chain.push(ChainItem {
-            origin: ItemOrigin::Import { row_index: idx },
-            occurred_at_utc: p.occurred_at_utc.clone(),
-            credit: p.credit,
-            debit: p.debit,
-            balance: p.balance,
-        });
-    }
-    if let Some(t) = &tail {
-        chain.push(ChainItem {
-            origin: ItemOrigin::Db,
-            occurred_at_utc: t.occurred_at_utc.clone(),
-            credit: t.credit,
-            debit: t.debit,
-            balance: t.balance,
-        });
-    }
-    chain.sort_by(|a, b| {
-        a.occurred_at_utc.cmp(&b.occurred_at_utc).then_with(|| {
-            origin_priority(&a.origin).cmp(&origin_priority(&b.origin))
         })
-    });
-
-    let mut corrections: Vec<ParsedRow> = Vec::new();
-    for i in 1..chain.len() {
-        let prev = &chain[i - 1];
-        let curr = &chain[i];
-        let expected = prev.balance + curr.credit - curr.debit;
-        if expected == curr.balance {
-            continue;
-        }
-        // Skip pre-existing DB-only breaks — those existed before this
-        // import and are not our concern. Any break that touches at least
-        // one new import row gets an auto-correcting entry, including
-        // within-file gaps where the bank export itself was incomplete.
-        let prev_import = matches!(prev.origin, ItemOrigin::Import { .. });
-        let curr_import = matches!(curr.origin, ItemOrigin::Import { .. });
-        if !prev_import && !curr_import {
-            continue;
-        }
-
-        let target_balance = curr.balance - curr.credit + curr.debit;
-        let delta = target_balance - prev.balance;
-        let (credit, debit) = if delta >= 0 { (delta, 0) } else { (0, -delta) };
-
-        let curr_dt = DateTime::parse_from_rfc3339(&curr.occurred_at_utc)
-            .map_err(|e| format!("invalid stored timestamp '{}': {e}", curr.occurred_at_utc))?;
-        let new_dt = curr_dt - chrono::Duration::milliseconds(1);
-        let new_utc = new_dt
-            .with_timezone(&Utc)
-            .to_rfc3339_opts(SecondsFormat::Millis, true);
-
-        corrections.push(ParsedRow {
-            occurred_at_utc: new_utc,
-            occurred_at_tz: batch_tz_offset.to_string(),
-            credit,
-            debit,
-            balance: target_balance,
-            peer: None,
-            bank_description: None,
-            comment: None,
-            is_correcting: true,
-        });
     }
 
-    Ok(corrections)
+    fn balance_before(&self) -> i64 {
+        self.balance - self.credit + self.debit
+    }
+
+    fn is_import(&self) -> bool {
+        matches!(self.origin, ItemOrigin::Import(_))
+    }
+}
+
+/// Spot where the final chain doesn't reconcile and a correcting row goes.
+#[derive(Debug)]
+struct ChainBreak {
+    /// Import row the break is reported on (index into the planned rows).
+    row_index: usize,
+    both_in_file: bool,
+    expected: i64,
+    actual: i64,
+}
+
+/// What importing a set of rows does to the account.
+#[derive(Debug)]
+struct ImportPlan {
+    /// Stored correcting rows whose gap now holds real rows.
+    replaced_corrections: Vec<i64>,
+    /// Stored rows moved forward a few ms to sit after a new row at the same
+    /// instant (date-only statements put a whole day on one timestamp).
+    shifted_rows: Vec<(i64, String)>,
+    /// New rows, correcting ones included, in chain order.
+    inserts: Vec<ParsedRow>,
+    breaks: Vec<ChainBreak>,
+}
+
+/// Merge the import rows into the account's chain.
+///
+/// A correcting row only stands in for operations the account's history was
+/// missing, so it is derived state: when real rows land in its gap it goes
+/// away, and whatever the chain still can't reconcile gets a new correcting
+/// row for the remainder only. Corrections with no new rows in their gap are
+/// left alone, and so are breaks between stored rows.
+///
+/// A correcting row is placed 1ms before `curr`, built so that
+/// `prev → correcting → curr` reconciles locally:
+///   correcting.balance = curr.balance - curr.credit + curr.debit
+///   correcting.delta   = correcting.balance - prev.balance
+fn plan_import(
+    ledger: &[LedgerRow],
+    rows: &[&ParsedRow],
+    batch_tz_offset: &str,
+) -> Result<ImportPlan, String> {
+    let merged = merge_real_rows(ledger, rows)?;
+    let position: HashMap<i64, usize> = merged
+        .iter()
+        .enumerate()
+        .filter_map(|(i, item)| match item.origin {
+            ItemOrigin::Db(id) => Some((id, i)),
+            ItemOrigin::Import(_) => None,
+        })
+        .collect();
+
+    // Sort the stored corrections into replaced ones and those that stay right
+    // after the real row they follow (`None` = before the first real row).
+    let real_after = |from: usize| ledger[from..].iter().find(|r| !r.is_correcting);
+    let mut replaced_corrections = Vec::new();
+    let mut kept: HashMap<Option<i64>, Vec<&LedgerRow>> = HashMap::new();
+    let mut last_real: Option<i64> = None;
+    for (i, row) in ledger.iter().enumerate() {
+        if !row.is_correcting {
+            last_real = Some(row.id);
+            continue;
+        }
+        let from = last_real.map_or(0, |id| position[&id] + 1);
+        let to = real_after(i).map_or(merged.len(), |r| position[&r.id]);
+        if merged[from..to].iter().any(ChainItem::is_import) {
+            replaced_corrections.push(row.id);
+        } else {
+            kept.entry(last_real).or_default().push(row);
+        }
+    }
+
+    let mut chain: Vec<ChainItem> = Vec::with_capacity(merged.len());
+    let mut push_kept = |chain: &mut Vec<ChainItem>, after: Option<i64>| -> Result<(), String> {
+        for row in kept.remove(&after).unwrap_or_default() {
+            chain.push(ChainItem::from_ledger(row)?);
+        }
+        Ok(())
+    };
+    push_kept(&mut chain, None)?;
+    for item in &merged {
+        chain.push(*item);
+        if let ItemOrigin::Db(id) = item.origin {
+            push_kept(&mut chain, Some(id))?;
+        }
+    }
+
+    let mut plan = ImportPlan {
+        replaced_corrections,
+        shifted_rows: Vec::new(),
+        inserts: Vec::new(),
+        breaks: Vec::new(),
+    };
+    let mut prev: Option<ChainItem> = None;
+    let mut last_ms: Option<i64> = None;
+    let mut last_is_new = false;
+    for item in chain {
+        if let Some(p) = prev {
+            let reconciles = item.balance_before() == p.balance;
+            if !reconciles && (item.is_import() || p.is_import()) {
+                let target_balance = item.balance_before();
+                let delta = target_balance - p.balance;
+                let (credit, debit) = if delta >= 0 { (delta, 0) } else { (0, -delta) };
+                let correction_ms = last_ms.map_or(item.occurred_ms - 1, |last| {
+                    (item.occurred_ms - 1).max(last + 1)
+                });
+                plan.inserts.push(ParsedRow {
+                    occurred_at_utc: format_ms(correction_ms)?,
+                    occurred_at_tz: batch_tz_offset.to_string(),
+                    credit,
+                    debit,
+                    balance: target_balance,
+                    peer: None,
+                    bank_description: None,
+                    comment: None,
+                    is_correcting: true,
+                });
+                let row_index = match (item.origin, p.origin) {
+                    (ItemOrigin::Import(i), _) | (_, ItemOrigin::Import(i)) => i,
+                    (ItemOrigin::Db(_), ItemOrigin::Db(_)) => unreachable!("checked above"),
+                };
+                plan.breaks.push(ChainBreak {
+                    row_index,
+                    both_in_file: item.is_import() && p.is_import(),
+                    expected: p.balance + item.credit - item.debit,
+                    actual: item.balance,
+                });
+                last_ms = Some(correction_ms);
+                last_is_new = true;
+            }
+        }
+
+        // Rows sharing a timestamp read back in id order, so a stored row can't
+        // stay level with a new row that comes before it.
+        let occurred_ms = match last_ms {
+            Some(last)
+                if item.occurred_ms < last
+                    || (item.occurred_ms == last && !item.is_import() && last_is_new) =>
+            {
+                last + 1
+            }
+            _ => item.occurred_ms,
+        };
+        match item.origin {
+            ItemOrigin::Db(id) => {
+                if occurred_ms != item.occurred_ms {
+                    plan.shifted_rows.push((id, format_ms(occurred_ms)?));
+                }
+            }
+            ItemOrigin::Import(i) => {
+                let mut row = rows[i].clone();
+                if occurred_ms != item.occurred_ms {
+                    row.occurred_at_utc = format_ms(occurred_ms)?;
+                }
+                plan.inserts.push(row);
+            }
+        }
+        prev = Some(item);
+        last_ms = Some(occurred_ms);
+        last_is_new = item.is_import();
+    }
+    Ok(plan)
+}
+
+/// Stored real rows and import rows in one chain order. Time decides, and rows
+/// on the same instant are ordered by which one continues the balance: a
+/// date-only statement gives every row of a day the same timestamp, and a new
+/// row may well belong before a stored one.
+fn merge_real_rows(ledger: &[LedgerRow], rows: &[&ParsedRow]) -> Result<Vec<ChainItem>, String> {
+    let mut by_instant: BTreeMap<i64, (VecDeque<ChainItem>, Vec<ChainItem>)> = BTreeMap::new();
+    for row in ledger.iter().filter(|r| !r.is_correcting) {
+        let item = ChainItem::from_ledger(row)?;
+        by_instant.entry(item.occurred_ms).or_default().0.push_back(item);
+    }
+    for (i, row) in rows.iter().enumerate() {
+        let item = ChainItem {
+            origin: ItemOrigin::Import(i),
+            occurred_ms: timestamp_ms(&row.occurred_at_utc)?,
+            credit: row.credit,
+            debit: row.debit,
+            balance: row.balance,
+        };
+        by_instant.entry(item.occurred_ms).or_default().1.push(item);
+    }
+
+    let mut merged: Vec<ChainItem> = Vec::with_capacity(ledger.len() + rows.len());
+    for (_, (mut stored, mut new)) in by_instant {
+        while !stored.is_empty() || !new.is_empty() {
+            let prev_balance = merged.last().map(|item: &ChainItem| item.balance);
+            let continues = |item: &ChainItem| prev_balance == Some(item.balance_before());
+            // With no continuation (a real gap), start from a row nothing else
+            // here leads into, so the rest of the instant still chains up.
+            let is_start = |item: &ChainItem| {
+                !stored
+                    .iter()
+                    .chain(new.iter())
+                    .any(|o| o.origin != item.origin && o.balance == item.balance_before())
+            };
+            let take_new = if stored.front().is_some_and(&continues) {
+                None
+            } else if let Some(i) = new.iter().position(&continues) {
+                Some(i)
+            } else if stored.front().is_some_and(&is_start) {
+                None
+            } else if let Some(i) = new.iter().position(&is_start) {
+                Some(i)
+            } else if stored.is_empty() {
+                Some(0)
+            } else {
+                None
+            };
+            match take_new {
+                Some(i) => merged.push(new.remove(i)),
+                None => merged.extend(stored.pop_front()),
+            }
+        }
+    }
+    Ok(merged)
 }
 
 pub fn list_transactions(
@@ -877,45 +1076,6 @@ pub(crate) fn validate_account_chain(
     Ok(check_chain(&txns))
 }
 
-#[derive(Debug, Clone)]
-struct DbRecord {
-    occurred_at_utc: String,
-    credit: i64,
-    debit: i64,
-    balance: i64,
-}
-
-fn db_record_from_row(row: &Row) -> rusqlite::Result<DbRecord> {
-    Ok(DbRecord {
-        occurred_at_utc: row.get(0)?,
-        credit: row.get(1)?,
-        debit: row.get(2)?,
-        balance: row.get(3)?,
-    })
-}
-
-#[derive(Debug, Clone, Copy)]
-enum ItemOrigin {
-    Db,
-    Import { row_index: usize },
-}
-
-#[derive(Debug)]
-struct ChainItem {
-    origin: ItemOrigin,
-    occurred_at_utc: String,
-    credit: i64,
-    debit: i64,
-    balance: i64,
-}
-
-fn origin_priority(o: &ItemOrigin) -> u8 {
-    match o {
-        ItemOrigin::Db => 0,
-        ItemOrigin::Import { .. } => 1,
-    }
-}
-
 /// Transaction identity for de-duplication. Two rows are the same transaction
 /// iff they share the same minute, credit, debit and resulting balance — money
 /// fields alone pin a ledger position (two distinct ops can't leave the same
@@ -923,7 +1083,7 @@ fn origin_priority(o: &ItemOrigin) -> u8 {
 /// deliberately excluded. This keeps dedup robust against description drift
 /// (CSV↔PDF, parser changes, manual edits) and sub-minute time differences
 /// between sources. Applies to every import format, since all funnel through
-/// `compute_preview_issues`.
+/// `compute_preview`.
 #[derive(Hash, Eq, PartialEq, Clone)]
 struct DupeKey {
     occurred_at_minute: String,
@@ -942,23 +1102,6 @@ fn dedupe_minute(occurred_at_utc: &str) -> String {
         .unwrap_or_else(|_| occurred_at_utc.to_string())
 }
 
-/// Start of the minute containing `occurred_at_utc` ("…T10:00:05.500Z" →
-/// "…T10:00:00.000Z"). Used to widen the DB lookup window so a duplicate logged
-/// with different seconds still falls inside the interval scanned for dupes.
-fn minute_floor(occurred_at_utc: &str) -> String {
-    DateTime::parse_from_rfc3339(occurred_at_utc)
-        .map(|dt| dt.with_timezone(&Utc).format("%Y-%m-%dT%H:%M:00.000Z").to_string())
-        .unwrap_or_else(|_| occurred_at_utc.to_string())
-}
-
-/// End of the minute containing `occurred_at_utc` ("…T10:00:05.500Z" →
-/// "…T10:00:59.999Z"). Counterpart to [`minute_floor`] for the upper bound.
-fn minute_ceil(occurred_at_utc: &str) -> String {
-    DateTime::parse_from_rfc3339(occurred_at_utc)
-        .map(|dt| dt.with_timezone(&Utc).format("%Y-%m-%dT%H:%M:59.999Z").to_string())
-        .unwrap_or_else(|_| occurred_at_utc.to_string())
-}
-
 pub fn validate_import_preview(
     state: State<'_, DbState>,
     account_id: i64,
@@ -966,7 +1109,10 @@ pub fn validate_import_preview(
     rows: Vec<TxnImportRow>,
 ) -> Result<ImportPreviewValidation, String> {
     if rows.is_empty() {
-        return Ok(ImportPreviewValidation { row_issues: vec![] });
+        return Ok(ImportPreviewValidation {
+            row_issues: vec![],
+            replaced_corrections: vec![],
+        });
     }
 
     let default_offset = parse_offset_str(&default_timezone_offset)?;
@@ -991,71 +1137,24 @@ pub fn validate_import_preview(
         return Err(format!("account {account_id} does not exist"));
     }
 
-    let issues =
-        compute_preview_issues(&conn, account_id, &parsed).map_err(|e| e.to_string())?;
-    Ok(ImportPreviewValidation { row_issues: issues })
+    compute_preview(&conn, account_id, &parsed)
 }
 
-fn compute_preview_issues(
+fn compute_preview(
     conn: &Connection,
     account_id: i64,
     parsed: &[ParsedRow],
-) -> rusqlite::Result<Vec<PreviewRowIssue>> {
-    if parsed.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let mut sorted_idx: Vec<usize> = (0..parsed.len()).collect();
-    sorted_idx.sort_by(|&a, &b| parsed[a].occurred_at_utc.cmp(&parsed[b].occurred_at_utc));
-    let min_t = parsed[sorted_idx[0]].occurred_at_utc.clone();
-    let max_t = parsed[*sorted_idx.last().unwrap()].occurred_at_utc.clone();
-    // Widen to whole-minute boundaries: dedup matches at minute precision, so a
-    // DB twin logged with different seconds must still land inside the scanned
-    // interval (not be split off into head/tail).
-    let min_bound = minute_floor(&min_t);
-    let max_bound = minute_ceil(&max_t);
-
-    let mut interval_stmt = conn.prepare(
-        "SELECT occurred_at_utc, credit, debit, balance
-         FROM transactions
-         WHERE account_id = ?1 AND occurred_at_utc >= ?2 AND occurred_at_utc <= ?3
-         ORDER BY occurred_at_utc ASC, id ASC",
-    )?;
-    let interval: Vec<DbRecord> = interval_stmt
-        .query_map(params![account_id, min_bound, max_bound], db_record_from_row)?
-        .collect::<rusqlite::Result<_>>()?;
-
-    let head: Option<DbRecord> = conn
-        .query_row(
-            "SELECT occurred_at_utc, credit, debit, balance
-             FROM transactions
-             WHERE account_id = ?1 AND occurred_at_utc < ?2
-             ORDER BY occurred_at_utc DESC, id DESC
-             LIMIT 1",
-            params![account_id, min_bound],
-            db_record_from_row,
-        )
-        .optional()?;
-
-    let tail: Option<DbRecord> = conn
-        .query_row(
-            "SELECT occurred_at_utc, credit, debit, balance
-             FROM transactions
-             WHERE account_id = ?1 AND occurred_at_utc > ?2
-             ORDER BY occurred_at_utc ASC, id ASC
-             LIMIT 1",
-            params![account_id, max_bound],
-            db_record_from_row,
-        )
-        .optional()?;
-
+) -> Result<ImportPreviewValidation, String> {
+    let ledger = load_ledger(conn, account_id)?;
     let mut issues: Vec<PreviewRowIssue> = Vec::new();
 
     // Step 1: duplicate detection runs first. A duplicated row swallows all
     // other checks for that index — we don't want to chase balance breaks
-    // through rows we're not going to import anyway.
-    let db_keys: HashSet<DupeKey> = interval
+    // through rows we're not going to import anyway. A correcting row isn't an
+    // operation, so nothing can duplicate it.
+    let db_keys: HashSet<DupeKey> = ledger
         .iter()
+        .filter(|r| !r.is_correcting)
         .map(|r| DupeKey {
             occurred_at_minute: dedupe_minute(&r.occurred_at_utc),
             credit: r.credit,
@@ -1063,8 +1162,8 @@ fn compute_preview_issues(
             balance: r.balance,
         })
         .collect();
-    let mut seen_imports: HashMap<DupeKey, usize> = HashMap::new();
-    let mut dup_set: HashSet<usize> = HashSet::new();
+    let mut seen_imports: HashSet<DupeKey> = HashSet::new();
+    let mut importing: Vec<usize> = Vec::new();
     for (idx, p) in parsed.iter().enumerate() {
         let key = DupeKey {
             occurred_at_minute: dedupe_minute(&p.occurred_at_utc),
@@ -1072,113 +1171,72 @@ fn compute_preview_issues(
             debit: p.debit,
             balance: p.balance,
         };
-        if db_keys.contains(&key) {
-            dup_set.insert(idx);
-            issues.push(PreviewRowIssue {
-                row_index: idx,
-                kind: "duplicate_db".to_string(),
-                expected_balance: None,
-                actual_balance: None,
-            });
-        } else if seen_imports.contains_key(&key) {
-            dup_set.insert(idx);
-            issues.push(PreviewRowIssue {
-                row_index: idx,
-                kind: "duplicate_file".to_string(),
-                expected_balance: None,
-                actual_balance: None,
-            });
+        let kind = if db_keys.contains(&key) {
+            "duplicate_db"
+        } else if !seen_imports.insert(key) {
+            "duplicate_file"
         } else {
-            seen_imports.insert(key, idx);
-        }
-    }
-
-    // Step 2: balance chain check. Skip rows already flagged as duplicates.
-    let mut chain: Vec<ChainItem> = Vec::new();
-    if let Some(h) = &head {
-        chain.push(ChainItem {
-            origin: ItemOrigin::Db,
-            occurred_at_utc: h.occurred_at_utc.clone(),
-            credit: h.credit,
-            debit: h.debit,
-            balance: h.balance,
-        });
-    }
-    for r in &interval {
-        chain.push(ChainItem {
-            origin: ItemOrigin::Db,
-            occurred_at_utc: r.occurred_at_utc.clone(),
-            credit: r.credit,
-            debit: r.debit,
-            balance: r.balance,
-        });
-    }
-    for (idx, p) in parsed.iter().enumerate() {
-        chain.push(ChainItem {
-            origin: ItemOrigin::Import { row_index: idx },
-            occurred_at_utc: p.occurred_at_utc.clone(),
-            credit: p.credit,
-            debit: p.debit,
-            balance: p.balance,
-        });
-    }
-    if let Some(t) = &tail {
-        chain.push(ChainItem {
-            origin: ItemOrigin::Db,
-            occurred_at_utc: t.occurred_at_utc.clone(),
-            credit: t.credit,
-            debit: t.debit,
-            balance: t.balance,
-        });
-    }
-    chain.sort_by(|a, b| {
-        a.occurred_at_utc.cmp(&b.occurred_at_utc).then_with(|| {
-            origin_priority(&a.origin).cmp(&origin_priority(&b.origin))
-        })
-    });
-
-    let mut balance_seen: HashSet<usize> = HashSet::new();
-    for i in 1..chain.len() {
-        let prev = &chain[i - 1];
-        let curr = &chain[i];
-        let expected = prev.balance + curr.credit - curr.debit;
-        if expected == curr.balance {
+            importing.push(idx);
             continue;
-        }
-        // If the involved import row is a duplicate, no balance issue is
-        // emitted for it — duplicates take precedence and the row won't be
-        // imported anyway.
-        let attribute_to: Option<usize> = match curr.origin {
-            ItemOrigin::Import { row_index } if !dup_set.contains(&row_index) => {
-                Some(row_index)
-            }
-            ItemOrigin::Import { .. } => None,
-            ItemOrigin::Db => chain[..=i].iter().rev().find_map(|x| match x.origin {
-                ItemOrigin::Import { row_index } if !dup_set.contains(&row_index) => {
-                    Some(row_index)
-                }
-                _ => None,
-            }),
-        };
-        let Some(idx) = attribute_to else { continue };
-        if !balance_seen.insert(idx) {
-            continue;
-        }
-        // If either side of the broken pair is from the DB the discrepancy
-        // is "vs DB"; if both sides are import rows it's "in file".
-        let kind = match (curr.origin, prev.origin) {
-            (ItemOrigin::Import { .. }, ItemOrigin::Import { .. }) => "balance_file",
-            _ => "balance_db",
         };
         issues.push(PreviewRowIssue {
             row_index: idx,
             kind: kind.to_string(),
-            expected_balance: Some(money::format_minor(expected)),
-            actual_balance: Some(money::format_minor(curr.balance)),
+            expected_balance: None,
+            actual_balance: None,
         });
     }
 
-    Ok(issues)
+    // Step 2: plan exactly what the import would do with the remaining rows.
+    let rows: Vec<&ParsedRow> = importing.iter().map(|&idx| &parsed[idx]).collect();
+    let plan = plan_import(&ledger, &rows, "+00:00")?;
+    let mut balance_seen: HashSet<usize> = HashSet::new();
+    for b in &plan.breaks {
+        if !balance_seen.insert(b.row_index) {
+            continue;
+        }
+        issues.push(PreviewRowIssue {
+            row_index: importing[b.row_index],
+            kind: if b.both_in_file { "balance_file" } else { "balance_db" }.to_string(),
+            expected_balance: Some(money::format_minor(b.expected)),
+            actual_balance: Some(money::format_minor(b.actual)),
+        });
+    }
+
+    let replaced_corrections = plan
+        .replaced_corrections
+        .iter()
+        .map(|id| load_replaced_correction(conn, *id))
+        .collect::<rusqlite::Result<_>>()
+        .map_err(|e| e.to_string())?;
+    Ok(ImportPreviewValidation {
+        row_issues: issues,
+        replaced_corrections,
+    })
+}
+
+fn load_replaced_correction(conn: &Connection, id: i64) -> rusqlite::Result<ReplacedCorrection> {
+    conn.query_row(
+        "SELECT t.occurred_at_utc, t.credit, t.debit, t.comment IS NOT NULL,
+                (SELECT COUNT(*) FROM transaction_categories c WHERE c.transaction_id = t.id),
+                EXISTS (SELECT 1 FROM transaction_links l WHERE l.txn_a_id = t.id OR l.txn_b_id = t.id),
+                (SELECT COUNT(*) FROM attachments a WHERE a.transaction_id = t.id)
+         FROM transactions t
+         WHERE t.id = ?1",
+        [id],
+        |r| {
+            Ok(ReplacedCorrection {
+                id,
+                occurred_at_utc: r.get(0)?,
+                credit: money::format_minor(r.get(1)?),
+                debit: money::format_minor(r.get(2)?),
+                has_comment: r.get(3)?,
+                category_count: r.get(4)?,
+                is_linked: r.get(5)?,
+                attachment_count: r.get(6)?,
+            })
+        },
+    )
 }
 
 fn check_chain(txns: &[ChainRow]) -> Vec<ValidationError> {
@@ -1207,6 +1265,26 @@ mod tests {
     use crate::db;
     use rusqlite::params;
     use tempfile::TempDir;
+
+    fn compute_preview_issues(
+        conn: &Connection,
+        account_id: i64,
+        parsed: &[ParsedRow],
+    ) -> Result<Vec<PreviewRowIssue>, String> {
+        Ok(compute_preview(conn, account_id, parsed)?.row_issues)
+    }
+
+    fn synthesize_corrections(
+        conn: &Connection,
+        account_id: i64,
+        parsed: &[ParsedRow],
+        batch_tz_offset: &str,
+    ) -> Result<Vec<ParsedRow>, String> {
+        let ledger = load_ledger(conn, account_id)?;
+        let rows: Vec<&ParsedRow> = parsed.iter().collect();
+        let plan = plan_import(&ledger, &rows, batch_tz_offset)?;
+        Ok(plan.inserts.into_iter().filter(|p| p.is_correcting).collect())
+    }
 
     fn row(id: i64, credit: i64, debit: i64, balance: i64) -> ChainRow {
         ChainRow {
@@ -2049,5 +2127,232 @@ mod tests {
         let (_dir, conn, _a, _b) = fixture_account_with_batch();
         let res = update_transaction_fields_inner(&conn, 99999, None, None, None);
         assert!(res.is_err());
+    }
+
+    /// (time, credit, debit, balance, is_correcting) in chain order.
+    fn chain_of(conn: &Connection, a: i64) -> Vec<(String, i64, i64, i64, bool)> {
+        conn.prepare(
+            "SELECT occurred_at_utc, credit, debit, balance, is_correcting
+             FROM transactions WHERE account_id = ?1
+             ORDER BY occurred_at_utc ASC, id ASC",
+        )
+        .unwrap()
+        .query_map([a], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
+    }
+
+    fn balances_of(conn: &Connection, a: i64) -> Vec<(i64, bool)> {
+        chain_of(conn, a).into_iter().map(|r| (r.3, r.4)).collect()
+    }
+
+    /// An account holding rows at 1000 and 4500: a hole worth +4000 closed by a
+    /// correcting row at 5000, then a 500 debit.
+    fn account_with_hole(t_first: &str, t_last: &str) -> (TempDir, Connection, i64) {
+        let (dir, mut conn, a, _b) = fixture_account_with_batch();
+        let first = vec![
+            parsed(t_first, "", 0, 0, 1000, ""),
+            parsed(t_last, "", 0, 500, 4500, ""),
+        ];
+        let res = import_parsed(&mut conn, a, None, "+00:00", &first).unwrap();
+        assert_eq!(res.corrections_inserted, 1);
+        assert_eq!(balances_of(&conn, a), vec![(1000, false), (5000, true), (4500, false)]);
+        (dir, conn, a)
+    }
+
+    #[test]
+    fn real_rows_replace_the_correction_covering_their_gap() {
+        let (_dir, mut conn, a) =
+            account_with_hole("2026-04-01T10:00:00.000Z", "2026-04-03T15:00:00.000Z");
+        let fill = vec![
+            parsed("2026-04-02T09:00:00.000Z", "", 3000, 0, 4000, ""),
+            parsed("2026-04-03T11:00:00.000Z", "", 1000, 0, 5000, ""),
+        ];
+        assert_eq!(compute_preview_issues(&conn, a, &fill).unwrap().len(), 0);
+
+        let res = import_parsed(&mut conn, a, None, "+00:00", &fill).unwrap();
+        assert_eq!(res.corrections_replaced, 1);
+        assert_eq!(res.corrections_inserted, 0);
+        assert!(res.validation_errors.is_empty());
+        assert_eq!(
+            balances_of(&conn, a),
+            vec![(1000, false), (4000, false), (5000, false), (4500, false)]
+        );
+    }
+
+    #[test]
+    fn partial_fill_leaves_a_correction_for_the_remainder_only() {
+        let (_dir, mut conn, a) =
+            account_with_hole("2026-04-01T10:00:00.000Z", "2026-04-03T15:00:00.000Z");
+        let fill = vec![parsed("2026-04-02T09:00:00.000Z", "", 3000, 0, 4000, "")];
+
+        let res = import_parsed(&mut conn, a, None, "+00:00", &fill).unwrap();
+        assert_eq!(res.corrections_replaced, 1);
+        assert_eq!(res.corrections_inserted, 1);
+        assert!(res.validation_errors.is_empty());
+        let chain = chain_of(&conn, a);
+        assert_eq!(chain[2].1, 1000, "correction only for the part still missing");
+        assert_eq!(
+            balances_of(&conn, a),
+            vec![(1000, false), (4000, false), (5000, true), (4500, false)]
+        );
+
+        // The rest of the history arrives later: nothing synthetic remains.
+        let rest = vec![parsed("2026-04-03T11:00:00.000Z", "", 1000, 0, 5000, "")];
+        let res = import_parsed(&mut conn, a, None, "+00:00", &rest).unwrap();
+        assert_eq!((res.corrections_replaced, res.corrections_inserted), (1, 0));
+        assert!(res.validation_errors.is_empty());
+        assert!(balances_of(&conn, a).iter().all(|r| !r.1));
+    }
+
+    #[test]
+    fn date_only_rows_slot_in_before_a_stored_row_of_the_same_day() {
+        let (_dir, mut conn, a) =
+            account_with_hole("2026-04-01T00:00:00.000Z", "2026-04-03T00:00:00.000Z");
+        let fill = vec![
+            parsed("2026-04-02T00:00:00.000Z", "", 3000, 0, 4000, ""),
+            parsed("2026-04-03T00:00:00.000Z", "", 1000, 0, 5000, ""),
+        ];
+        assert_eq!(compute_preview_issues(&conn, a, &fill).unwrap().len(), 0);
+
+        let res = import_parsed(&mut conn, a, None, "+00:00", &fill).unwrap();
+        assert_eq!((res.corrections_replaced, res.corrections_inserted), (1, 0));
+        assert!(res.validation_errors.is_empty());
+        let chain = chain_of(&conn, a);
+        assert_eq!(
+            balances_of(&conn, a),
+            vec![(1000, false), (4000, false), (5000, false), (4500, false)]
+        );
+        // Stays on its day and minute, so re-importing it is still a duplicate.
+        assert_eq!(chain[3].0, "2026-04-03T00:00:00.001Z");
+        let again = vec![parsed("2026-04-03T00:00:00.000Z", "", 0, 500, 4500, "")];
+        let issues = compute_preview_issues(&conn, a, &again).unwrap();
+        assert_eq!(issues[0].kind, "duplicate_db");
+    }
+
+    #[test]
+    fn same_instant_rows_follow_the_balance_even_when_the_file_is_newest_first() {
+        let (_dir, mut conn, a, _b) = fixture_account_with_batch();
+        let rows = vec![
+            parsed("2026-04-01T00:00:00.000Z", "", 0, 50, 1150, ""),
+            parsed("2026-04-01T00:00:00.000Z", "", 200, 0, 1200, ""),
+            parsed("2026-04-01T00:00:00.000Z", "", 0, 0, 1000, ""),
+        ];
+        let res = import_parsed(&mut conn, a, None, "+00:00", &rows).unwrap();
+        assert_eq!(res.corrections_inserted, 0);
+        assert!(res.validation_errors.is_empty());
+        assert_eq!(
+            balances_of(&conn, a),
+            vec![(1000, false), (1200, false), (1150, false)]
+        );
+    }
+
+    #[test]
+    fn correction_elsewhere_in_the_account_is_left_alone() {
+        let (_dir, mut conn, a) =
+            account_with_hole("2026-04-01T10:00:00.000Z", "2026-04-03T15:00:00.000Z");
+        let later = vec![parsed("2026-05-01T10:00:00.000Z", "", 100, 0, 4600, "")];
+        let res = import_parsed(&mut conn, a, None, "+00:00", &later).unwrap();
+        assert_eq!((res.corrections_replaced, res.corrections_inserted), (0, 0));
+        assert_eq!(
+            balances_of(&conn, a),
+            vec![(1000, false), (5000, true), (4500, false), (4600, false)]
+        );
+    }
+
+    #[test]
+    fn duplicates_of_stored_rows_do_not_touch_the_correction() {
+        let (_dir, conn, a) =
+            account_with_hole("2026-04-01T10:00:00.000Z", "2026-04-03T15:00:00.000Z");
+        let same = vec![parsed("2026-04-03T15:00:00.000Z", "", 0, 500, 4500, "")];
+        let preview = compute_preview(&conn, a, &same).unwrap();
+        assert_eq!(preview.row_issues[0].kind, "duplicate_db");
+        assert!(preview.replaced_corrections.is_empty());
+    }
+
+    #[test]
+    fn opposite_corrections_left_by_an_earlier_import_both_go() {
+        let (_dir, mut conn, a, b) = fixture_account_with_batch();
+        insert_db_txn(&conn, a, b, "2026-04-01T10:00:00.000Z", "", 0, 0, 1000, "");
+        insert_db_txn(&conn, a, b, "2026-04-02T09:00:00.000Z", "", 4000, 0, 5000, "");
+        insert_db_txn(&conn, a, b, "2026-04-03T14:59:59.998Z", "", 0, 4000, 1000, "");
+        insert_db_txn(&conn, a, b, "2026-04-03T14:59:59.999Z", "", 4000, 0, 5000, "");
+        insert_db_txn(&conn, a, b, "2026-04-03T15:00:00.000Z", "", 0, 500, 4500, "");
+        conn.execute(
+            "UPDATE transactions SET is_correcting = 1
+             WHERE occurred_at_utc LIKE '2026-04-03T14:59:59%'",
+            [],
+        )
+        .unwrap();
+        let fill = vec![parsed("2026-04-03T12:00:00.000Z", "", 0, 0, 5000, "")];
+        let res = import_parsed(&mut conn, a, None, "+00:00", &fill).unwrap();
+        assert_eq!((res.corrections_replaced, res.corrections_inserted), (2, 0));
+        assert!(res.validation_errors.is_empty());
+        assert!(balances_of(&conn, a).iter().all(|r| !r.1));
+    }
+
+    #[test]
+    fn preview_lists_what_a_replaced_correction_takes_with_it() {
+        let (_dir, mut conn, a) =
+            account_with_hole("2026-04-01T10:00:00.000Z", "2026-04-03T15:00:00.000Z");
+        let correction: i64 = conn
+            .query_row("SELECT id FROM transactions WHERE is_correcting = 1", [], |r| r.get(0))
+            .unwrap();
+        let category: i64 = conn
+            .query_row(
+                "INSERT INTO categories (name, color, kind) VALUES ('Test', '#000000', 'income') RETURNING id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO transaction_categories (transaction_id, category_id, share_minor, position)
+             VALUES (?1, ?2, 4000, 0)",
+            params![correction, category],
+        )
+        .unwrap();
+        conn.execute("UPDATE transactions SET comment = 'note' WHERE id = ?1", [correction])
+            .unwrap();
+
+        let fill = vec![parsed("2026-04-02T09:00:00.000Z", "", 4000, 0, 5000, "")];
+        let preview = compute_preview(&conn, a, &fill).unwrap();
+        assert!(preview.row_issues.is_empty());
+        assert_eq!(preview.replaced_corrections.len(), 1);
+        let replaced = &preview.replaced_corrections[0];
+        assert_eq!(replaced.id, correction);
+        assert_eq!(replaced.category_count, 1);
+        assert!(replaced.has_comment);
+        assert!(!replaced.is_linked);
+        assert_eq!(replaced.attachment_count, 0);
+
+        import_parsed(&mut conn, a, None, "+00:00", &fill).unwrap();
+        let left: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM transaction_categories WHERE transaction_id = ?1",
+                [correction],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0);
+    }
+
+    #[test]
+    fn replacing_a_correction_keeps_batch_row_counts_true() {
+        let (_dir, mut conn, a) =
+            account_with_hole("2026-04-01T10:00:00.000Z", "2026-04-03T15:00:00.000Z");
+        let fill = vec![parsed("2026-04-02T09:00:00.000Z", "", 4000, 0, 5000, "")];
+        import_parsed(&mut conn, a, None, "+00:00", &fill).unwrap();
+        let stale: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM import_batches b
+                 WHERE b.account_id = ?1 AND b.row_count <>
+                   (SELECT COUNT(*) FROM transactions t WHERE t.import_batch_id = b.id)
+                   AND b.row_count > 0",
+                [a],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stale, 0);
     }
 }

@@ -596,6 +596,18 @@
     "back": "Back",
     "resultDone": "Imported {inserted} rows. Batch #{batchId}.",
     "resultCorrections": "Additionally inserted {count} correcting entries to close balance gaps.",
+    "replaceNotice": {
+      "one": "{count} correcting entry will be replaced: real transactions fall into its period.",
+      "other": "{count} correcting entries will be replaced: real transactions fall into their period."
+    },
+    "replaceLossTitle": "Replacing these correcting entries removes what was added to them by hand:",
+    "replaceLossLine": "{date}, {amount}: {losses}",
+    "lossCategories": "categories",
+    "lossComment": "comment",
+    "lossLink": "transfer link",
+    "lossAttachments": "linked slips",
+    "replaceLossConfirm": "Understood, replace these correcting entries",
+    "resultCorrectionsReplaced": "Correcting entries replaced by real transactions: {count}.",
     "resultBreaksTitle": "Balance chain breaks ({count}):",
     "resultBreakLine": "{date} — “{description}”: expected {expected}, got {actual}",
     "resultOk": "Balance chain is consistent.",

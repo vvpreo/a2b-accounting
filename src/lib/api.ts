@@ -91,6 +91,7 @@ export interface ImportResult {
   batchId: number;
   inserted: number;
   correctionsInserted: number;
+  correctionsReplaced: number;
   validationErrors: ValidationError[];
 }
 
@@ -107,8 +108,21 @@ export interface PreviewRowIssue {
   actualBalance: string | null;
 }
 
+/** A stored correcting row the import would remove, with what goes with it. */
+export interface ReplacedCorrection {
+  id: number;
+  occurredAtUtc: string;
+  credit: string;
+  debit: string;
+  categoryCount: number;
+  hasComment: boolean;
+  isLinked: boolean;
+  attachmentCount: number;
+}
+
 export interface ImportPreviewValidation {
   rowIssues: PreviewRowIssue[];
+  replacedCorrections: ReplacedCorrection[];
 }
 
 export interface TxnImportRow {

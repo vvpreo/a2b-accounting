@@ -1,7 +1,7 @@
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
-import { useT, useTPlural } from "../i18n";
+import { useI18n, useT, useTPlural } from "../i18n";
 import { UTC_OFFSETS, systemUtcOffset } from "../lib/utc-offsets";
 import {
   ACCOUNT_PRESETS,
@@ -14,6 +14,7 @@ import {
   ImportResult,
   PreviewRowIssue,
   PreviewRowIssueKind,
+  ReplacedCorrection,
   TxnImportRow,
   importTransactions,
   listAccounts,
@@ -55,6 +56,7 @@ export function ImportDialog({
 }: Props) {
   const t = useT();
   const tPlural = useTPlural();
+  const { locale } = useI18n();
 
   const [step, setStep] = useState<Step>(1);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -80,6 +82,10 @@ export function ImportDialog({
   const [error, setError] = useState<string | null>(null);
   const [previewIssues, setPreviewIssues] = useState<PreviewRowIssue[]>([]);
   const [issueFilter, setIssueFilter] = useState<IssueFilter>("all");
+  const [replacedCorrections, setReplacedCorrections] = useState<
+    ReplacedCorrection[]
+  >([]);
+  const [lossConfirmed, setLossConfirmed] = useState(false);
 
   const plugin = useMemo(() => getFormatPlugin(formatId), [formatId]);
 
@@ -239,6 +245,19 @@ export function ImportDialog({
     return skip;
   }, [previewIssues]);
 
+  // Replaced corrections that carry something the user added by hand.
+  const correctionsWithData = useMemo(
+    () =>
+      replacedCorrections.filter(
+        (c) =>
+          c.categoryCount > 0 ||
+          c.hasComment ||
+          c.isLinked ||
+          c.attachmentCount > 0,
+      ),
+    [replacedCorrections],
+  );
+
   const visibleRows = useMemo(() => {
     return parsed.rows
       .map((row, idx) => ({ row, idx }))
@@ -260,6 +279,8 @@ export function ImportDialog({
         rows: parsed.rows,
       });
       setPreviewIssues(validation.rowIssues);
+      setReplacedCorrections(validation.replacedCorrections);
+      setLossConfirmed(false);
       setIssueFilter("all");
       setStep(2);
     } catch (e) {
@@ -272,6 +293,8 @@ export function ImportDialog({
   function backToStepOne() {
     setStep(1);
     setPreviewIssues([]);
+    setReplacedCorrections([]);
+    setLossConfirmed(false);
     setIssueFilter("all");
   }
 
@@ -494,6 +517,45 @@ export function ImportDialog({
                   {tPlural("import.skipNotice", skipRowIndices.size)}
                 </p>
               )}
+              {replacedCorrections.length > 0 && (
+                <p className="hint">
+                  {tPlural("import.replaceNotice", replacedCorrections.length)}
+                </p>
+              )}
+              {correctionsWithData.length > 0 && (
+                <div className="errors-block">
+                  <strong>{t("import.replaceLossTitle")}</strong>
+                  <ul>
+                    {correctionsWithData.map((c) => (
+                      <li key={c.id}>
+                        {t("import.replaceLossLine", {
+                          date: new Date(c.occurredAtUtc).toLocaleDateString(locale),
+                          amount:
+                            Number(c.credit) > 0
+                              ? `+${formatMoney(c.credit)}`
+                              : `−${formatMoney(c.debit)}`,
+                          losses: [
+                            c.categoryCount > 0 && t("import.lossCategories"),
+                            c.hasComment && t("import.lossComment"),
+                            c.isLinked && t("import.lossLink"),
+                            c.attachmentCount > 0 && t("import.lossAttachments"),
+                          ]
+                            .filter(Boolean)
+                            .join(", "),
+                        })}
+                      </li>
+                    ))}
+                  </ul>
+                  <label className="import-loss-confirm">
+                    <input
+                      type="checkbox"
+                      checked={lossConfirmed}
+                      onChange={(e) => setLossConfirmed(e.target.checked)}
+                    />
+                    <span>{t("import.replaceLossConfirm")}</span>
+                  </label>
+                </div>
+              )}
               <div className="preview-table-wrap">
                 <table>
                   <thead>
@@ -597,6 +659,13 @@ export function ImportDialog({
                   })}
                 </p>
               )}
+              {result.correctionsReplaced > 0 && (
+                <p className="hint">
+                  {t("import.resultCorrectionsReplaced", {
+                    count: result.correctionsReplaced,
+                  })}
+                </p>
+              )}
               {result.validationErrors.length > 0 ? (
                 <div className="errors-block">
                   <strong>
@@ -657,7 +726,11 @@ export function ImportDialog({
               <button
                 type="button"
                 className="btn-primary"
-                disabled={submitting || importableCount === 0}
+                disabled={
+                  submitting ||
+                  importableCount === 0 ||
+                  (correctionsWithData.length > 0 && !lossConfirmed)
+                }
                 onClick={onConfirm}
               >
                 {submitting
