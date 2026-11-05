@@ -2338,8 +2338,8 @@ function ActivityStrip({
       `${monthLabel} — ${t(`accounts.activityStatus.${c.status}`)}`,
     ];
     if (c.balanceError) lines.push(t("accounts.activityBalanceError"));
-    if (c.uncategorizedCorrecting)
-      lines.push(t("accounts.activityUncategorizedCorrecting"));
+    if (c.hasCorrecting)
+      lines.push(t("accounts.activityHasCorrecting"));
     return lines.join("\n");
   }
 
@@ -2443,7 +2443,7 @@ function ActivityStrip({
                       ? "activity-cell--anchored"
                       : "",
                     c.balanceError ? "activity-cell--error" : "",
-                    c.uncategorizedCorrecting ? "activity-cell--dashed" : "",
+                    c.hasCorrecting ? "activity-cell--dashed" : "",
                   ]
                     .filter(Boolean)
                     .join(" ");

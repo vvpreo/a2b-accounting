@@ -1969,10 +1969,17 @@ button.activity-cell:focus-visible {
   color: #ffffff;
 }
 
-/* Dashed style is applied independently of color: the line can be
-   anchored-black or transparent (current month). */
+/* Dashed red wins over the anchor border: a month with an unresolved
+   correcting entry has to catch the eye. */
 .activity-cell--dashed {
   border-style: dashed;
+  border-width: 2px;
+  border-color: #ef4444;
+}
+
+/* Red on a red error fill would disappear. */
+.activity-cell--error.activity-cell--dashed {
+  border-color: #18181b;
 }
 
 /* Summary-row modifiers must come after the base `.activity-cell` rule
@@ -3415,6 +3422,14 @@ code {
 
 :root[data-theme="dark"] .activity-cell--anchored {
     border-color: #d4d4d8;
+  }
+
+:root[data-theme="dark"] .activity-cell--dashed {
+    border-color: #ef4444;
+  }
+
+:root[data-theme="dark"] .activity-cell--error.activity-cell--dashed {
+    border-color: #ffffff;
   }
 
 :root[data-theme="dark"] .activity-strip-row-label {

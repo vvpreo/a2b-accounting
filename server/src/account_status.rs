@@ -21,7 +21,8 @@ pub struct AccountMonthCell {
     pub year_month: String,
     pub status: String,
     pub balance_error: bool,
-    pub uncategorized_correcting: bool,
+    /// The month holds at least one correcting entry, categorized or not.
+    pub has_correcting: bool,
     /// True if the account has at least one transaction strictly after this
     /// month — i.e. the chain "closes" past this point. Drives the black
     /// anchor border in the UI (red error border still wins on top).
@@ -69,7 +70,6 @@ struct TxnRow {
     balance: i64,
     is_correcting: bool,
     has_categories: bool,
-    is_linked: bool,
 }
 
 fn compute(
@@ -92,9 +92,7 @@ fn compute(
                     t.balance,
                     t.is_correcting,
                     EXISTS(SELECT 1 FROM transaction_categories tc
-                           WHERE tc.transaction_id = t.id) AS has_categories,
-                    EXISTS(SELECT 1 FROM transaction_links tl
-                           WHERE tl.txn_a_id = t.id OR tl.txn_b_id = t.id) AS is_linked
+                           WHERE tc.transaction_id = t.id) AS has_categories
              FROM transactions t
              WHERE t.account_id = ?1
              ORDER BY t.occurred_at_utc ASC, t.id ASC",
@@ -108,7 +106,6 @@ fn compute(
                     balance: r.get(3)?,
                     is_correcting: r.get(4)?,
                     has_categories: r.get(5)?,
-                    is_linked: r.get(6)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -130,7 +127,7 @@ fn compute(
                         year_month: range.year_month.clone(),
                         status: "pre_account".to_string(),
                         balance_error: false,
-                        uncategorized_correcting: false,
+                        has_correcting: false,
                         anchored: false,
                         opening_balance: None,
                     });
@@ -158,9 +155,7 @@ fn compute(
             // categorized to count.
             let real_data = total - uncategorized_correcting_count;
 
-            let dashed = in_range
-                .iter()
-                .any(|t| t.is_correcting && !t.has_categories && !t.is_linked);
+            let has_correcting = in_range.iter().any(|t| t.is_correcting);
 
             let balance_error = errors.iter().any(|e| {
                 e.occurred_at_utc.as_str() >= range.start_utc.as_str()
@@ -177,9 +172,9 @@ fn compute(
                 .unwrap_or(false);
 
             // Fill is binary now — either there's real data in the month or
-            // there isn't. Within-month problems (balance break, uncategorized
-            // correcting) are surfaced via the independent `balance_error` and
-            // `uncategorized_correcting` flags so the UI can paint the cell
+            // there isn't. Within-month signals (balance break, a correcting
+            // entry) are surfaced via the independent `balance_error` and
+            // `has_correcting` flags so the UI can paint the cell
             // red or dash its border without polluting the fill state.
             let status = if no_data { "no_data" } else { "complete" };
 
@@ -197,7 +192,7 @@ fn compute(
                 year_month: range.year_month.clone(),
                 status: status.to_string(),
                 balance_error,
-                uncategorized_correcting: dashed,
+                has_correcting,
                 anchored,
                 opening_balance,
             });
@@ -487,7 +482,7 @@ mod tests {
         for c in &r {
             assert_eq!(c.status, "no_data");
             assert!(!c.balance_error);
-            assert!(!c.uncategorized_correcting);
+            assert!(!c.has_correcting);
         }
     }
 
@@ -533,7 +528,7 @@ mod tests {
         let jan = cell(&r, "2026-01");
         assert_eq!(jan.status, "no_data");
         // Dashed: uncategorized correcting that's not linked to a transfer.
-        assert!(jan.uncategorized_correcting);
+        assert!(jan.has_correcting);
         assert!(!jan.balance_error);
     }
 
@@ -557,7 +552,7 @@ mod tests {
 
         let jan = cell(&r, "2026-01");
         assert_eq!(jan.status, "complete");
-        assert!(!jan.uncategorized_correcting);
+        assert!(jan.has_correcting);
         assert!(!jan.balance_error);
     }
 
@@ -580,12 +575,12 @@ mod tests {
         // Fill is just `complete` now — the dashed flag carries the
         // "needs review" signal independently.
         assert_eq!(jan.status, "complete");
-        assert!(jan.uncategorized_correcting);
+        assert!(jan.has_correcting);
         assert!(!jan.balance_error);
     }
 
     #[test]
-    fn linked_correcting_does_not_dash_but_still_blocks_complete() {
+    fn linked_correcting_is_flagged_and_month_is_complete() {
         let f = fixture();
         // We need two accounts to be able to link transactions.
         let other_account: i64 = f.conn
@@ -645,11 +640,9 @@ mod tests {
             .iter()
             .find(|c| c.account_id == f.account_id && c.year_month == "2026-01")
             .unwrap();
-        // Linked correcting does NOT raise the dashed border flag…
-        assert!(!jan.uncategorized_correcting);
+        // A linked correcting entry still raises the border flag…
+        assert!(jan.has_correcting);
         // …and the fill is just `complete` — there is real data in the month.
-        // The "uncategorized" concern doesn't show up anywhere when the
-        // correcting entry is part of a linked transfer.
         assert_eq!(jan.status, "complete");
         assert!(!jan.balance_error);
     }
@@ -724,7 +717,7 @@ mod tests {
             let c = cell(&r, ym);
             assert_eq!(c.status, "pre_account", "{ym} should be pre_account");
             assert!(!c.balance_error);
-            assert!(!c.uncategorized_correcting);
+            assert!(!c.has_correcting);
         }
         // The month containing the first transaction is back to normal logic.
         let mar = cell(&r, "2026-03");

@@ -412,7 +412,7 @@ export interface AccountMonthCell {
   yearMonth: string;
   status: AccountMonthStatus;
   balanceError: boolean;
-  uncategorizedCorrecting: boolean;
+  hasCorrecting: boolean;
   /** True if any transaction exists strictly later than this month — the
    *  chain "closes" past this point. Drives the black anchor border. */
   anchored: boolean;
