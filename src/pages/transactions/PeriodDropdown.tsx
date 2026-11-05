@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { useI18n, useT } from "../../i18n";
+import { useFitAboveWindowBottom } from "../../lib/use-fit-above-window-bottom";
 
 export interface PeriodPreset {
   /** i18n key suffix under `transactions.period.*`. */
@@ -65,6 +66,8 @@ export function PeriodDropdown({ from, to, presets, onChange }: Props) {
   const [gridYear, setGridYear] = useState(() => Number((to || from).slice(0, 4)) || new Date().getFullYear());
   const [anchor, setAnchor] = useState<number | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const panelMaxHeight = useFitAboveWindowBottom(open, panelRef, panelRef);
   const thisYear = new Date().getFullYear();
 
   // Opening always starts from the applied range.
@@ -147,7 +150,11 @@ export function PeriodDropdown({ from, to, presets, onChange }: Props) {
         <span className="dropdown-button-text">{summary}</span>
       </button>
       {open && (
-        <div className="dropdown-panel period-panel">
+        <div
+          className="dropdown-panel period-panel"
+          ref={panelRef}
+          style={{ maxHeight: panelMaxHeight }}
+        >
           {presets.map((p) => (
             <button
               key={p.key}

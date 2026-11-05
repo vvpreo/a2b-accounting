@@ -2982,8 +2982,7 @@ code {
 }
 
 .dropdown-list {
-  /* Tall enough for the Transactions Filter (three groups) without scrolling. */
-  max-height: min(480px, 60vh);
+  /* max-height comes from useFitAboveWindowBottom. */
   overflow-y: auto;
 }
 
@@ -6801,6 +6800,8 @@ a.btn-ghost {
 /* Period dropdown: presets + custom from/to. */
 .period-panel {
   min-width: 260px;
+  /* max-height comes from useFitAboveWindowBottom. */
+  overflow-y: auto;
 }
 
 .period-item {

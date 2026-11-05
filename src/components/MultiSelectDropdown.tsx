@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
+import { useFitAboveWindowBottom } from "../lib/use-fit-above-window-bottom";
+
 export interface MultiSelectItem<T extends string | number> {
   id: T;
   label: string;
@@ -40,6 +42,9 @@ export function MultiSelectDropdown<T extends string | number>({
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState<T[]>(selected);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const listMaxHeight = useFitAboveWindowBottom(open, panelRef, listRef);
 
   // Sync pending with the latest committed selection whenever the dropdown
   // is closed — opening always starts from the applied state.
@@ -106,7 +111,7 @@ export function MultiSelectDropdown<T extends string | number>({
         <span className="dropdown-button-text">{summary}</span>
       </button>
       {open && (
-        <div className="dropdown-panel">
+        <div className="dropdown-panel" ref={panelRef}>
           {showSelectAll && (
             <>
               <label className="dropdown-item">
@@ -120,7 +125,11 @@ export function MultiSelectDropdown<T extends string | number>({
               <div className="dropdown-divider" />
             </>
           )}
-          <div className="dropdown-list">
+          <div
+            className="dropdown-list"
+            ref={listRef}
+            style={{ maxHeight: listMaxHeight }}
+          >
             {items.map((item, i) => (
               <div key={String(item.id)}>
                 {item.group && item.group !== items[i - 1]?.group && (
