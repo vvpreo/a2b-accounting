@@ -416,6 +416,9 @@ export interface AccountMonthCell {
   /** True if any transaction exists strictly later than this month — the
    *  chain "closes" past this point. Drives the black anchor border. */
   anchored: boolean;
+  /** Balance before the account's first transaction, only on the month holding
+   *  it and never for cash accounts. Zero = history loaded from the beginning. */
+  openingBalance: string | null;
 }
 
 export interface AccountLatestTransaction {

@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 
+import { formatMoney } from "../lib/money";
 import { useViewState } from "../lib/view-state";
 import { createPortal } from "react-dom";
 
@@ -2418,6 +2419,20 @@ function ActivityStrip({
                     className="activity-strip-year-gap"
                     aria-hidden="true"
                   />
+                )}
+                {c.openingBalance !== null && (
+                  <span className="activity-opening-balance">
+                    <span
+                      className={
+                        Number(c.openingBalance) === 0
+                          ? "activity-opening-balance-value is-zero"
+                          : "activity-opening-balance-value"
+                      }
+                      title={t("accounts.openingBalanceTitle")}
+                    >
+                      {formatMoney(c.openingBalance)}
+                    </span>
+                  </span>
                 )}
                 {(() => {
                   const className = [

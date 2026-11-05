@@ -26,6 +26,10 @@ pub struct AccountMonthCell {
     /// month — i.e. the chain "closes" past this point. Drives the black
     /// anchor border in the UI (red error border still wins on top).
     pub anchored: bool,
+    /// Balance before the account's first transaction, set only on the month
+    /// holding it and never for cash accounts. Zero means the history is loaded
+    /// from the very beginning.
+    pub opening_balance: Option<String>,
 }
 
 /// Per-account, per-month rollup that powers the optional "summary" strip
@@ -60,6 +64,9 @@ pub fn account_monthly_status(
 
 struct TxnRow {
     occurred_at_utc: String,
+    credit: i64,
+    debit: i64,
+    balance: i64,
     is_correcting: bool,
     has_categories: bool,
     is_linked: bool,
@@ -69,17 +76,20 @@ fn compute(
     conn: &Connection,
     months: &[MonthRange],
 ) -> rusqlite::Result<Vec<AccountMonthCell>> {
-    let mut stmt = conn.prepare("SELECT id FROM accounts ORDER BY id ASC")?;
-    let account_ids: Vec<i64> = stmt
-        .query_map([], |r| r.get::<_, i64>(0))?
+    let mut stmt = conn.prepare("SELECT id, kind FROM accounts ORDER BY id ASC")?;
+    let accounts: Vec<(i64, String)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(stmt);
 
-    let mut out = Vec::with_capacity(account_ids.len() * months.len());
+    let mut out = Vec::with_capacity(accounts.len() * months.len());
 
-    for account_id in account_ids {
+    for (account_id, kind) in accounts {
         let mut stmt = conn.prepare(
             "SELECT t.occurred_at_utc,
+                    t.credit,
+                    t.debit,
+                    t.balance,
                     t.is_correcting,
                     EXISTS(SELECT 1 FROM transaction_categories tc
                            WHERE tc.transaction_id = t.id) AS has_categories,
@@ -87,15 +97,18 @@ fn compute(
                            WHERE tl.txn_a_id = t.id OR tl.txn_b_id = t.id) AS is_linked
              FROM transactions t
              WHERE t.account_id = ?1
-             ORDER BY t.occurred_at_utc ASC",
+             ORDER BY t.occurred_at_utc ASC, t.id ASC",
         )?;
         let txns: Vec<TxnRow> = stmt
             .query_map([account_id], |r| {
                 Ok(TxnRow {
                     occurred_at_utc: r.get(0)?,
-                    is_correcting: r.get(1)?,
-                    has_categories: r.get(2)?,
-                    is_linked: r.get(3)?,
+                    credit: r.get(1)?,
+                    debit: r.get(2)?,
+                    balance: r.get(3)?,
+                    is_correcting: r.get(4)?,
+                    has_categories: r.get(5)?,
+                    is_linked: r.get(6)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -119,6 +132,7 @@ fn compute(
                         balance_error: false,
                         uncategorized_correcting: false,
                         anchored: false,
+                        opening_balance: None,
                     });
                     continue;
                 }
@@ -169,6 +183,15 @@ fn compute(
             // red or dash its border without polluting the fill state.
             let status = if no_data { "no_data" } else { "complete" };
 
+            let opening_balance = txns
+                .first()
+                .filter(|first| {
+                    kind != "cash"
+                        && first.occurred_at_utc.as_str() >= range.start_utc.as_str()
+                        && first.occurred_at_utc.as_str() < range.end_utc.as_str()
+                })
+                .map(|first| money::format_minor(first.balance - first.credit + first.debit));
+
             out.push(AccountMonthCell {
                 account_id,
                 year_month: range.year_month.clone(),
@@ -176,6 +199,7 @@ fn compute(
                 balance_error,
                 uncategorized_correcting: dashed,
                 anchored,
+                opening_balance,
             });
         }
     }
@@ -402,6 +426,53 @@ mod tests {
 
     fn cell<'a>(cells: &'a [AccountMonthCell], ym: &str) -> &'a AccountMonthCell {
         cells.iter().find(|c| c.year_month == ym).expect(ym)
+    }
+
+    #[test]
+    fn opening_balance_sits_on_the_month_of_the_first_transaction() {
+        let f = fixture();
+        insert_txn(&f, "2026-02-15T10:00:00Z", 200, 0, 1200, false);
+        insert_txn(&f, "2026-03-15T10:00:00Z", 0, 100, 1100, false);
+        let m = ranges(&[
+            ("2026-01", "2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z"),
+            ("2026-02", "2026-02-01T00:00:00Z", "2026-03-01T00:00:00Z"),
+            ("2026-03", "2026-03-01T00:00:00Z", "2026-04-01T00:00:00Z"),
+        ]);
+        let r = compute(&f.conn, &m).unwrap();
+        assert_eq!(cell(&r, "2026-01").opening_balance, None);
+        assert_eq!(cell(&r, "2026-02").opening_balance.as_deref(), Some("10.00"));
+        assert_eq!(cell(&r, "2026-03").opening_balance, None);
+    }
+
+    #[test]
+    fn opening_balance_is_zero_when_history_starts_from_the_beginning() {
+        let f = fixture();
+        insert_txn(&f, "2026-02-15T10:00:00Z", 200, 0, 200, false);
+        let m = ranges(&[("2026-02", "2026-02-01T00:00:00Z", "2026-03-01T00:00:00Z")]);
+        let r = compute(&f.conn, &m).unwrap();
+        assert_eq!(cell(&r, "2026-02").opening_balance.as_deref(), Some("0.00"));
+    }
+
+    #[test]
+    fn opening_balance_is_absent_when_the_first_month_is_out_of_range() {
+        let f = fixture();
+        insert_txn(&f, "2026-01-15T10:00:00Z", 200, 0, 1200, false);
+        insert_txn(&f, "2026-02-15T10:00:00Z", 0, 100, 1100, false);
+        let m = ranges(&[("2026-02", "2026-02-01T00:00:00Z", "2026-03-01T00:00:00Z")]);
+        let r = compute(&f.conn, &m).unwrap();
+        assert_eq!(cell(&r, "2026-02").opening_balance, None);
+    }
+
+    #[test]
+    fn opening_balance_is_absent_for_cash_accounts() {
+        let f = fixture();
+        f.conn
+            .execute("UPDATE accounts SET kind = 'cash' WHERE id = ?1", [f.account_id])
+            .unwrap();
+        insert_txn(&f, "2026-02-15T10:00:00Z", 200, 0, 1200, false);
+        let m = ranges(&[("2026-02", "2026-02-01T00:00:00Z", "2026-03-01T00:00:00Z")]);
+        let r = compute(&f.conn, &m).unwrap();
+        assert_eq!(cell(&r, "2026-02").opening_balance, None);
     }
 
     #[test]

@@ -1734,6 +1734,9 @@ td.empty {
   align-items: flex-start;
   gap: 2px;
   margin-inline-start: auto;
+  /* Room for the opening balance when an account's first month is the
+     strip's leftmost one. Same on every row, so the months stay aligned. */
+  padding-left: 96px;
 }
 
 /* Year labels mirror the months strip: same flex gap and same year-gap
@@ -1909,6 +1912,32 @@ button.activity-cell:focus-visible {
 /* Months strictly before the account's first transaction: render an
    invisible placeholder so the strip keeps the same column width across
    accounts but the cell appears absent to the user. */
+/* Zero-width anchor: the value hangs to the left, over the empty pre-account
+   cells, and the negative margin cancels the strip's flex gap. */
+.activity-opening-balance {
+  position: relative;
+  width: 0;
+  height: 18px;
+  margin-right: -2px;
+  flex-shrink: 0;
+}
+
+.activity-opening-balance-value {
+  position: absolute;
+  top: 0;
+  right: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.activity-opening-balance-value.is-zero {
+  font-weight: 400;
+  opacity: 0.55;
+}
+
 .activity-cell--pre_account {
   background: transparent;
   border-color: transparent;

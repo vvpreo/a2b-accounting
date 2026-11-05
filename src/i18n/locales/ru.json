@@ -62,6 +62,7 @@
     "activityBalanceError": "Есть расхождения в цепочке балансов",
     "activityUncategorizedCorrecting": "Есть некатегоризированные корректирующие проводки",
     "activityNoTransactions": "Нет транзакций по счёту",
+    "openingBalanceTitle": "Баланс до первой загруженной операции. Ноль: история загружена с самого начала.",
     "menuActivity": "Активность",
     "menuMonthsValue": "{count} мес.",
     "menuMonthsAll": "Весь период",

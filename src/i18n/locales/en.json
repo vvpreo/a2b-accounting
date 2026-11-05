@@ -62,6 +62,7 @@
     "activityBalanceError": "Balance chain mismatch",
     "activityUncategorizedCorrecting": "Uncategorized correcting entries present",
     "activityNoTransactions": "No transactions in this account",
+    "openingBalanceTitle": "Balance before the first loaded transaction. Zero: the history is loaded from the very beginning.",
     "menuActivity": "Activity",
     "menuMonthsValue": "{count} mo.",
     "menuMonthsAll": "All time",
