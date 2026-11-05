@@ -18,6 +18,8 @@ const UNIVERSAL_HEADER = [
 const DATE_RE = /^\d{2}-\d{2}-\d{2}$/;
 const TIME_RE = /^\d{1,2}:\d{2}$/;
 const AMOUNT_RE = /^[\d,]+\.\d{2}$/;
+/** Bank's closing note under the table; its text varies between templates. */
+const FOOTER_RE = /^for more information\b/i;
 
 /**
  * X-coordinate boundaries (left edges) for the columns in the Kasikorn
@@ -95,7 +97,8 @@ interface ConvertResult {
  *      date in the Date column starts a new transaction; any other line
  *      whose items fall into known data columns is a continuation of the
  *      current transaction (each item appended to the accumulator for its
- *      X-determined column).
+ *      X-determined column). The bank's closing note ends the table: nothing
+ *      from it on belongs to a transaction, though it sits in the Desc column.
  *   3. `Beginning Balance` rows are not emitted — they only carry the
  *      page's opening balance, which validates against the previous page's
  *      last balance (a mismatch becomes a diagnostic error).
@@ -140,6 +143,7 @@ export function linesToUniversalCsv(lines: PdfLine[]): ConvertResult {
     for (let i = headerIdx + 1; i < pageLines.length; i++) {
       const ln = pageLines[i];
       if (ln.items.length === 0) continue;
+      if (FOOTER_RE.test(ln.items.map((it) => it.str).join(" "))) break;
       const first = ln.items[0];
       const isNewRow = DATE_RE.test(first.str) && columnOf(first.x) === "Date";
       if (isNewRow) {
