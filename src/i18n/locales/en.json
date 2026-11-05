@@ -1386,6 +1386,7 @@
     "orientationLabel": "View",
     "orientationVertical": "Vertical columns",
     "orientationHorizontal": "Horizontal bars",
+    "hideZeroColumns": "Hide zero columns",
     "systemHint": "This is neither income nor an expense. It is how the balances differ from the sum of operations: exchange rate moves and balance changes with no operation behind them.",
     "rateModeLabel": "Rate",
     "rateModeSystem": "At each operation’s date",

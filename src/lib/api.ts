@@ -1336,6 +1336,8 @@ export interface WaterfallConfig {
   steps: number[];
   /** How the columns stand; missing means vertical. */
   orientation?: WaterfallOrientation;
+  /** Leaves out the columns that hold no money; missing means they are shown. */
+  hideZeroColumns?: boolean;
   /** Missing means the stored rates, each operation at its own date. */
   rateMode?: WaterfallRateMode;
   /** The user's own rates: by report currency, then by the currency converted. */

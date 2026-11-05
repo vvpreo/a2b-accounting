@@ -173,6 +173,13 @@ export function buildWaterfallColumns(
   return columns;
 }
 
+/** The chart without the columns that hold no money. Removing them moves no
+ *  balance, so the rest still adds up. The two totals stay whatever they hold:
+ *  they are what the chart goes from and to. */
+export function withoutZeroColumns(columns: WaterfallColumn[]): WaterfallColumn[] {
+  return columns.filter((c) => c.kind === "opening" || c.kind === "closing" || c.deltaMinor !== 0);
+}
+
 /** A rate as typed, ready to send, or null while it isn't a positive number yet. */
 export function normalizeRate(typed: string): string | null {
   const value = typed.trim().replace(",", ".");

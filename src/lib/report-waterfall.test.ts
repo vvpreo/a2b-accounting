@@ -20,6 +20,7 @@ import {
   toggleStep,
   waterfallScale,
   waterfallZones,
+  withoutZeroColumns,
 } from "./report-waterfall";
 
 const cat = (id: number, kind: "income" | "expense", parentId: number | null = null): Category => ({
@@ -165,6 +166,74 @@ describe("buildWaterfallColumns", () => {
     const data = { ...DATA, uncategorizedIncome: "0.00" };
     expect(shape([1], data).map(([key]) => key)).not.toContain("otherIncome");
     expect(shape([1], data).map(([key]) => key)).not.toContain("income");
+  });
+});
+
+describe("withoutZeroColumns", () => {
+  const EMPTY: WaterfallResponse = {
+    ...DATA,
+    opening: "0.00",
+    closing: "0.00",
+    categories: [],
+    uncategorizedIncome: "0.00",
+    uncategorizedExpense: "0.00",
+    adjustments: "0.00",
+    fxDifference: "0.00",
+  };
+
+  it("drops the columns with no money, whichever kind they are", () => {
+    const data: WaterfallResponse = {
+      ...EMPTY,
+      opening: "100.00",
+      closing: "70.00",
+      categories: [{ categoryId: 5, amount: "30.00" }],
+    };
+    // Income, the empty step 2 and "other" are all zero here.
+    const kept = withoutZeroColumns(buildWaterfallColumns(data, CATEGORIES, [2, 5]));
+    expect(kept.map((c) => c.key)).toEqual(["opening", "step:5", "closing"]);
+  });
+
+  it("keeps a column that holds even one cent, and a negative one", () => {
+    const data: WaterfallResponse = {
+      ...EMPTY,
+      closing: "-0.99",
+      uncategorizedIncome: "0.01",
+      uncategorizedExpense: "1.00",
+    };
+    const kept = withoutZeroColumns(buildWaterfallColumns(data, CATEGORIES, []));
+    expect(kept.map((c) => [c.key, c.deltaMinor])).toEqual([
+      ["opening", 0],
+      ["income", 1],
+      ["other", -100],
+      ["closing", -99],
+    ]);
+  });
+
+  it("keeps both totals even when they are zero", () => {
+    const kept = withoutZeroColumns(buildWaterfallColumns(EMPTY, CATEGORIES, [1, 2]));
+    expect(kept.map((c) => c.key)).toEqual(["opening", "closing"]);
+    expect(waterfallZones(kept)).toEqual([]);
+  });
+
+  it("leaves the chain unbroken and the zones right after the removal", () => {
+    const data: WaterfallResponse = {
+      ...EMPTY,
+      opening: "100.00",
+      closing: "120.00",
+      categories: [
+        { categoryId: 1, amount: "50.00" },
+        { categoryId: 5, amount: "30.00" },
+      ],
+    };
+    const kept = withoutZeroColumns(buildWaterfallColumns(data, CATEGORIES, [1, 2, 5]));
+    expect(kept.map((c) => c.key)).toEqual(["opening", "step:1", "step:5", "closing"]);
+    const middle = kept.slice(1, -1);
+    middle.forEach((c, i) => expect(c.startMinor).toBe(kept[i].endMinor));
+    expect(middle[middle.length - 1].endMinor).toBe(kept[kept.length - 1].endMinor);
+    expect(waterfallZones(kept)).toEqual([
+      { kind: "income", start: 1, count: 1, totalMinor: 5000 },
+      { kind: "expense", start: 2, count: 1, totalMinor: -3000 },
+    ]);
   });
 });
 

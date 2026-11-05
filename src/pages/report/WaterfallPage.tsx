@@ -43,6 +43,7 @@ import {
   WaterfallDrill,
   waterfallScale,
   waterfallZones,
+  withoutZeroColumns,
 } from "../../lib/report-waterfall";
 import { useViewState } from "../../lib/view-state";
 import { copyOrDownloadPng, renderWaterfallImage } from "../../lib/waterfall-image";
@@ -130,6 +131,7 @@ export function WaterfallPage({ view, onSaved }: Props) {
   const [currency, setCurrency] = useState<string | null>(initial.currency ?? null);
   const [steps, setSteps] = useState<number[]>(initial.steps);
   const [orientation, setOrientation] = useState<WaterfallOrientation>(initial.orientation ?? "vertical");
+  const [hideZeroColumns, setHideZeroColumns] = useState(initial.hideZeroColumns ?? false);
   const [rateMode, setRateMode] = useState<WaterfallRateMode>(initial.rateMode ?? "system");
   const [fixedRates, setFixedRates] = useState<Record<string, Record<string, WaterfallFixedRate>>>(
     initial.fixedRates ?? {},
@@ -224,6 +226,7 @@ export function WaterfallPage({ view, onSaved }: Props) {
     steps,
     // Left out while it is the default, so opening the report doesn't rewrite it.
     orientation: orientation === "vertical" ? undefined : orientation,
+    hideZeroColumns: hideZeroColumns || undefined,
     rateMode: rateMode === "system" ? undefined : rateMode,
     fixedRates: Object.keys(fixedRates).length > 0 ? fixedRates : undefined,
   });
@@ -252,10 +255,12 @@ export function WaterfallPage({ view, onSaved }: Props) {
   }
 
   const known = useMemo(() => orderedSteps(steps, categories), [steps, categories]);
-  const columns = useMemo(
-    () => (data ? buildWaterfallColumns(data, categories, steps) : []),
-    [data, categories, steps],
-  );
+  // The picture and the spreadsheet both take these, so they match the screen.
+  const columns = useMemo(() => {
+    if (!data) return [];
+    const all = buildWaterfallColumns(data, categories, steps);
+    return hideZeroColumns ? withoutZeroColumns(all) : all;
+  }, [data, categories, steps, hideZeroColumns]);
   const accountNameById = useMemo(() => {
     const m = new Map<number, string>();
     for (const a of accounts) {
@@ -378,6 +383,14 @@ export function WaterfallPage({ view, onSaved }: Props) {
                 onChange={(value) => setRateMode(value as WaterfallRateMode)}
               />
             </div>
+            <label className="filter-field filter-field--checkbox">
+              <input
+                type="checkbox"
+                checked={hideZeroColumns}
+                onChange={(e) => setHideZeroColumns(e.target.checked)}
+              />
+              <span>{t("waterfall.hideZeroColumns")}</span>
+            </label>
           </div>
         )}
       </section>
