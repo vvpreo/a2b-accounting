@@ -8,6 +8,7 @@ import {
   Account,
   Category,
   computeWaterfall,
+  refreshRates,
   firstTransactionDate,
   listAccounts,
   listCategories,
@@ -17,6 +18,7 @@ import {
   updateReportView,
   WaterfallConfig,
   WaterfallFixedRate,
+  WaterfallStaleRate,
   WaterfallOrientation,
   WaterfallRateMode,
   WaterfallResponse,
@@ -161,6 +163,8 @@ export function WaterfallPage({ view, onSaved }: Props) {
   const [data, setData] = useState<WaterfallResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reloadVersion, setReloadVersion] = useState(0);
+  // The "Update rates" button: busy while the quotes download, then what came of it.
+  const [ratesRefresh, setRatesRefresh] = useState<{ busy: boolean; note: string | null }>({ busy: false, note: null });
   const [detail, setDetail] = useState<WaterfallColumn | null>(null);
   const [drill, setDrill] = useState<{ drill: WaterfallDrill; label: string; amount: number } | null>(null);
 
@@ -210,6 +214,22 @@ export function WaterfallPage({ view, onSaved }: Props) {
     [accounts, accountIds, currency],
   );
   const ownRates = currency ? fixedRates[currency] : undefined;
+  const showFixedRates = rateMode === "fixed" && !!currency && foreignCurrencies.length > 0;
+
+  // Fetches only the weeks after the latest stored quotes; the chart reloads
+  // on its own when the download completes ("rates:download:completed").
+  async function refreshStaleRates(currencies: string[]) {
+    setRatesRefresh({ busy: true, note: null });
+    try {
+      const added = await refreshRates(currencies);
+      setRatesRefresh({
+        busy: false,
+        note: added > 0 ? t("waterfall.ratesRefreshAdded", { count: added }) : t("waterfall.ratesRefreshNone"),
+      });
+    } catch (e) {
+      setRatesRefresh({ busy: false, note: t("waterfall.ratesRefreshFailed", { error: String(e) }) });
+    }
+  }
   // A string, so that retyping the same rate doesn't ask the server again.
   const sentRates = JSON.stringify(
     rateMode === "fixed" ? validFixedRates(ownRates, foreignCurrencies) : null,
@@ -451,13 +471,16 @@ export function WaterfallPage({ view, onSaved }: Props) {
         )}
       </section>
 
-      {rateMode === "fixed" && currency && foreignCurrencies.length > 0 && (
+      {showFixedRates && currency && (
         <FixedRates
           currencies={foreignCurrencies}
           reportCurrency={currency}
           rates={ownRates ?? {}}
           suggested={data?.suggestedRates ?? []}
           onChange={(next) => setFixedRates((all) => ({ ...all, [currency]: next }))}
+          stale={data?.staleRates ?? []}
+          refresh={ratesRefresh}
+          onRefresh={refreshStaleRates}
         />
       )}
       {error && <div className="waterfall-notice waterfall-notice--error">{error}</div>}
@@ -466,12 +489,16 @@ export function WaterfallPage({ view, onSaved }: Props) {
           ⚠ {t("waterfall.accountsHidden", { currencies: data.missingRates.join(", ") })}
         </div>
       )}
-      {data && data.staleRates.length > 0 && (
-        <div className="waterfall-notice">
-          ⚠{" "}
-          {t("waterfall.ratesStale", {
-            rates: data.staleRates.map((r) => `${r.currency} — ${shortDate(r.latestDate)}`).join(", "),
-          })}
+      {/* With fixed rates the warning stands next to the rate it concerns. */}
+      {data && data.staleRates.length > 0 && !showFixedRates && (
+        <div className="waterfall-notice waterfall-notice--rates">
+          <span>
+            ⚠ {t("waterfall.ratesStale", { rates: staleList(data.staleRates) })}
+          </span>
+          <RatesRefreshButton
+            refresh={ratesRefresh}
+            onRefresh={() => refreshStaleRates(data.staleRates.map((r) => r.currency))}
+          />
         </div>
       )}
 
@@ -575,17 +602,41 @@ export function WaterfallPage({ view, onSaved }: Props) {
   );
 }
 
+const staleList = (rates: WaterfallStaleRate[]) =>
+  rates.map((r) => `${r.currency} — ${shortDate(r.latestDate)}`).join(", ");
+
+interface RatesRefresh {
+  busy: boolean;
+  note: string | null;
+}
+
+function RatesRefreshButton({ refresh, onRefresh }: { refresh: RatesRefresh; onRefresh: () => void }) {
+  const t = useT();
+  return (
+    <span className="waterfall-rates-refresh">
+      <button type="button" className="waterfall-copy" disabled={refresh.busy} onClick={onRefresh}>
+        {t(refresh.busy ? "waterfall.ratesRefreshing" : "waterfall.ratesRefresh")}
+      </button>
+      {refresh.note && <span className="waterfall-rates-refresh-note">{refresh.note}</span>}
+    </span>
+  );
+}
+
 interface FixedRatesProps {
   currencies: string[];
   reportCurrency: string;
   rates: Record<string, WaterfallFixedRate>;
   suggested: WaterfallFixedRate[];
   onChange: (rates: Record<string, WaterfallFixedRate>) => void;
+  /** Old quotes the suggested rates come from; shown beside the rate they concern. */
+  stale: WaterfallStaleRate[];
+  refresh: RatesRefresh;
+  onRefresh: (currencies: string[]) => void;
 }
 
 /// One rate per currency for the whole period. Each starts as the suggested one;
 /// only what the user changes is kept, so the rest follows the chosen period.
-function FixedRates({ currencies, reportCurrency, rates, suggested, onChange }: FixedRatesProps) {
+function FixedRates({ currencies, reportCurrency, rates, suggested, onChange, stale, refresh, onRefresh }: FixedRatesProps) {
   const t = useT();
   return (
     <div className="waterfall-rates">
@@ -596,34 +647,44 @@ function FixedRates({ currencies, reportCurrency, rates, suggested, onChange }: 
         const perReport = own?.perReport ?? offered?.perReport ?? false;
         const value = own?.rate ?? offered?.rate ?? "";
         const invalid = own !== undefined && normalizeRate(own.rate) === null;
+        // A cross rate rests on the quotes of both currencies.
+        const behind = stale.filter((r) => r.currency === currency || r.currency === reportCurrency);
         return (
-          <label className="waterfall-rate" key={currency}>
-            <span>1 {perReport ? reportCurrency : currency} =</span>
-            <input
-              type="text"
-              inputMode="decimal"
-              value={value}
-              aria-invalid={invalid}
-              onChange={(e) =>
-                onChange({ ...rates, [currency]: { currency, rate: e.target.value, perReport } })
-              }
-            />
-            <span>{perReport ? currency : reportCurrency}</span>
-            {own && (
-              <button
-                type="button"
-                className="icon-btn"
-                title={t("waterfall.rateReset", { rate: offered?.rate ?? "—" })}
-                aria-label={t("waterfall.rateReset", { rate: offered?.rate ?? "—" })}
-                onClick={() => {
-                  const { [currency]: _removed, ...rest } = rates;
-                  onChange(rest);
-                }}
-              >
-                ↺
-              </button>
+          <span className="waterfall-rate-row" key={currency}>
+            <label className="waterfall-rate">
+              <span>1 {perReport ? reportCurrency : currency} =</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={value}
+                aria-invalid={invalid}
+                onChange={(e) =>
+                  onChange({ ...rates, [currency]: { currency, rate: e.target.value, perReport } })
+                }
+              />
+              <span>{perReport ? currency : reportCurrency}</span>
+              {own && (
+                <button
+                  type="button"
+                  className="icon-btn"
+                  title={t("waterfall.rateReset", { rate: offered?.rate ?? "—" })}
+                  aria-label={t("waterfall.rateReset", { rate: offered?.rate ?? "—" })}
+                  onClick={() => {
+                    const { [currency]: _removed, ...rest } = rates;
+                    onChange(rest);
+                  }}
+                >
+                  ↺
+                </button>
+              )}
+            </label>
+            {behind.length > 0 && (
+              <span className="waterfall-rate-stale">
+                <span>⚠ {t("waterfall.rateStaleShort", { rates: staleList(behind) })}</span>
+                <RatesRefreshButton refresh={refresh} onRefresh={() => onRefresh(behind.map((r) => r.currency))} />
+              </span>
             )}
-          </label>
+          </span>
         );
       })}
     </div>
@@ -951,6 +1012,11 @@ function WaterfallChart({ columns, currency, categories, steps, brackets, orient
           const fullLabel = column.categoryId === null ? label : categoryPath(column.categoryId, byId);
           const color = column.categoryId === null ? undefined : byId.get(column.categoryId)?.color;
           const shown = isTotal(column) ? column.endMinor : column.deltaMinor;
+          const note = isTotal(column)
+            ? shortDate(column.kind === "opening" ? from : to)
+            : column.categoryId !== null && carvedOutSteps(column.categoryId, steps, categories).length > 0
+              ? t("waterfall.theRest")
+              : null;
           return (
             <button
               key={column.key}
@@ -983,15 +1049,14 @@ function WaterfallChart({ columns, currency, categories, steps, brackets, orient
                   {isTotal(column) ? wholeMoney(shown) : (shown > 0 ? "+" : "") + wholeMoney(shown)}
                 </span>
               </span>
-              <span className="waterfall-name" title={fullLabel}>
-                {color && <span className="waterfall-dot" style={{ background: color }} />}
-                {label}
-                {isTotal(column) && (
-                  <span className="waterfall-date">{shortDate(column.kind === "opening" ? from : to)}</span>
-                )}
-                {column.categoryId !== null && carvedOutSteps(column.categoryId, steps, categories).length > 0 && (
-                  <span className="waterfall-date">{t("waterfall.theRest")}</span>
-                )}
+              {/* The note under the name ("the rest", a balance's date) always
+                  stays in sight: a long name gives up its last lines instead. */}
+              <span className={`waterfall-name${note ? " waterfall-name--noted" : ""}`} title={fullLabel}>
+                <span className="waterfall-name-text">
+                  {color && <span className="waterfall-dot" style={{ background: color }} />}
+                  {label}
+                </span>
+                {note && <span className="waterfall-date">{note}</span>}
               </span>
             </button>
           );

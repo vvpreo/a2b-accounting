@@ -293,6 +293,46 @@ pub async fn download_rates_for_currency(
     download_rates_for_currency_internal(app, currency).await
 }
 
+/// The date of a currency's latest stored quote, if it has any.
+fn latest_rate_date(conn: &Connection, currency: &str) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT MAX(rate_date) FROM exchange_rates WHERE currency = ?1",
+        [currency],
+        |row| row.get(0),
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Top the given currencies up on demand: each is fetched from its latest stored
+/// quote on, so only the new weeks come in (a currency without quotes gets its
+/// whole history). Returns how many quotes were added; zero is normal while the
+/// current week's quote is already stored. Any currency that failed makes the
+/// whole call an error, after the others have been tried.
+pub async fn refresh_rates(app: AppHandle, currencies: Vec<String>) -> Result<usize, String> {
+    let mut codes: Vec<String> = currencies.iter().map(|c| c.trim().to_ascii_uppercase()).collect();
+    codes.sort();
+    codes.dedup();
+    let mut inserted = 0;
+    let mut failed = Vec::new();
+    for code in codes.into_iter().filter(|c| !c.is_empty()) {
+        let latest = {
+            let state = app.db();
+            let conn = state.lock().map_err(|e| e.to_string())?;
+            latest_rate_date(&conn, &code)?
+        };
+        let start = latest.unwrap_or_else(|| frankfurter::EUR_EARLIEST.to_string());
+        match download_rates_from(app.clone(), code.clone(), &start).await {
+            Ok(n) => inserted += n,
+            Err(err) => failed.push(format!("{code}: {err}")),
+        }
+    }
+    if failed.is_empty() {
+        Ok(inserted)
+    } else {
+        Err(failed.join("; "))
+    }
+}
+
 /// Scan the accounts table for any currency that:
 ///   - is not the EUR base,
 ///   - is backed by a supported `rate_source` in the `currencies` dictionary,

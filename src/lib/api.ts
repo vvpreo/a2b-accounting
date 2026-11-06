@@ -1127,6 +1127,12 @@ export function downloadRatesForCurrency(currency: string): Promise<number> {
   return invoke<number>("download_rates_for_currency", { currency });
 }
 
+/** Tops the currencies up from their latest stored quote on; returns how many
+ *  quotes were added (zero while the current week's one is already stored). */
+export function refreshRates(currencies: string[]): Promise<number> {
+  return invoke<number>("refresh_rates", { currencies });
+}
+
 export type Granularity = "year" | "quarter" | "month";
 
 export type RangePreset =
@@ -1379,6 +1385,12 @@ export interface WaterfallAccount {
 }
 
 // All money strings are in the requested currency, unless named `*Native`.
+/** A rate the waterfall relies on whose latest quote is too old for the period. */
+export interface WaterfallStaleRate {
+  currency: string;
+  latestDate: string;
+}
+
 export interface WaterfallResponse {
   currency: string;
   opening: string;
@@ -1395,7 +1407,7 @@ export interface WaterfallResponse {
   /** Currencies with no rate: their accounts are left out of every number. */
   missingRates: string[];
   /** Rates ending well before the period's end: later money uses the last one. */
-  staleRates: { currency: string; latestDate: string }[];
+  staleRates: WaterfallStaleRate[];
   /** The last rate known on the period's end, for each currency to convert. */
   suggestedRates: WaterfallFixedRate[];
 }

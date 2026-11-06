@@ -489,6 +489,9 @@ async fn rpc(
         "download_rates_for_currency" => {
             run!(app_async crate::exchange_rates::download_rates_for_currency, [currency: String])
         }
+        "refresh_rates" => {
+            run!(app_async crate::exchange_rates::refresh_rates, [currencies: Vec<String>])
+        }
         "list_currency_rate_summaries" => {
             run!(state crate::exchange_rates::list_currency_rate_summaries)
         }

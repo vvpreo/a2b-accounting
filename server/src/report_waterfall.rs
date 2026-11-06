@@ -179,13 +179,17 @@ impl<'a> Converter<'a> {
 /// Quotes are about weekly, so a gap up to this long is normal.
 const RATE_STALE_AFTER_DAYS: i64 = 14;
 
-/// The rates a conversion into `target` relies on that end too early for `to`.
+/// The rates a conversion into `target` relies on that end too early for the
+/// period. A period running into the future is measured against `today`: no
+/// quote can be newer than that, so the latest one is then as good as it gets.
 fn stale_rates(
     conn: &Connection,
     target: &str,
     account_currencies: &BTreeSet<String>,
     to: NaiveDate,
+    today: NaiveDate,
 ) -> Result<Vec<WaterfallStaleRate>, String> {
+    let to = to.min(today);
     let mut involved: BTreeSet<&str> = account_currencies
         .iter()
         .map(String::as_str)
@@ -417,7 +421,7 @@ pub(crate) fn compute_waterfall_inner(
         .filter(|c| !fixed_currencies.contains(*c))
         .cloned()
         .collect();
-    let stale = stale_rates(conn, &currency, &used_currencies, to)?;
+    let stale = stale_rates(conn, &currency, &used_currencies, to, chrono::Local::now().date_naive())?;
 
     let mut categories: Vec<WaterfallCategoryAmount> = by_category
         .into_iter()
@@ -665,6 +669,24 @@ mod tests {
         // Nothing is converted, so the rates don't matter.
         let same = compute_waterfall_inner(&conn, &request(&[thb], "THB")).unwrap();
         assert!(same.stale_rates.is_empty());
+    }
+
+    #[test]
+    fn a_period_running_into_the_future_is_measured_against_today() {
+        let dir = TempDir::new().unwrap();
+        let conn = db::open(dir.path()).unwrap();
+        rate(&conn, "THB", "2026-03-02", "30");
+        let thb: BTreeSet<String> = ["THB".to_string()].into();
+        let day = |s: &str| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+
+        // The month ends four weeks after the latest quote, but today is only
+        // four days past it: nothing newer exists yet.
+        let early = stale_rates(&conn, "USD", &thb, day("2026-03-31"), day("2026-03-06")).unwrap();
+        assert!(early.is_empty());
+        // Once today is well past the quote, the warning is real.
+        let late = stale_rates(&conn, "USD", &thb, day("2026-03-31"), day("2026-03-25")).unwrap();
+        assert_eq!(late.len(), 1);
+        assert_eq!(late[0].currency, "THB");
     }
 
     /// 10 000 THB at the start, 1 000 THB spent mid-period, the baht weakening:

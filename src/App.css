@@ -8142,6 +8142,25 @@ tr:hover .txn-example-btn.is-example {
   color: #dc2626;
 }
 
+.waterfall-notice--rates,
+.waterfall-rate-row,
+.waterfall-rate-stale,
+.waterfall-rates-refresh {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+
+.waterfall-rate-stale {
+  color: var(--wf-muted);
+}
+
+.waterfall-rates-refresh-note {
+  color: var(--wf-muted);
+  font-size: 12px;
+}
+
 .waterfall-rates {
   display: flex;
   flex: none;
@@ -8467,12 +8486,31 @@ tr:hover .txn-example-btn.is-example {
   right: 4px;
   bottom: 6px;
   left: 4px;
+  display: flex;
+  flex-direction: column;
   height: 64px;
   overflow: hidden;
   font-size: 12px;
   line-height: 16px;
   text-align: center;
   overflow-wrap: anywhere;
+}
+
+.waterfall-name-text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+}
+
+.waterfall-name--noted .waterfall-name-text {
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+
+.waterfall-name .waterfall-date {
+  flex: none;
 }
 
 .waterfall-column--opening .waterfall-name,
@@ -8911,13 +8949,21 @@ span.waterfall-pick-caret {
   width: calc(var(--wf-gutter) - 24px);
   height: auto;
   max-height: 100%;
+  flex-direction: row;
+  align-items: baseline;
   transform: translateY(-50%);
   text-align: left;
 }
 
+.waterfall-chart--horizontal .waterfall-name-text {
+  min-width: 0;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
 .waterfall-chart--horizontal .waterfall-date {
-  display: inline;
   margin-left: 6px;
+  white-space: nowrap;
 }
 
 /* Room for the values, the braces with their longest label, the zones' captions. */
